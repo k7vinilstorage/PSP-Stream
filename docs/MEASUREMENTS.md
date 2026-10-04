@@ -687,8 +687,24 @@ de 1 s sem nada novo.
 **Captura KMS (`--source kms`):** lê o plano principal da placa de vídeo, sem
 o compositor, como a captura KMS do Sunshine. O auxiliar
 `tools/kms/pspstream-kms` (com `CAP_SYS_ADMIN`) exporta o framebuffer como
-DMA-BUF a cada troca de buffer, e o servidor reduz no OpenGL. A medir no PC
-do usuário.
+DMA-BUF a cada troca de buffer, e o servidor reduz no OpenGL.
+
+**Primeira rodada KMS [PSP]:** funcionou. A fonte entregou **58,3 fps**
+(intervalo mediano 16,5 ms, p10 16,2, p90 17,5), e as janelas de 2 s ficaram
+em 58-60 fps, contra ~38 pelo portal. O buffer da tela usa a compressão da
+Intel Gen12 com cor de limpeza (modificador `0x0100000000000008`, 3 planos), e
+a importação no OpenGL aceitou. Quando o jogo entra ou sai da tela cheia, o
+formato troca entre XR30 (10 bits) e XR24, e o pipeline renegocia sem travar.
+A "idade" do frame enviado caiu para 7-10 ms, e a espera por frame novo para
+~0,1 ms.
+
+O PSP ficou em 9-28 fps e 60-130 ms, porque nessa rodada a rede limitou:
+- frames de 10-19 KB em q90;
+- sinal oscilando entre 47% e 85%, com até 20% de pedaços reenviados;
+- ping no stream de 17 a 346 ms.
+
+A captura foi do monitor 0 de 2 (1280x720 a 59,855 Hz). O log agora lista
+os outros monitores e o `--kms-monitor` de cada um.
 
 **Minecraft nesta rodada** (q90, sinal 50-100%): frames de 6-11 KB dão 29-39
 fps e 35-65 ms. Nas cenas de 13-15,6 KB, 24-28 fps e 70-84 ms (p95 88-133

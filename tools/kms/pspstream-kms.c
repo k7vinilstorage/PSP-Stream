@@ -266,8 +266,13 @@ int main(int argc, char **argv)
     hello.height = m->height;
     hello.refresh_mhz = m->refresh_mhz;
     hello.crtc_id = m->crtc_id;
-    snprintf(hello.msg, sizeof(hello.msg), "%s, monitor %d de %d: %ux%u a %.3f Hz", m->path, monitor, n, m->width,
-             m->height, m->refresh_mhz / 1000.0);
+    /* Lista todos: o servidor mostra no log, para escolher com --kms-monitor. */
+    int len = snprintf(hello.msg, sizeof(hello.msg), "monitor %d de %d (%s %ux%u a %.3f Hz)", monitor, n, m->path,
+                       m->width, m->height, m->refresh_mhz / 1000.0);
+    for (int i = 0; i < n && len < (int)sizeof(hello.msg); i++)
+        if (i != monitor)
+            len += snprintf(hello.msg + len, sizeof(hello.msg) - len, "; --kms-monitor %d = %ux%u a %.3f Hz", i,
+                            c[i].width, c[i].height, c[i].refresh_mhz / 1000.0);
     send_reply(&hello, NULL, 0);
 
     uint32_t last_fb = 0;
