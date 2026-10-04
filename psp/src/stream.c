@@ -1,12 +1,18 @@
 /*
  * Thread de rede + troca de frames com a thread de decode.
  *
- * Três slots de JPEG: um recebendo, um pronto e um decodificando. Se chega um
+ * Slots de frame: recebendo (até 2 no UDP), pronto e decodificando. Se chega um
  * frame novo antes de o pronto ser pego, o pronto é descartado. O decode
  * sempre pega o mais novo.
  *
  * Com prefetch, o próximo pedido sai assim que um frame chega, antes do
  * decode: rede e decode trabalham ao mesmo tempo.
+ *
+ * Frames P (H.264 IPPP, o pacote começa com um AUD): cada frame é referência
+ * do seguinte, então nenhum é descartado. Os prontos ficam numa fila, em
+ * ordem, e o próximo só é pedido quando o decode pega o último da fila (quem
+ * pede é a thread de decode): ele chega enquanto o atual decodifica, sem
+ * fila crescendo. Frame perdido = pede IDR e pula os P até ele chegar.
  *
  * Transportes:
  *  - TCP: cabeçalho + JPEG num fluxo.
@@ -48,7 +54,7 @@
 #include <pspkernel.h>
 #include <string.h>
 
-#define NUM_SLOTS 4 /* 1 decodificando + 1 pronto + até 2 recebendo (UDP) */
+#define NUM_SLOTS 5 /* 1 decodificando + até 2 prontos (frames P) + até 2 recebendo (UDP) */
 /* Acima do decode (0x38) e das threads da pilha de rede (42/48): quando
  * chegam dados, o recv() roda na hora. */
 #define NET_THREAD_PRIO 0x24
@@ -75,7 +81,9 @@ enum { SLOT_FREE, SLOT_RECV, SLOT_READY, SLOT_DECODING };
 
 static ps_frame_t slots[NUM_SLOTS];
 static int state[NUM_SLOTS];
-static int ready_idx = -1;
+/* Frames prontos, do mais velho ao mais novo. JPEG e H.264 só IDR: fica só o
+ * mais novo. Frames P: todos, em ordem (cada um é referência do seguinte). */
+static int ready_q[NUM_SLOTS], ready_n;
 static ps_ack_t last_ack;
 static unsigned dropped, lost, nacks, completed, retries;
 
@@ -92,7 +100,20 @@ static volatile int net_error;
 static volatile int stopping;
 
 static volatile int wifi_signal, wifi_flags;
-static volatile int cap_h264 = 1;
+static volatile int cap_h264 = 1, cap_h264p = 1;
+/* Frames P (o pacote começa com AUD): nenhum frame pode ser pulado. Quando
+ * um se perde, todo frame P a partir de need_idr_from fica sem referência
+ * até chegar um IDR; o PSP pede (PS_REQ_IDR) e pula os P até lá. */
+static volatile int pmode;
+static volatile uint32_t need_idr_from; /* 0 = não precisa */
+static uint32_t last_pub;               /* último frame publicado (buraco na numeração = perda) */
+static unsigned idr_reqs;
+/* Frames P: sem o descarte do JPEG, frame a mais na fila de prontos é
+ * latência a mais (e com a fila cheia um frame se perde e vira IDR). Então o
+ * próximo só é pedido quando o decode pega o último pronto: chega enquanto o
+ * atual decodifica. Quem pede é a thread de decode (stream_take). */
+static int ask_deferred;                  /* com o lock */
+static volatile unsigned dec_asks, dec_ask_t; /* pedidos feitos pela thread de decode e o horário do último */
 /* Estimativas (us), como o RTO do TCP: média móvel e desvio médio. */
 static int gap_avg = 3000, gap_dev = 3000;   /* entre pedaços seguidos de um frame */
 static int rtt_avg = 30000, rtt_dev = 10000; /* pedido -> primeiro pedaço */
@@ -156,7 +177,7 @@ static int send_req(uint16_t flags, const ps_nack_t *nack)
     r->buttons = in_buttons;
     r->lx = in_lx;
     r->ly = in_ly;
-    r->flags = flags | (nack ? PS_REQ_NACK : 0);
+    r->flags = flags | (nack ? PS_REQ_NACK : 0) | (need_idr_from ? PS_REQ_IDR : 0);
 
     lock();
     ps_ack_t a = last_ack;
@@ -176,7 +197,8 @@ static int send_req(uint16_t flags, const ps_nack_t *nack)
     }
     r->early_b = clamp_u16(early_cur);
     r->signal = wifi_signal;
-    r->wflags = wifi_flags | (rx_poll ? PS_WIFI_RX_POLL : 0) | (cap_h264 ? PS_CAP_H264 : 0);
+    r->wflags = wifi_flags | (rx_poll ? PS_WIFI_RX_POLL : 0) | (cap_h264 ? PS_CAP_H264 : 0) |
+                (cap_h264 && cap_h264p ? PS_CAP_H264P : 0);
     r->lost = lost > 0xFFFF ? 0xFFFF : lost;
     r->hdr_have = hdr_have;
     r->ping_select = clamp_u16(ping_sel_us / 100);
@@ -205,17 +227,42 @@ static void wait_want(void)
     }
 }
 
-/* Slot livre para receber (sempre há um: no máx. 1 pronto + 1 decodificando). */
+/* Chamar com o lock: a thread de rede marca perdas e a de decode marca o IDR
+ * que chegou; sem o lock, uma limparia o que a outra acabou de marcar. */
+static void need_idr(uint32_t from)
+{
+    if (!need_idr_from)
+        idr_reqs++;
+    if (from > need_idr_from)
+        need_idr_from = from;
+}
+
+static void need_idr_locked(uint32_t from)
+{
+    lock();
+    need_idr(from);
+    unlock();
+}
+
+static int is_aud(const uint8_t *p, int len)
+{
+    return len >= 5 && p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 1 && (p[4] & 0x1F) == 9;
+}
+
+/* Slot livre para receber (sempre há um: no máx. 2 prontos + 1 decodificando). */
 static int claim_slot(void)
 {
     lock();
     int idx = 0;
     while (idx < NUM_SLOTS && state[idx] != SLOT_FREE)
         idx++;
-    if (idx == NUM_SLOTS) { /* não deveria acontecer */
-        idx = ready_idx;
-        ready_idx = -1;
+    if (idx == NUM_SLOTS) { /* não deveria acontecer: tira o pronto mais velho */
+        idx = ready_q[0];
+        ready_n--;
+        memmove(ready_q, ready_q + 1, ready_n * sizeof(ready_q[0]));
         dropped++;
+        if (pmode)
+            need_idr(slots[idx].frame_no + 1);
     }
     state[idx] = SLOT_RECV;
     unlock();
@@ -229,24 +276,48 @@ static void free_slot(int idx)
     unlock();
 }
 
-/* Frame completo: vira o "pronto" (o anterior não decodificado é descartado). */
+/* Frame completo vai para a fila de prontos. JPEG e H.264 só IDR: o anterior
+ * ainda não decodificado é descartado (só o mais novo interessa). Frames P:
+ * entra no fim da fila; um buraco na numeração é um frame perdido. */
 static void publish_slot(int idx)
 {
+    uint32_t no = slots[idx].frame_no;
     lock();
-    if (ready_idx >= 0) {
-        state[ready_idx] = SLOT_FREE;
-        dropped++;
+    if (pmode && last_pub && no != last_pub + 1)
+        need_idr(no);
+    last_pub = no;
+    int was_empty = ready_n == 0;
+    if (!pmode) {
+        for (int i = 0; i < ready_n; i++) {
+            state[ready_q[i]] = SLOT_FREE;
+            dropped++;
+        }
+        ready_n = 0;
     }
     state[idx] = SLOT_READY;
-    ready_idx = idx;
+    ready_q[ready_n++] = idx;
     completed++;
     unlock();
-    sceKernelSignalSema(ready_sema, 1);
+    if (was_empty)
+        sceKernelSignalSema(ready_sema, 1);
+}
+
+/* Frames P com frame pronto na fila: o pedido do próximo fica para quando o
+ * decode pegar o último (1). Senão o chamador pede já (0). */
+static int defer_ask(void)
+{
+    lock();
+    int defer = pmode && ready_n > 0;
+    if (defer)
+        ask_deferred = 1;
+    unlock();
+    return defer;
 }
 
 static int net_thread_tcp(void)
 {
     unsigned t_req = now_us();
+    int deferred = 0;
     if (send_req(PS_REQ_HELLO | PS_REQ_FRAME, NULL) < 0)
         return -1;
 
@@ -256,6 +327,8 @@ static int net_thread_tcp(void)
         if (net_recv_all(g_sock, &hdr, sizeof(hdr)) < 0)
             return -1;
         unsigned t_first = now_us();
+        if (deferred) /* o pedido foi da thread de decode */
+            t_req = dec_ask_t;
         if (hdr.magic != PS_MAGIC_FRAME || hdr.size == 0 || hdr.size > PS_MAX_JPEG)
             return -2;
         ps_frame_t *f = &slots[idx];
@@ -268,10 +341,13 @@ static int net_thread_tcp(void)
         f->t_first = t_first;
         f->t_recv = now_us();
         f->idle_t = PS_IDLE_NONE;
+        pmode = is_aud(f->data, f->size);
         publish_slot(idx);
 
         if (!g_prefetch)
             wait_want();
+        else if ((deferred = defer_ask()))
+            continue;
         t_req = now_us();
         if (send_req(PS_REQ_FRAME, NULL) < 0)
             return -1;
@@ -288,6 +364,7 @@ typedef struct {
     int base;          /* bytes de cabeçalho copiados do cache antes do payload */
     uint32_t hdr;      /* campo hdr do pedaço */
     int nack_last;     /* maior pedaço pedido no último NACK (o último do reenvio) */
+    int held;          /* frames P: completo, esperando o mais velho chegar (reenvio) */
     int asked_next;    /* já pediu o próximo antecipado */
     unsigned last_rx;  /* último pedaço recebido */
     unsigned t_nack;   /* último NACK */
@@ -574,9 +651,16 @@ static int net_thread_udp(void)
         return -1;
     now = last_req = last_done = link_free = now_us();
     unsigned next_ping = now + LIVE_PING_EVERY_US;
+    unsigned dec_seen = dec_asks;
     ASK(PS_REQ_HELLO | PS_REQ_FRAME);
 
     while (*g_running && !stopping) {
+        if (dec_asks != dec_seen) { /* frames P: a thread de decode pediu o próximo */
+            dec_seen = dec_asks;
+            if (pending < 2)
+                req_q[pending++] = dec_ask_t;
+            last_req = dec_ask_t;
+        }
         now = now_us();
         if ((int)(now - next_ping) >= 0) {
             next_ping = now + LIVE_PING_EVERY_US;
@@ -589,7 +673,7 @@ static int net_thread_udp(void)
         /* ---- frames incompletos sem pedaço novo: NACK ou desistência ---- */
         for (int k = 0; k < 2; k++) {
             asm_t *a = &as[k];
-            if (a->idx < 0)
+            if (a->idx < 0 || a->held)
                 continue;
             int left = (int)(a->deadline - now);
             if (left > 0) {
@@ -601,13 +685,25 @@ static int net_thread_udp(void)
             /* Um frame mais novo já está chegando: o reenvio ficaria na fila
              * atrás dele e chegaria depois que ele completasse, quando este já
              * teria sido descartado. Descarta já e não gasta o ar. */
-            int newer = k == 0 && as[1].idx >= 0;
+            /* Frames P: o mais novo depende deste, então sempre pede o reenvio. */
+            int newer = !pmode && k == 0 && as[1].idx >= 0;
             if (a->nacks < MAX_NACKS && !newer) {
                 if (send_nack(a) < 0)
                     return -1;
             } else { /* desiste do frame */
                 if (a->frame_no > done)
                     done = a->frame_no;
+                if (pmode) { /* sem ele, os P seguintes não têm referência */
+                    need_idr_locked(a->frame_no + 1);
+                    asm_t *o = &as[1 - k];
+                    if (o->idx >= 0 && o->held) {
+                        if (o->frame_no > done)
+                            done = o->frame_no;
+                        asm_drop(o);
+                        o->held = 0;
+                        lost++;
+                    }
+                }
                 asm_drop(a);
                 lost++;
             }
@@ -615,7 +711,7 @@ static int net_thread_udp(void)
 
         /* ---- nada chegando ---- */
         if (as[0].idx < 0 && as[1].idx < 0) {
-            if (pending == 0) { /* ninguém pediu o próximo (ex.: desistiu de um frame) */
+            if (pending == 0 && !ask_deferred) { /* ninguém pediu o próximo (ex.: desistiu de um frame) */
                 ASK(PS_REQ_FRAME);
                 continue;
             }
@@ -625,7 +721,18 @@ static int net_thread_udp(void)
                 int stalled = now_us() - last_done > STALL_US;
                 last_req = now_us();
                 retries++;
-                if (send_req(PS_REQ_FRAME | (stalled ? PS_REQ_HELLO : 0), NULL) < 0)
+                if (pmode && done && !stalled) {
+                    /* Frames P: um frame pequeno vem num pacote só e, se ele
+                     * some, nada chega. O pedido repetido leva um NACK do
+                     * frame esperado: se o servidor já o mandou, reenvia o
+                     * mesmo (a corrente continua, sem IDR); senão o pedido
+                     * é que se perdeu e vale como pedido normal. */
+                    ps_nack_t nk;
+                    memset(&nk, 0xFF, sizeof(nk));
+                    nk.frame_no = done + 1;
+                    if (send_req(PS_REQ_FRAME, &nk) < 0)
+                        return -1;
+                } else if (send_req(PS_REQ_FRAME | (stalled ? PS_REQ_HELLO : 0), NULL) < 0)
                     return -1;
                 continue;
             }
@@ -665,7 +772,9 @@ static int net_thread_udp(void)
         if (h.frame_no <= done && now_us() - last_done > STALL_US) {
             asm_drop(&as[0]);
             asm_drop(&as[1]);
+            as[0].held = as[1].held = 0;
             done = 0;
+            last_pub = 0;
         }
         if (h.frame_no <= done)
             continue; /* atrasado ou duplicado */
@@ -680,6 +789,16 @@ static int net_thread_udp(void)
                     done = as[0].frame_no;
                 asm_drop(&as[0]);
                 lost++;
+                if (pmode) { /* frames P: o que esperava por ele também não serve */
+                    need_idr_locked(as[0].frame_no + 1);
+                    if (as[1].held) {
+                        if (as[1].frame_no > done)
+                            done = as[1].frame_no;
+                        asm_drop(&as[1]);
+                        as[1].held = 0;
+                        lost++;
+                    }
+                }
             }
             if (as[1].idx >= 0) {
                 as[0] = as[1];
@@ -726,7 +845,11 @@ static int net_thread_udp(void)
             slots[a->idx].send_ts = h.send_ts;
         }
 
+        if (a->held)
+            continue; /* completo, esperando o mais velho: pedaço repetido */
         unsigned t_rx = now_us();
+        if (h.chunk == 0) /* o pacote de frames P começa com um AUD */
+            pmode = is_aud(pkt + sizeof(h), plen);
         if (asm_missing(a, h.chunk)) {
             if (a->got > 0 && a->nacks == 0) { /* intervalo entre pedaços seguidos do mesmo frame */
                 unsigned dt = t_rx - a->last_rx;
@@ -751,22 +874,40 @@ static int net_thread_udp(void)
             f->idle_t = clampi((int)(a->t_first - link_free) / 100, -0x7FFF, 0x7FFF);
             link_free = last_done = t;
             int asked = a->asked_next;
-            if (a->frame_no > done)
-                done = a->frame_no;
             if (!(a->hdr & PS_HDR_STRIPPED))
                 hdr_learn(a->hdr & PS_HDR_ID_MASK, f->data, f->size);
-            publish_slot(a->idx);
-            a->idx = -1;
-            /* um mais velho ainda incompleto perdeu a vez */
             asm_t *other = (a == &as[1]) ? &as[0] : &as[1];
-            if (other->idx >= 0 && other->frame_no < f->frame_no) {
-                asm_drop(other);
-                lost++;
+            if (pmode && other->idx >= 0 && !other->held && other->frame_no < f->frame_no) {
+                /* Frames P: este depende do mais velho, que ainda pode chegar
+                 * pelo reenvio. Espera a vez com o slot guardado. */
+                a->held = 1;
+            } else {
+                if (a->frame_no > done)
+                    done = a->frame_no;
+                publish_slot(a->idx);
+                a->idx = -1;
+                if (other->idx >= 0 && other->held && other->frame_no > f->frame_no) {
+                    /* o mais novo já estava completo esperando este; o pedido
+                     * do seguinte fica por conta dele (ele não pediu antes) */
+                    if (other->frame_no > done)
+                        done = other->frame_no;
+                    publish_slot(other->idx);
+                    asked = other->asked_next;
+                    other->idx = -1;
+                    other->held = 0;
+                } else if (other->idx >= 0 && other->frame_no < f->frame_no) {
+                    /* JPEG / só IDR: um mais velho ainda incompleto perdeu a vez */
+                    asm_drop(other);
+                    lost++;
+                }
             }
-            if (!g_prefetch) {
+            if (a->held) {
+                /* frames P: o próximo só é pedido quando o mais velho se
+                 * resolver, senão um terceiro frame chegaria sem espaço */
+            } else if (!g_prefetch) {
                 wait_want();
                 ASK(PS_REQ_FRAME);
-            } else if (!asked && pending == 0) {
+            } else if (!asked && pending == 0 && !defer_ask()) {
                 ASK(PS_REQ_FRAME);
             }
         } else if (a->nacks == 0 ? h.chunk == a->count - 1
@@ -782,9 +923,14 @@ static int net_thread_udp(void)
                 a->deadline = d;
         }
         /* Com buraco no frame, não antecipa: o próximo entraria na fila na
-         * frente do reenvio, e este frame seria descartado. */
-        if (a->idx >= 0 && a->got < a->count && a->got == a->hi && g_prefetch && g_early && !a->asked_next &&
-            pending == 0 && (int)slots[a->idx].size - a->base - a->got * PS_CHUNK_PAYLOAD <= early_threshold()) {
+         * frente do reenvio, e este frame seria descartado. Frames P: nem com
+         * buraco num mais velho (o seguinte depende dele), nem com frame
+         * esperando o decode (quem pede é a thread de decode). */
+        asm_t *older = (a == &as[1]) ? &as[0] : &as[1];
+        int blocked = pmode && ((older->idx >= 0 && older->frame_no < a->frame_no) || ready_n > 0);
+        if (a->idx >= 0 && a->got < a->count && a->got == a->hi && !blocked && g_prefetch && g_early &&
+            !a->asked_next && pending == 0 &&
+            (int)slots[a->idx].size - a->base - a->got * PS_CHUNK_PAYLOAD <= early_threshold()) {
             a->asked_next = 1; /* pedido antecipado */
             ASK(PS_REQ_FRAME);
         }
@@ -820,8 +966,12 @@ int stream_start(int sock, int udp, const struct sockaddr_in *dest, int prefetch
     g_running = running;
     net_error = 0;
     stopping = 0;
-    dropped = lost = nacks = completed = retries = 0;
-    ready_idx = -1;
+    dropped = lost = nacks = completed = retries = idr_reqs = 0;
+    ready_n = 0;
+    pmode = 0;
+    last_pub = 0;
+    need_idr_from = 0;
+    ask_deferred = 0;
     memset(&last_ack, 0, sizeof(last_ack));
     for (int i = 0; i < NUM_SLOTS; i++) {
         if (!slots[i].data && !(slots[i].data = memalign(64, PS_MAX_JPEG)))
@@ -844,11 +994,25 @@ ps_frame_t *stream_take(unsigned timeout_us)
     if (sceKernelWaitSema(ready_sema, 1, &timeout) < 0)
         return NULL;
     lock();
-    int idx = ready_idx;
-    ready_idx = -1;
-    if (idx >= 0)
+    int idx = -1;
+    if (ready_n > 0) {
+        idx = ready_q[0];
+        ready_n--;
+        memmove(ready_q, ready_q + 1, ready_n * sizeof(ready_q[0]));
         state[idx] = SLOT_DECODING;
+    }
+    int more = ready_n > 0;
+    int ask = ask_deferred && !more;
+    if (ask)
+        ask_deferred = 0;
     unlock();
+    if (more) /* o semáforo é binário: avisa de novo que ainda há prontos */
+        sceKernelSignalSema(ready_sema, 1);
+    if (ask && !net_error && !stopping) { /* frames P: o próximo chega enquanto este decodifica */
+        dec_ask_t = now_us();
+        send_req(PS_REQ_FRAME, NULL);
+        dec_asks++;
+    }
     return idx >= 0 ? &slots[idx] : NULL;
 }
 
@@ -875,6 +1039,35 @@ void stream_ping(unsigned *select_us, unsigned *poll_us, int *polling, unsigned 
 void stream_set_h264(int on)
 {
     cap_h264 = on;
+}
+
+void stream_set_h264p(int on)
+{
+    cap_h264p = on;
+}
+
+int stream_frame_needs_idr(uint32_t frame_no)
+{
+    uint32_t from = need_idr_from;
+    return from && frame_no >= from;
+}
+
+void stream_request_idr(uint32_t from)
+{
+    need_idr_locked(from);
+}
+
+void stream_idr_done(uint32_t frame_no)
+{
+    lock();
+    if (need_idr_from && frame_no >= need_idr_from)
+        need_idr_from = 0;
+    unlock();
+}
+
+unsigned stream_idr_requests(void)
+{
+    return idr_reqs;
 }
 
 void stream_set_wifi(int signal, int flags)

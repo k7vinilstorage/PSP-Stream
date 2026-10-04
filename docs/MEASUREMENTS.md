@@ -727,6 +727,71 @@ os outros monitores e o `--kms-monitor` de cada um.
 fps e 35-65 ms. Nas cenas de 13-15,6 KB, 24-28 fps e 70-84 ms (p95 88-133
 ms): aí a rede limita, e o decode sobe para 6-7 ms.
 
+#### Frames P (v0.9, `--codec h264p`) [PC] [SIM] [EMU]
+
+Com a captura a 60 fps, o que sobrou foi a rede: nas cenas de jogo, frames
+de 12-18 KB a ~450 KB/s, mesmo com o PC no 5 GHz. Todo frame IDR manda a
+imagem inteira a cada vez. Com frames P, vai só o que mudou.
+
+**Tamanho [PC]** (openh264, QP 30, frames de jogo com a câmera deslizando):
+
+| deslocamento por frame | P / IDR |
+|---|---|
+| 2 px | 5% |
+| 8 px | 13% |
+| 24 px | 51% |
+| tela parada | pacote inteiro ~100 bytes |
+
+Encode no PC: ~1,2 ms o P e ~0,5 ms as 2 cópias (pacote em ~1,5-1,8 ms).
+
+**Como funciona** (detalhes em [PROTOCOL.md](PROTOCOL.md)):
+
+- O decoder do PSP só solta o frame N depois do N+2 (teste v2 acima), e o
+  `Stop` zera as referências. Então cada pacote leva o frame e 2 cópias (P
+  sem mudança), e o PSP faz 3 chamadas: **~12 ms de decode** no PSP-3000,
+  contra ~4 ms do IDR + Stop. É o preço medido no teste v2.
+- O servidor codifica só o frame que vai mandar. O PSP decodifica todos, em
+  ordem, e pula os P sem referência até chegar um IDR (pedido com a flag
+  `IDR`).
+- **Fila [EMU/SIM]:** a primeira versão pedia o próximo frame assim que um
+  chegava, como no JPEG. Sem o descarte do frame velho, frames P pequenos
+  chegam mais rápido que os 12 ms de decode e a fila cresceria (latência) até
+  estourar os slots (IDR). Agora o próximo é pedido quando o decode pega o
+  último da fila: ele chega enquanto o atual decodifica.
+- **Frame perdido inteiro [SIM]:** um P pequeno cabe num pacote. Se ele some,
+  nada chega, e o próximo frame viria sem a referência. O pedido repetido
+  agora leva um NACK do frame esperado, e o servidor reenvia o mesmo. Na
+  simulação com 2-5% de perda, nenhum IDR foi necessário.
+- **QP [PC]:** o openh264enc ignora `qp-min/qp-max` com o pipeline rodando
+  (medido: o tamanho não muda). Trocar a qualidade é refazer o encoder, que
+  começa com IDR. A qualidade adaptativa entra junto de um IDR que o PSP
+  pediu, ou no máximo a cada 3 s.
+
+**Simulação [SIM]** (`tools/fake_client.py`: 450 KB/s, ida e volta de 6 ms,
+decode de 5 ms no intra e 12 ms no P; servidor com um clipe de jogo
+deslizando 8 px por frame, q90):
+
+| | KB/frame | FPS | rede | recebido -> exibido |
+|---|---|---|---|---|
+| H.264 intra | 7,0 | 54,6 | 18,2 ms | 5,3 ms |
+| **frames P** | **0,4** | **59,1** | 16,6 ms | 12,8 ms |
+| intra, 2% de perda | 7,0 | 47,9 (15 frames perdidos) | 20,2 ms | 5,3 ms |
+| **P, 2% de perda** | 0,5 | **50,8** (0 perdidos, 0 IDR) | 19,0 ms | 13,0 ms |
+
+O deslize puro é o melhor caso do P (a compensação de movimento acerta tudo).
+Jogo de verdade tem animação e troca de cena: os P serão maiores, e a troca
+de cena custa quase um IDR. Com a imagem toda mudando, o P chega perto do
+tamanho do IDR e sobra só o decode mais caro.
+
+**Emulador [EMU]:** 400 frames P seguidos do mesmo clipe, por UDP e por TCP,
+saíram sem nenhum defeito na imagem. Os tempos não valem: com frames P o PSP
+fica ocioso esperando a rede, e o relógio emulado corre ~30x o real (400
+frames em ~1,5 s de verdade aparecem como dezenas de segundos no overlay).
+
+**No PSP (a medir):** `dec` no overlay (esperado ~12 ms, com `h264p`), FPS e
+latência no log do servidor contra o `--codec h264` na mesma cena, o contador
+`idr` (IDRs pedidos) e `repet` (pedidos repetidos).
+
 ## 1. Tamanho de frame [PC]
 
 Mesmo pipeline do servidor (`videoscale` -> I420 -> `jpegenc`), saída 480x272

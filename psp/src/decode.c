@@ -37,7 +37,7 @@ static int hw_ready;
 static int hw_direct = 1;  /* 1 = sceJpeg escreve direto na VRAM */
 static uint32_t *hw_bounce; /* RAM (64 bytes alinhados) quando hw_direct == 0 */
 static char last_error[96];
-static int last_h264; /* o último frame era H.264 */
+static int last_h264; /* o último frame era H.264 (2 = com frames P) */
 
 static int hw_init(void)
 {
@@ -217,15 +217,10 @@ static int avc_init(void)
     return 0;
 }
 
-/* data: alinhado a 64 bytes (slot do stream). Sai em dst (VRAM, largura 512). */
-static int avc_decode(const uint8_t *data, int size, uint32_t *dst, int *w, int *h)
+/* Um AU para o decoder: cópia por DMA para o Media Engine + sceMpegAvcDecode.
+ * A imagem que sai (se sair: o decoder segura 2) vai para dst. */
+static int avc_feed(const uint8_t *data, int size, uint32_t *dst, SceInt32 *got)
 {
-    if (size > AVC_MAX_AU) {
-        snprintf(last_error, sizeof(last_error), "h264: frame de %d KB grande demais", size / 1024);
-        return -1;
-    }
-    if (avc_init() < 0)
-        return -1;
     const uint8_t *src = data;
     uint8_t *me = (uint8_t *)ME_AVC_BUF;
     int left = size, i = 0;
@@ -253,12 +248,89 @@ static int avc_decode(const uint8_t *data, int size, uint32_t *dst, int *w, int 
         return -1;
     }
     avc.au.iAuSize = size;
-    SceInt32 got = 0;
+    *got = 0;
     void *out = dst;
-    if ((r = sceMpegAvcDecode(&avc.mpeg, &avc.au, FB_STRIDE, &out, &got)) != 0) {
+    if ((r = sceMpegAvcDecode(&avc.mpeg, &avc.au, FB_STRIDE, &out, got)) != 0) {
         snprintf(last_error, sizeof(last_error), "h264 sceMpegAvcDecode: 0x%08X", r);
         return -1;
     }
+    return 0;
+}
+
+static int is_aud(const uint8_t *p, int left)
+{
+    return left >= 5 && p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 1 && (p[4] & 0x1F) == 9;
+}
+
+int decoder_h264_packet(const uint8_t *data, int size)
+{
+    if (!is_aud(data, size))
+        return 0;
+    for (int i = 5; i + 3 < size && i < 64; i++) /* a NAL depois do AUD */
+        if (data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1) {
+            int type = data[i + 3] & 0x1F;
+            return type == 7 || type == 5 ? H264_P_IDR : H264_P;
+        }
+    return H264_P;
+}
+
+/* Frames P: o pacote traz o frame e 2 cópias dele, cada um começando com um
+ * AUD. O decoder do PSP só solta a imagem de 2 chamadas atrás, então a última
+ * chamada (a 2ª cópia) solta o frame real. Sem Stop: ele zeraria as
+ * referências que o próximo frame P usa. Como no teste v2 do psp/probe (o
+ * único caminho medido no PSP-3000), cada AU vai com o AUD e sai de um buffer
+ * alinhado a 64 bytes: o 1º já está no início do slot; as cópias (~20-30
+ * bytes) passam pelo `stage`. */
+#define AVC_STAGE 8192
+static uint8_t stage[AVC_STAGE] __attribute__((aligned(64)));
+
+static int avc_decode_packet(const uint8_t *data, int size, uint32_t *dst)
+{
+    int starts[8], n = 0;
+    for (int i = 0; i + 5 <= size && n < 8; i++)
+        if (is_aud(data + i, size - i)) {
+            starts[n++] = i;
+            i += 4;
+        }
+    SceInt32 got = 0;
+    for (int k = 0; k < n; k++) {
+        int b = starts[k], len = (k + 1 < n ? starts[k + 1] : size) - b;
+        const uint8_t *au = data + b;
+        if ((uintptr_t)au & 63) {
+            if (len > AVC_STAGE) {
+                snprintf(last_error, sizeof(last_error), "h264p: AU %d de %d bytes", k, len);
+                return -1;
+            }
+            memcpy(stage, au, len);
+            au = stage;
+        }
+        if (avc_feed(au, len, dst, &got) < 0)
+            return -1;
+    }
+    if (!got) {
+        snprintf(last_error, sizeof(last_error), "h264p: o decoder nao devolveu imagem");
+        return -1;
+    }
+    return 0;
+}
+
+/* data: alinhado a 64 bytes (slot do stream). Sai em dst (VRAM, largura 512). */
+static int avc_decode(const uint8_t *data, int size, uint32_t *dst, int *w, int *h)
+{
+    if (size > AVC_MAX_AU) {
+        snprintf(last_error, sizeof(last_error), "h264: frame de %d KB grande demais", size / 1024);
+        return -1;
+    }
+    if (avc_init() < 0)
+        return -1;
+    *w = SCR_W;
+    *h = SCR_H;
+    if (decoder_h264_packet(data, size))
+        return avc_decode_packet(data, size, dst);
+    SceInt32 got = 0;
+    if (avc_feed(data, size, dst, &got) < 0)
+        return -1;
+    int r;
     /* No PSP o frame só sai com o Stop (que escreve em bufs[0]); no PPSSPP já
      * sai no decode (got = 1) e o Stop não devolve nada. */
     void *bufs[4] = {dst, dst, dst, dst};
@@ -271,8 +343,6 @@ static int avc_decode(const uint8_t *data, int size, uint32_t *dst, int *w, int 
         snprintf(last_error, sizeof(last_error), "h264: o decoder nao devolveu imagem");
         return -1;
     }
-    *w = SCR_W;
-    *h = SCR_H;
     return 0;
 }
 
@@ -338,7 +408,7 @@ int decoder_kind(void)
 int decoder_decode(const uint8_t *jpeg, int size, uint32_t *dst, int *w, int *h)
 {
     if (decoder_is_h264(jpeg, size)) {
-        last_h264 = 1;
+        last_h264 = decoder_h264_packet(jpeg, size) ? 2 : 1;
         return avc_decode(jpeg, size, dst, w, h);
     }
     last_h264 = 0;
@@ -360,7 +430,7 @@ int decoder_decode(const uint8_t *jpeg, int size, uint32_t *dst, int *w, int *h)
 const char *decoder_name(void)
 {
     if (last_h264)
-        return "h264";
+        return last_h264 == 2 ? "h264p" : "h264";
     if (kind == DEC_HW)
         return hw_direct ? "hw" : "hw-ram";
     return "sw";

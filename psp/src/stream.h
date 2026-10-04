@@ -40,7 +40,8 @@ int stream_start(int sock, int udp, const struct sockaddr_in *dest, int prefetch
  * cada 1 s durante o stream (média móvel e mínimo dos últimos 8). */
 void stream_ping(unsigned *select_us, unsigned *poll_us, int *polling, unsigned *live_us, unsigned *live_min_us);
 
-/* Pega o frame pronto mais novo, esperando até timeout_us. NULL se não há. */
+/* Pega o frame pronto mais novo (frames P: o mais velho da fila), esperando
+ * até timeout_us. NULL se não há. */
 ps_frame_t *stream_take(unsigned timeout_us);
 
 /* Devolve o slot depois de exibir o frame. */
@@ -48,6 +49,15 @@ void stream_release(ps_frame_t *frame, const ps_ack_t *ack);
 
 /* Diz ao servidor (em todo pedido) se aceitamos H.264. Padrão: sim. */
 void stream_set_h264(int on);
+/* ... e H.264 com frames P (pacote AUD + frame + 2 cópias). Padrão: sim. */
+void stream_set_h264p(int on);
+
+/* Frames P: a partir de qual frame falta referência (um frame se perdeu ou
+ * deu erro). Esses frames são pulados até chegar um IDR, que o PSP pede. */
+int stream_frame_needs_idr(uint32_t frame_no);
+void stream_request_idr(uint32_t from_frame);
+void stream_idr_done(uint32_t frame_no);
+unsigned stream_idr_requests(void);
 
 /* Estado do Wi-Fi (sinal %, PS_WIFI_*), enviado em todo pedido para o log do servidor. */
 void stream_set_wifi(int signal, int flags);

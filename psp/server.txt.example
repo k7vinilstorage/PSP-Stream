@@ -35,6 +35,13 @@ early_kb=auto
 # e consultando o socket a cada 0,5 ms, e usa o mais rápido. select | poll = forçar.
 rxwait=auto
 
+# 1 = aceita H.264 (servidor com --codec h264 ou auto). 0 = só JPEG.
+h264=1
+
+# 1 = aceita H.264 com frames P (servidor com --codec h264p): ~10x menos bytes
+# por frame, decode de ~12 ms em vez de ~4 ms. 0 = o servidor manda todo frame IDR.
+h264p=1
+
 # Buffer de recepção do socket em KB. Para experimentar: 32, 64, 128
 rcvbuf=64
 

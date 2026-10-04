@@ -21,6 +21,11 @@ int decoder_decode(const uint8_t *jpeg, int size, uint32_t *dst, int *w, int *h)
 /* 1 se os dados são H.264 Annex B (começam com start code); senão JPEG. */
 int decoder_is_h264(const uint8_t *data, int size);
 
+/* Pacote de frames P do servidor (AUD + frame + 2 cópias): 0 = não é (JPEG
+ * ou H.264 só IDR), H264_P = frame P, H264_P_IDR = começa com IDR. */
+enum { H264_P = 1, H264_P_IDR = 2 };
+int decoder_h264_packet(const uint8_t *data, int size);
+
 const char *decoder_name(void);
 const char *decoder_error(void);
 

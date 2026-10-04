@@ -20,9 +20,11 @@
 /* flags de ps_req_t */
 #define PS_REQ_FRAME 0x0001 /* pede o próximo frame */
 #define PS_REQ_HELLO 0x0002 /* primeira mensagem da conexão */
-#define PS_REQ_NACK 0x0004  /* UDP: seguido de ps_nack_t (pedaços que faltam) */
+#define PS_REQ_NACK 0x0004  /* UDP: seguido de ps_nack_t (pedaços que faltam). Com PS_REQ_FRAME (frames P):
+                             * pedido repetido; se o servidor já mandou o frame do NACK, reenvia esse */
 #define PS_REQ_BYE 0x0008   /* UDP: o PSP está saindo (não há "fechar conexão") */
 #define PS_REQ_PING 0x0010  /* UDP: o servidor responde já com ps_pong_t (echo_ts = token) */
+#define PS_REQ_IDR 0x0020   /* H.264 com frames P: a corrente de referências quebrou, mande um IDR */
 
 /* UDP: frame em pedaços de até PS_CHUNK_PAYLOAD bytes (cabe num pacote de 1500). */
 #define PS_CHUNK_PAYLOAD 1400
@@ -61,6 +63,7 @@ typedef struct __attribute__((packed)) {
 #define PS_WIFI_POWER_SAVE 0x01 /* "Economia de energia WLAN" ligada no XMB */
 #define PS_WIFI_RX_POLL 0x02    /* esperando pacotes por consulta, não select() */
 #define PS_CAP_H264 0x04        /* decodifica H.264 (todo frame IDR) pelo hardware */
+#define PS_CAP_H264P 0x08       /* ... e frames P: pacote AUD + frame + 2 cópias (server/h264.py) */
 
 #define PS_IDLE_NONE (-0x8000) /* idle_t: não medido (TCP) */
 

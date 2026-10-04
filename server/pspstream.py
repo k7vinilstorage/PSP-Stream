@@ -60,6 +60,10 @@ class Session:
         self.wifi = None  # (sinal %, flags) informados pelo PSP
         self.ping = None  # (select, polling, usando polling) medidos pelo PSP no início
         self.h264_warned = False
+        self.encoder = None       # --codec h264p: codifica na hora de enviar (frames P)
+        self.encoder_p = None     # o encoder atual faz frames P (o PSP aceita)?
+        self.p_capable = False    # o PSP informou PS_CAP_H264P
+        self.idr_wanted = True    # o PSP pediu IDR (ou a sessão acabou de começar)
 
     def run(self) -> None:
         log.info("PSP conectado via %s: %s:%d", self.transport.name.upper(), *self.transport.addr)
@@ -73,6 +77,8 @@ class Session:
                 log.info("envio falhou: %s", exc)
         finally:
             self.close()
+            if self.encoder is not None:
+                self.encoder.close()
             if self.injector:
                 self.injector.release_all()
             saved = getattr(self.transport, "hdr_saved", 0)
@@ -103,7 +109,10 @@ class Session:
             self.injector.update(req.buttons, req.lx, req.ly)
         if req.signal:
             self._wifi(req.signal, req.wflags)
-        if self.args.codec == "h264" and not req.wflags & protocol.CAP_H264 and not self.h264_warned:
+        self.p_capable = bool(req.wflags & protocol.CAP_H264P)
+        if req.flags & (protocol.REQ_IDR | REQ_HELLO):
+            self.idr_wanted = True
+        if self.args.codec in ("h264", "h264p") and not req.wflags & protocol.CAP_H264 and not self.h264_warned:
             self.h264_warned = True
             log.warning("o PSP não decodifica H.264 (EBOOT anterior à v0.5, ou h264=0 no server.txt): "
                         "atualize o EBOOT ou rode o servidor com --codec jpeg")
@@ -164,6 +173,8 @@ class Session:
             if jpeg is None:  # fonte ainda não produziu nada
                 time.sleep(0.01)
                 continue
+            if self.source.raw_i420:
+                jpeg = self._encode(jpeg)
             if len(jpeg) > protocol.MAX_JPEG:
                 log.warning("frame de %d KB excede o limite de %d KB; descartado",
                             len(jpeg) // 1024, protocol.MAX_JPEG // 1024)
@@ -179,6 +190,32 @@ class Session:
             sent = self.transport.send_frame(self.frame_no, jpeg, send_ms)
             self.stats.on_send(self.frame_no, send_ms, age_ms, sent, wait_ms, self.source.capture_ms, resend)
             self.stats.maybe_report(self.source.quality)
+
+    def _encode(self, i420: bytes) -> bytes:
+        """--codec h264p: frames P se o PSP aceita, senão todo frame IDR (EBOOT antigo)."""
+        import h264
+        quality = self.source.quality or self.args.quality
+        if self.encoder is None or self.encoder_p != self.p_capable:
+            if self.encoder is not None:
+                self.encoder.close()
+            w, h = self.args.size
+            self.encoder_p = self.p_capable
+            if self.p_capable:
+                # no benchmark cada fase troca a qualidade de propósito: aplica já
+                self.encoder = h264.H264PEncoder(w, h, quality, 0.0 if self.args.bench else h264.QP_CHANGE_MIN_S)
+                log.info("H.264: frames P (IDR só quando o PSP pede; qualidade nova no máximo a cada %.0f s)",
+                         self.encoder.qp_change_min_s)
+            else:
+                self.encoder = h264.H264Encoder(w, h, quality)
+                log.warning("o EBOOT do PSP não aceita frames P (anterior à v0.9, ou h264p=0 no server.txt): "
+                            "mandando todo frame IDR")
+            self.idr_wanted = False  # encoder novo: o primeiro frame já é IDR
+        self.encoder.set_quality(quality)
+        if self.encoder_p and self.idr_wanted:
+            self.idr_wanted = False
+            if self.encoder.request_idr():
+                log.debug("IDR pedido pelo PSP")
+        return self.encoder.encode(i420)
 
     def _bench(self) -> None:
         """Varre qualidades fixas e imprime uma tabela (números do hardware)."""
@@ -354,6 +391,10 @@ def build_source(args, portal=None):
             # de até 480x272) e a qualidade não muda.
             return StaticSource(Path(args.image).read_bytes())
 
+        if args.codec == "h264p":
+            from h264 import image_to_i420
+            return StaticSource(image_to_i420(args.image, w, h, not args.stretch, args.scale),
+                                quality=args.quality, raw_i420=True)
         if args.codec == "h264":
             from h264 import H264Encoder, image_to_i420
             raw = image_to_i420(args.image, w, h, not args.stretch, args.scale)
@@ -439,7 +480,7 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description="PSPStream: transmite a tela do PC para o PSP (MJPEG).")
     p.add_argument("--port", type=int, default=protocol.DEFAULT_PORT,
                    help="porta TCP e UDP (padrão %(default)s)")
-    p.add_argument("--codec", choices=["auto", "jpeg", "h264"], default="auto",
+    p.add_argument("--codec", choices=["auto", "jpeg", "h264", "h264p"], default="auto",
                    help="h264: todo frame IDR, decodificado pelo hardware do PSP (EBOOT v0.5+); no PSP-3000, "
                         "23-30%% dos bytes do JPEG e 1,5-3x o FPS na mesma qualidade. auto (padrão) = h264 se "
                         "o openh264enc estiver instalado, senão jpeg")
@@ -514,7 +555,7 @@ def main(argv=None) -> int:
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     want = args.codec
-    if want in ("auto", "h264"):
+    if want in ("auto", "h264", "h264p"):
         try:
             import h264
             ok = h264.available()
@@ -525,15 +566,18 @@ def main(argv=None) -> int:
             if args.codec == "jpeg":
                 log.info("codec: JPEG (%s)", "sem o openh264enc: sudo dnf install gstreamer1-plugin-openh264"
                          if not ok else "--size diferente de 480x272")
-    if args.codec == "h264":
+    if args.codec in ("h264", "h264p"):
         if not ok:
-            log.error("--codec h264 precisa do openh264enc do GStreamer. No Fedora: "
-                      "sudo dnf install gstreamer1-plugin-openh264 (repositório fedora-cisco-openh264)")
+            log.error("--codec %s precisa do openh264enc do GStreamer. No Fedora: "
+                      "sudo dnf install gstreamer1-plugin-openh264 (repositório fedora-cisco-openh264)", args.codec)
             return 1
         if tuple(args.size) != (480, 272):
-            log.error("--codec h264 só funciona em 480x272 (o decoder do PSP escreve a tela inteira)")
+            log.error("--codec %s só funciona em 480x272 (o decoder do PSP escreve a tela inteira)", args.codec)
             return 1
-        log.info("codec: H.264 (todo frame IDR, decoder de hardware do PSP)")
+        if args.codec == "h264":
+            log.info("codec: H.264 (todo frame IDR, decoder de hardware do PSP)")
+        else:
+            log.info("codec: H.264 com frames P (codificado na hora de enviar; EBOOT v0.9+, senão só IDR)")
     if args.dmabuf and args.source != "portal":
         log.warning("--dmabuf só vale para --source portal; ignorado")
         args.dmabuf = False

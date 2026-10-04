@@ -5,6 +5,10 @@ threads (rede recebendo enquanto o "decode" acontece).
 Serve para testar o servidor sem o PSP e para simular o gargalo do Wi-Fi
 802.11b (--kbps) e o tempo de decode do PSP (--decode-ms). Os números que
 ele produz são SIMULADOS. Os reais vêm do PSP (overlay e log do servidor).
+
+Com --h264p ele aceita frames P como o EBOOT v0.9 (fila em ordem, IDR pedido
+quando um frame se perde) e confere que nenhum frame P seria decodificado
+sem o anterior (a "corrente" de referências).
 """
 import argparse
 import json
@@ -57,6 +61,15 @@ MAX_NACKS = 3          # depois disso desiste do frame e pede outro
 STALL_S = 3.0          # nada completo por 3 s: recomeça (HELLO)
 EARLY_AUTO_MAX = 8 * 1024  # pedido antecipado automático: ping / intervalo entre pedaços x pedaço (teto)
 EARLY_PING_DEFAULT_S = 0.006
+AUD = b"\x00\x00\x00\x01\x09"
+
+
+def h264_packet_kind(data: bytes) -> int:
+    """0 = não é pacote de frames P; 1 = P; 2 = começa com IDR (decoder_h264_packet no decode.c)."""
+    if not data.startswith(AUD):
+        return 0
+    i = data.find(b"\x00\x00\x01", 5)
+    return 2 if i >= 0 and i + 3 < len(data) and data[i + 3] & 0x1F in (5, 7) else 1
 
 
 class Estimator:
@@ -95,7 +108,16 @@ class FakePSP:
         self.ping_us = 0
         self.early_cur = 0    # bytes que faltavam no último pedido antecipado (0 = só no fim)
         self.cond = threading.Condition()
-        self.ready = None          # frame mais novo ainda não decodificado
+        self.ready = []            # prontos, do mais velho ao mais novo (só frames P acumulam)
+        self.pmode = False         # pacotes de frames P (começam com AUD)
+        self.need_idr_from = 0     # frames P >= este estão sem referência até um IDR
+        self.last_pub = 0
+        self.idr_reqs = 0
+        self.ask_deferred = False  # frames P: o próximo é pedido quando o decode pega o último pronto
+        self.dec_asks = []         # horários dos pedidos feitos pelo "decode" (a rede conta como pendentes)
+        self.retries = 0           # pedidos repetidos por falta de resposta
+        self.skipped = 0           # frames P pulados esperando IDR
+        self.broken = 0            # frames P decodificados sem o anterior (não deveria acontecer)
         self.last_ack = None       # (frame_no, send_ts, shown_at, net_t, local_t, decode_t)
         self.send_lock = threading.Lock()
         self.want = threading.Event()
@@ -114,6 +136,10 @@ class FakePSP:
             r.net_t, r.local_t, r.decode_t = a[3], a[4], a[5]
             r.first_t, r.burst_t = a[6], a[7]
             r.idle_t = a[8]
+        if self.need_idr_from:
+            r.flags |= protocol.REQ_IDR
+        if self.args.h264p:
+            r.wflags |= protocol.CAP_H264 | protocol.CAP_H264P
         r.hdr_have = self.hdr_have
         r.early_b = clamp_u16(self.early_cur)
         r.ping_select = clamp_u16(self.ping_us / 100)
@@ -136,15 +162,32 @@ class FakePSP:
             except OSError:
                 pass
 
-    def publish(self, frame):
+    def need_idr(self, frm):
+        """Com self.cond (publish_slot/need_idr no stream.c)."""
+        if not self.need_idr_from:
+            self.idr_reqs += 1
+        self.need_idr_from = max(self.need_idr_from, frm)
+
+    def publish(self, frame, ask=False):
+        """Frame completo vai para a fila. Devolve True se o chamador deve pedir
+        o próximo já (frames P com fila: quem pede é o decode, ao pegar)."""
+        no = frame[0]
         with self.cond:
-            if self.ready is not None:
-                self.dropped += 1
-            self.ready = frame
+            if self.pmode and self.last_pub and no != self.last_pub + 1:
+                self.need_idr(no)
+            self.last_pub = no
+            if not self.pmode:
+                self.dropped += len(self.ready)
+                self.ready.clear()
+            self.ready.append(frame)
             self.cond.notify_all()
+            defer = ask and self.pmode and not self.args.no_prefetch
+            if defer:
+                self.ask_deferred = True
         if self.args.no_prefetch:
             self.want.wait()
             self.want.clear()
+        return ask and not defer
 
     def ping_phase(self, count=8):
         """Ida e volta pura antes de pedir frames, como o PSP (só com select)."""
@@ -217,33 +260,65 @@ class FakePSP:
 
             self.ping_phase()
             last_req = last_done = link_free = time.monotonic()
+            def drop_held():
+                """Frames P: o completo que esperava um mais velho perdido também não serve."""
+                nonlocal done
+                for x in [x for x in asm if x.get("held")]:
+                    done = max(done, x["no"])
+                    asm.remove(x)
+                    self.lost += 1
+
+            def give_up(a):
+                nonlocal done
+                done = max(done, a["no"])
+                asm.remove(a)
+                self.lost += 1
+                if self.pmode:  # sem ele, os P seguintes não têm referência
+                    with self.cond:
+                        self.need_idr(a["no"] + 1)
+                    drop_held()
+
             ask(REQ_FRAME | REQ_HELLO)
             while self.running:
+                with self.cond:
+                    dec_asks, self.dec_asks = self.dec_asks, []
+                for t in dec_asks:  # frames P: o "decode" pediu o próximo
+                    if len(req_q) < 2:
+                        req_q.append(t)
+                    last_req = t
                 now = time.monotonic()
                 timeout, acted = 0.1, False
                 for a in list(asm):
+                    if a not in asm or a.get("held"):
+                        continue
                     left = a["deadline"] - now
                     if left > 0:
                         timeout = min(timeout, left)
                         continue
                     acted = True
                     # um mais novo já chegando: o reenvio viria atrás dele na fila
-                    newer = a is asm[0] and len(asm) == 2
+                    # (frames P: o mais novo depende deste, então sempre pede)
+                    newer = not self.pmode and a is asm[0] and len(asm) == 2
                     if a["nacks"] < MAX_NACKS and not newer:
                         send_nack(a)
                     else:
-                        done = max(done, a["no"])
-                        asm.remove(a)
-                        self.lost += 1
+                        give_up(a)
                 if not asm:
-                    if not req_q:
+                    if not req_q and not self.ask_deferred:
                         ask(REQ_FRAME)
                         continue
                     left = rtt.timeout(RTO_MIN_S, RTO_MAX_S) - (time.monotonic() - last_req)
                     if left <= 0:
                         stalled = time.monotonic() - last_done > STALL_S
                         last_req = time.monotonic()
-                        self.send_req(REQ_FRAME | (REQ_HELLO if stalled else 0))
+                        self.retries += 1
+                        if self.pmode and done and not stalled:
+                            # frames P: NACK do frame esperado; se ele saiu e se perdeu inteiro,
+                            # o servidor reenvia o mesmo (sem IDR)
+                            self.send_req(REQ_FRAME | protocol.REQ_NACK,
+                                          protocol.pack_nack(done + 1, range(protocol.MAX_CHUNKS)))
+                        else:
+                            self.send_req(REQ_FRAME | (REQ_HELLO if stalled else 0))
                         continue
                     timeout = min(timeout, left)
                 if acted:
@@ -268,15 +343,14 @@ class FakePSP:
                 if no <= done and time.monotonic() - last_done > STALL_S:
                     asm.clear()
                     done = 0  # servidor reiniciou a numeração
+                    self.last_pub = 0
                 if no <= done:
                     self.dup_chunks += 1
                     continue
                 a = next((x for x in asm if x["no"] == no), None)
                 if a is None:
                     if len(asm) == 2:  # dois em andamento: o mais velho sai
-                        done = max(done, asm[0]["no"])
-                        asm.pop(0)
-                        self.lost += 1
+                        give_up(asm[0])
                     head = b""
                     if hdr & protocol.HDR_STRIPPED:
                         head = next((h for i, h in self.hdrs if i == hdr & ~protocol.HDR_STRIPPED), None)
@@ -295,7 +369,11 @@ class FakePSP:
                         if t_first - a["t_req"] < RTT_SAMPLE_MAX_S:
                             rtt.update(t_first - a["t_req"])
                     asm.append(a)
+                if a.get("held"):
+                    continue  # completo, esperando o mais velho: pedaço repetido
                 t_rx = time.monotonic()
+                if idx == 0:
+                    self.pmode = payload.startswith(AUD)
                 if idx not in a["have"]:
                     if a["have"] and not a["nacks"] and t_rx - a["last_rx"] < 0.1:
                         gap.update(t_rx - a["last_rx"])
@@ -311,15 +389,31 @@ class FakePSP:
                     t_req = max(a["t_req"], link_free)
                     idle = max(-0x7FFF, min(0x7FFF, int((a["t_first"] - link_free) * 10000)))
                     link_free = last_done = t
-                    done = max(done, no)
-                    asm.remove(a)
                     if not a["hdr"] & protocol.HDR_STRIPPED:
                         self.hdr_learn(a["hdr"], bytes(a["buf"]))
+                    a["frame"] = (no, a["ts"], bytes(a["buf"]), t_req, t, a["t_first"], idle)
+                    older = [x for x in asm if x["no"] < no]
+                    if self.pmode and older and not older[0].get("held"):
+                        # frames P: depende do mais velho, que ainda pode chegar pelo reenvio
+                        a["held"] = True
+                        continue
+                    done = max(done, no)
+                    asm.remove(a)
+                    asked = a["asked"]
+                    held = [x for x in asm if x.get("held") and x["no"] > no]
                     for older in [x for x in asm if x["no"] < no]:
-                        asm.remove(older)
+                        asm.remove(older)  # JPEG / só IDR: o mais velho incompleto perdeu a vez
                         self.lost += 1
-                    self.publish((no, a["ts"], bytes(a["buf"]), t_req, t, a["t_first"], idle))
-                    if self.args.no_prefetch or (not a["asked"] and not req_q):
+                    want = self.args.no_prefetch or (not asked and not req_q)
+                    if held:  # o mais novo esperava este; o pedido do seguinte fica por conta dele
+                        self.publish(a["frame"])
+                        h = held[0]
+                        done = max(done, h["no"])
+                        asm.remove(h)
+                        want = self.args.no_prefetch or (not h["asked"] and not req_q)
+                        if self.publish(h["frame"], ask=want):
+                            ask(REQ_FRAME)
+                    elif self.publish(a["frame"], ask=want):
                         ask(REQ_FRAME)
                     continue
                 if (idx == a["count"] - 1 if not a["nacks"]
@@ -330,8 +424,10 @@ class FakePSP:
                     if (len(a["have"]) == 1 and not a["nacks"]) or d > a["deadline"]:
                         a["deadline"] = d
                 # com buraco, não antecipa: o próximo entraria na fila na frente do reenvio
+                # (frames P: nem com buraco num mais velho, nem com frame esperando o decode)
+                blocked = self.pmode and (any(x["no"] < no for x in asm) or self.ready)
                 if (not self.args.no_prefetch and (auto or fixed) and not a["asked"] and not req_q
-                      and len(a["have"]) == a["hi"]
+                      and not blocked and len(a["have"]) == a["hi"]
                       and len(a["buf"]) - a["base"] - len(a["have"]) * P <= early_bytes()):
                     a["asked"] = True  # pedido antecipado
                     ask(REQ_FRAME)
@@ -347,10 +443,15 @@ class FakePSP:
             while self.running:
                 frame_no, size, send_ts = protocol.unpack_frame_header(recv_exact(self.sock, 16, self.throttle))
                 t_first = time.monotonic()
+                with self.cond:
+                    if self.dec_asks:  # o pedido foi do "decode"
+                        t_req, self.dec_asks = self.dec_asks[-1], []
                 jpeg = recv_exact(self.sock, size, self.throttle)
-                self.publish((frame_no, send_ts, jpeg, t_req, time.monotonic(), t_first, protocol.IDLE_NONE))
-                t_req = time.monotonic()
-                self.send_req(REQ_FRAME)
+                self.pmode = jpeg.startswith(AUD)
+                if self.publish((frame_no, send_ts, jpeg, t_req, time.monotonic(), t_first, protocol.IDLE_NONE),
+                                ask=True):
+                    t_req = time.monotonic()
+                    self.send_req(REQ_FRAME)
         except (OSError, ConnectionError, ValueError) as exc:
             self.error = exc
             with self.cond:
@@ -378,19 +479,37 @@ class FakePSP:
         jpeg = b""
         start = time.monotonic()
         count = 0
+        last_decoded = 0
         while True:
             elapsed = time.monotonic() - start
             if (self.args.seconds and elapsed >= self.args.seconds) or \
                     (not self.args.seconds and count >= self.args.frames):
                 break
             with self.cond:
-                self.cond.wait_for(lambda: self.ready is not None or self.error, timeout=1)
+                self.cond.wait_for(lambda: self.ready or self.error, timeout=1)
                 if self.error:
                     break
-                if self.ready is None:
+                if not self.ready:
                     continue
-                frame_no, send_ts, jpeg, t_req, t_recv, t_first, idle = self.ready
-                self.ready = None
+                frame_no, send_ts, jpeg, t_req, t_recv, t_first, idle = self.ready.pop(0)
+                ask = self.ask_deferred and not self.ready
+                if ask:
+                    self.ask_deferred = False
+                    self.dec_asks.append(time.monotonic())
+                kind = h264_packet_kind(jpeg)
+                skip = kind == 1 and self.need_idr_from and frame_no >= self.need_idr_from
+                if kind == 2 and self.need_idr_from and frame_no >= self.need_idr_from:
+                    self.need_idr_from = 0
+            if ask:  # frames P: o próximo chega enquanto este "decodifica"
+                self.send_req(REQ_FRAME)
+            if kind:
+                if skip:
+                    self.skipped += 1
+                    self.want.set()
+                    continue
+                if kind == 1 and frame_no != last_decoded + 1:
+                    self.broken += 1  # P sem o frame anterior: imagem errada no PSP
+                last_decoded = frame_no
             if self.args.decode_ms:
                 time.sleep(self.args.decode_ms / 1000)
             shown = time.monotonic()
@@ -422,6 +541,10 @@ class FakePSP:
             "dup_chunks": self.dup_chunks,
             "stripped": self.stripped,
             "ping_ms": round(self.ping_us / 1000, 2),
+            "retries": self.retries,
+            "idr_requests": self.idr_reqs,
+            "skipped": self.skipped,
+            "broken": self.broken,
         }, jpeg
 
 
@@ -447,6 +570,8 @@ def main(argv=None):
     p.add_argument("--input-demo", action="store_true",
                    help="enviar uma sequência de teste: X, cima, analógico p/ direita e p/ cima")
     p.add_argument("--json", action="store_true", help="imprimir o resumo em JSON")
+    p.add_argument("--h264p", action="store_true",
+                   help="aceitar H.264 com frames P, como o EBOOT v0.9 (servidor com --codec h264p)")
     args = p.parse_args(argv)
 
     summary, jpeg = FakePSP(args).run()
@@ -457,7 +582,8 @@ def main(argv=None):
     else:
         print("{frames} frames em {seconds} s: {fps} fps, {kb_per_frame} KB/frame, {kbps} KB/s, "
               "rede {net_ms} ms, local {local_ms} ms, descartados {dropped}, perdidos {lost}, "
-              "NACKs {nacks}, pedaços perdidos/repetidos {lost_chunks}/{dup_chunks}".format(**summary))
+              "NACKs {nacks}, pedaços perdidos/repetidos {lost_chunks}/{dup_chunks}, pedidos repetidos {retries}, IDR pedidos "
+              "{idr_requests}, P pulados {skipped}, P sem referência {broken}".format(**summary))
     return 0
 
 

@@ -20,6 +20,7 @@ log = logging.getLogger("pspstream.transport")
 
 # Sem nenhuma mensagem do PSP por este tempo, a sessão é dada como morta.
 IDLE_TIMEOUT_S = 10.0
+RETRY_GUARD_S = 0.010  # frame enviado há menos que isso ainda pode estar no ar: não reenvia
 
 
 def recv_exact(conn: socket.socket, size: int) -> bytes:
@@ -79,7 +80,7 @@ class UdpTransport:
         self.sock = sock  # socket UDP do servidor, compartilhado
         self.addr = addr
         self.pace = pace_kbps * 1024  # bytes/s; 0 = sem limite
-        self.recent = OrderedDict()   # frame_no -> (payload, send_ms, hdr), para reenviar pedaços
+        self.recent = OrderedDict()   # frame_no -> (payload, send_ms, hdr, enviado em), para reenviar pedaços
         self.hdr_cache = hdr_cache
         self.psp_hdr = 0              # id do cabeçalho JPEG que o PSP diz ter guardado
         self.hdr_saved = 0            # bytes de cabeçalho que não precisaram ir
@@ -87,6 +88,7 @@ class UdpTransport:
         self.last_seen = time.monotonic()
         self.sent_chunks = 0
         self.resent_chunks = 0
+        self.retry_resends = 0        # frames reenviados inteiros por pedido repetido (frames P)
         self.session = None           # definido pela Session, antes do primeiro pedido
 
     def start(self, session) -> None:
@@ -103,7 +105,17 @@ class UdpTransport:
         """Chamado pela thread que lê o socket UDP do servidor."""
         self.last_seen = time.monotonic()
         self.psp_hdr = req.hdr_have
-        if nack is not None:
+        if nack is not None and req.flags & protocol.REQ_FRAME:
+            # Pedido repetido com o NACK do frame esperado (frames P): se esse
+            # frame já saiu, ele se perdeu inteiro; reenvia o mesmo em vez de
+            # um novo, que chegaria sem a referência e custaria um IDR.
+            entry = self.recent.get(nack[0])
+            if entry is not None:
+                if time.monotonic() - entry[3] > RETRY_GUARD_S:  # senão ainda está a caminho
+                    self._resend(*nack)
+                    self.retry_resends += 1
+                req.flags &= ~protocol.REQ_FRAME  # o pedido já foi atendido
+        elif nack is not None:
             self._resend(*nack)
         self.session.on_request(req)
 
@@ -123,7 +135,7 @@ class UdpTransport:
             if hdr == self.psp_hdr:
                 payload, hdr = jpeg[n:], hdr | protocol.HDR_STRIPPED
                 self.hdr_saved += n
-        self.recent[frame_no] = (payload, send_ms, hdr)
+        self.recent[frame_no] = (payload, send_ms, hdr, time.monotonic())
         while len(self.recent) > 4:
             self.recent.popitem(last=False)
         count = protocol.chunk_count(len(payload))
@@ -136,7 +148,7 @@ class UdpTransport:
         entry = self.recent.get(frame_no)
         if entry is None:
             return  # frame antigo demais: o PSP vai desistir dele e pedir outro
-        payload, send_ms, hdr = entry
+        payload, send_ms, hdr, _ = entry
         count = protocol.chunk_count(len(payload))
         for i in missing:
             if i < count:

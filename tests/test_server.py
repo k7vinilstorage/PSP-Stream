@@ -61,6 +61,9 @@ class ProtocolTest(unittest.TestCase):
         self.assertIn(f'_Static_assert(sizeof(ps_req_t) == {protocol.REQ_STRUCT.size}', header)
         self.assertIn(f"#define PS_WIFI_POWER_SAVE 0x{protocol.WIFI_POWER_SAVE:02x}", header)
         self.assertIn(f"#define PS_WIFI_RX_POLL 0x{protocol.WIFI_RX_POLL:02x}", header)
+        self.assertIn(f"#define PS_CAP_H264 0x{protocol.CAP_H264:02x}", header)
+        self.assertIn(f"#define PS_CAP_H264P 0x{protocol.CAP_H264P:02x}", header)
+        self.assertIn(f"#define PS_REQ_IDR 0x{protocol.REQ_IDR:04x}", header)
         self.assertEqual(int.from_bytes(protocol.MAGIC_FRAME, "little"), 0x31465350)
 
 
@@ -114,7 +117,8 @@ class UdpChunkTest(unittest.TestCase):
 class UdpEndToEndTest(unittest.TestCase):
     """Servidor UDP de verdade + cliente falso (mesma lógica do PSP) com perda."""
 
-    def run_stream(self, early_kb, loss=0.05, seconds=2.0, rtt_ms=0, source=None, hdr_cache=True):
+    def run_stream(self, early_kb, loss=0.05, seconds=2.0, rtt_ms=0, source=None, hdr_cache=True,
+                   codec="jpeg", h264p=False, decode_ms=5):
         import pspstream
         from sources import StaticSource
         import fake_client
@@ -122,7 +126,7 @@ class UdpEndToEndTest(unittest.TestCase):
         card = (ROOT / "assets/testcard.jpg").read_bytes()
         args = argparse.Namespace(adaptive=False, bench=None, stats_interval=60, target_fps=30, q_min=25,
                                   q_max=90, udp_pace=0, source="static", size=(480, 272), hdr_cache=hdr_cache,
-                                  dscp="ef", codec="jpeg")
+                                  dscp="ef", codec=codec, quality=70)
         server = pspstream.Server(source or StaticSource(card), args, None)
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.bind(("127.0.0.1", 0))
@@ -130,8 +134,9 @@ class UdpEndToEndTest(unittest.TestCase):
         threading.Thread(target=server.serve_udp, args=(sock,), daemon=True).start()
         try:
             client_args = argparse.Namespace(host="127.0.0.1", port=port, transport="udp", loss=loss, kbps=2000,
-                                             decode_ms=5, no_prefetch=False, frames=0, seconds=seconds,
-                                             input_demo=False, rtt_ms=rtt_ms, early_kb=early_kb, loss_up=0)
+                                             decode_ms=decode_ms, no_prefetch=False, frames=0, seconds=seconds,
+                                             input_demo=False, rtt_ms=rtt_ms, early_kb=early_kb, loss_up=0,
+                                             h264p=h264p)
             summary, jpeg = fake_client.FakePSP(client_args).run()
             self.session = server.current[0] if server.current else None
         finally:
@@ -208,6 +213,48 @@ class UdpEndToEndTest(unittest.TestCase):
         self.assertGreater(summary["frames"], 20)
         self.assertEqual(got, au)
         self.assertEqual(summary["stripped"], 0)
+
+    def h264_or_skip(self):
+        try:
+            import h264
+        except (ImportError, ValueError):
+            self.skipTest("sem GStreamer")
+        if not h264.available():
+            self.skipTest("sem openh264enc")
+        return h264
+
+    def test_h264p_survives_loss(self):
+        # --codec h264p com perda: nenhum frame P pode ser decodificado sem o
+        # anterior (imagem errada no PSP). Frame pequeno perdido inteiro volta
+        # pelo pedido repetido com NACK, sem precisar de IDR.
+        h264 = self.h264_or_skip()
+        import fake_client
+        from sources import StaticSource
+        raw = h264.image_to_i420(str(ROOT / "assets/testcard.jpg"), 480, 272)
+        summary, got, _ = self.run_stream(early_kb="auto", loss=0.05, seconds=3.0, rtt_ms=5, codec="h264p",
+                                          h264p=True, decode_ms=12,
+                                          source=StaticSource(raw, quality=70, raw_i420=True))
+        self.assertGreater(summary["frames"], 30, summary)
+        self.assertEqual(summary["broken"], 0, summary)
+        self.assertEqual(fake_client.h264_packet_kind(got), 1)  # frame P (imagem parada: quase nada)
+        self.assertLess(summary["kb_per_frame"], 1.0, summary)
+        self.assertGreater(summary["retries"], 0, summary)  # perdas de frame inteiro aconteceram
+        self.assertLessEqual(summary["idr_requests"], 2, summary)
+        self.assertGreater(self.session.transport.retry_resends, 0)
+
+    def test_h264p_old_eboot_gets_intra(self):
+        # EBOOT sem PS_CAP_H264P (v0.5-v0.8): todo frame IDR, sem AUD
+        h264 = self.h264_or_skip()
+        import fake_client
+        from sources import StaticSource
+        raw = h264.image_to_i420(str(ROOT / "assets/testcard.jpg"), 480, 272)
+        with self.assertLogs("pspstream", "WARNING") as logs:
+            summary, got, _ = self.run_stream(early_kb=0, loss=0, seconds=1.0, codec="h264p",
+                                              source=StaticSource(raw, quality=70, raw_i420=True))
+        self.assertGreater(summary["frames"], 10)
+        self.assertEqual(fake_client.h264_packet_kind(got), 0)
+        self.assertTrue(h264.is_idr(got))
+        self.assertTrue(any("frames P" in m for m in logs.output), logs.output)
 
     def test_early_request_keeps_streaming(self):
         # Com pedido antecipado, uma perda no fim do frame N vira pulo para o
@@ -490,6 +537,97 @@ class NetcheckTest(unittest.TestCase):
         self.assertIn("canal 6", msg)
         self.assertIn("802-11-wireless.band a", msg)
         self.assertEqual(netcheck.channel_24(2484), 14)
+
+
+class H264PEncoderTest(unittest.TestCase):
+    def setUp(self):
+        try:
+            import h264
+        except (ImportError, ValueError):
+            self.skipTest("sem GStreamer")
+        if not h264.available():
+            self.skipTest("sem openh264enc")
+        self.h264 = h264
+        self.raw = h264.image_to_i420(str(ROOT / "assets/testcard.jpg"), 480, 272)
+
+    def aus(self, packet):
+        h264 = self.h264
+        self.assertTrue(packet.startswith(h264.AUD))
+        parts = packet.split(h264.AUD)[1:]
+        self.assertEqual(len(parts), 1 + h264.COPIES)
+        return parts
+
+    def test_packet_layout_and_idr(self):
+        h264 = self.h264
+        enc = h264.H264PEncoder(480, 272, 70)
+        try:
+            first = self.aus(enc.encode(self.raw))
+            self.assertTrue(h264.is_idr(first[0]))          # começa com IDR (SPS + PPS + IDR)
+            self.assertEqual(h264.nal_types(first[1]), [1])  # cópias: P sem mudança
+            self.assertLess(len(first[1]), 100)
+            p = self.aus(enc.encode(self.raw))
+            self.assertEqual(h264.nal_types(p[0]), [1])
+            # pedido de IDR logo depois de um IDR: é o que ainda está a caminho
+            self.assertFalse(enc.request_idr())
+            enc._last_idr = 0.0
+            self.assertTrue(enc.request_idr())
+            idr70 = self.aus(enc.encode(self.raw))[0]
+            self.assertTrue(h264.is_idr(idr70))
+            # qualidade nova = encoder novo = IDR: espera QP_CHANGE_MIN_S...
+            enc.set_quality(30)
+            self.assertIsNone(enc.applied_quality)
+            self.assertEqual(h264.nal_types(self.aus(enc.encode(self.raw))[0]), [1])
+            enc._qp_t = 0.0
+            idr30 = self.aus(enc.encode(self.raw))[0]
+            self.assertTrue(h264.is_idr(idr30))
+            self.assertLess(len(idr30), len(idr70) * 0.8)  # QP maior, IDR menor
+            self.assertEqual(enc.applied_quality, 30)
+            # ... ou vai junto de um IDR que o PSP pediu
+            enc.set_quality(70)
+            enc._last_idr = 0.0
+            self.assertTrue(enc.request_idr())
+            again = self.aus(enc.encode(self.raw))[0]
+            self.assertTrue(h264.is_idr(again))
+            self.assertAlmostEqual(len(again), len(idr70), delta=len(idr70) * 0.05)
+        finally:
+            enc.close()
+
+
+class UdpRetryResendTest(unittest.TestCase):
+    """Pedido repetido com NACK (frames P): reenvia o frame que se perdeu inteiro."""
+
+    def setUp(self):
+        from transports import UdpTransport
+        self.rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.rx.bind(("127.0.0.1", 0))
+        self.tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.t = UdpTransport(self.tx, self.rx.getsockname())
+        self.flags = []
+
+        class Session:
+            def on_request(s, req):
+                self.flags.append(req.flags)
+
+        self.t.session = Session()
+
+    def tearDown(self):
+        self.rx.close()
+        self.tx.close()
+
+    def retry(self, frame_no):
+        req = protocol.Request(flags=protocol.REQ_FRAME | protocol.REQ_NACK)
+        self.t.feed(req, (frame_no, list(range(protocol.MAX_CHUNKS))))
+        return self.flags[-1]
+
+    def test_resends_lost_frame_instead_of_new_one(self):
+        self.t.send_frame(7, b"x" * 3000, 0)
+        self.assertEqual(self.retry(8), protocol.REQ_FRAME | protocol.REQ_NACK)  # não saiu: pedido normal
+        self.assertEqual(self.retry(7), protocol.REQ_NACK)  # ainda pode estar no ar: nem reenvia nem manda outro
+        self.assertEqual(self.t.resent_chunks, 0)
+        self.t.recent[7] = self.t.recent[7][:3] + (time.monotonic() - 1,)
+        self.assertEqual(self.retry(7), protocol.REQ_NACK)
+        self.assertEqual(self.t.resent_chunks, 3)  # o frame inteiro de novo, sem frame novo
+        self.assertEqual(self.t.retry_resends, 1)
 
 
 class H264QualityTest(unittest.TestCase):

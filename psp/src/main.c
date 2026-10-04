@@ -169,6 +169,13 @@ static int input_thread(SceSize args, void *argp)
     uint32_t prev_raw = 0, sent = 0;
     int sent_lx = 128, sent_ly = 128;
     int repeat = 0, tick = 0;
+    /* A thread nasce de novo a cada reconexão: botões que já estavam
+     * segurados (ex.: SELECT+START+L que pediu a troca de transporte) não
+     * contam como apertados agora, senão a troca se repete enquanto o
+     * atalho estiver segurado. */
+    SceCtrlData start;
+    if (sceCtrlPeekBufferPositive(&start, 1) > 0)
+        prev_raw = start.Buttons & FORWARD_MASK;
     while (input_run) {
         SceCtrlData pad;
         if (sceCtrlReadBufferPositive(&pad, 1) < 0) { /* espera a próxima amostra (vblank) */
@@ -274,9 +281,9 @@ static void draw_overlay(const ui_t *ui, const stats_t *s)
             unsigned sel, poll, live, live_min;
             int polling;
             stream_ping(&sel, &poll, &polling, &live, &live_min);
-            display_text(0, 2, 0xFF00FF00, "perdidos %u nack %u repet %u ping %.1f ms (min %.1f, ini %.1f %s)",
-                         stream_lost(), stream_nacks(), stream_retries(), live / 1000.0f, live_min / 1000.0f,
-                         (polling ? poll : sel) / 1000.0f, polling ? "poll" : "sel");
+            display_text(0, 2, 0xFF00FF00, "perdidos %u nack %u repet %u idr %u ping %.1f ms (min %.1f, ini %.1f %s)",
+                         stream_lost(), stream_nacks(), stream_retries(), stream_idr_requests(), live / 1000.0f,
+                         live_min / 1000.0f, (polling ? poll : sel) / 1000.0f, polling ? "poll" : "sel");
             unsigned early = stream_early();
             if (early)
                 display_text(0, 3, 0xFF00FF00, "pede o proximo faltando %.1f KB%s", early / 1024.0f,
@@ -332,6 +339,7 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
     input_udp = ui->udp;
     ui->switch_transport = 0;
     stream_set_h264(cfg->h264);
+    stream_set_h264p(cfg->h264p);
     int early = cfg->early_kb < 0 ? STREAM_EARLY_AUTO : cfg->early_kb * 1024;
     if (stream_start(sock, ui->udp, dest, ui->prefetch, early, cfg->rxwait, &g_running) < 0) {
         status("Erro ao iniciar a thread de rede");
@@ -390,6 +398,14 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
             continue;
         }
 
+        /* Frames P: um frame se perdeu e a corrente quebrou. Os P seguintes
+         * ficariam com a imagem errada até o próximo IDR (já pedido). */
+        int pk = decoder_h264_packet(f->data, f->size);
+        if (pk == H264_P && stream_frame_needs_idr(f->frame_no)) {
+            stream_release(f, NULL);
+            continue;
+        }
+
         unsigned t0 = now_us();
         uint32_t *dst = display_back();
         if (ui->clear > 0) {
@@ -398,6 +414,8 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
         }
         int w = 0, h = 0;
         if (decoder_decode(f->data, f->size, dst, &w, &h) < 0) {
+            if (pk)
+                stream_request_idr(f->frame_no + 1);
             printf("frame %u: %s\n", (unsigned)f->frame_no, decoder_error());
             if (!(ui->toast_until && (int)(ui->toast_until - now_us()) > 0))
                 toast(ui, decoder_error()); /* na tela: senão só aparece no PSPLink */
@@ -407,6 +425,8 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
             continue;
         }
         unsigned t1 = now_us();
+        if (pk == H264_P_IDR)
+            stream_idr_done(f->frame_no);
         if (w != last_w || h != last_h) {
             last_w = w;
             last_h = h;
@@ -450,7 +470,7 @@ int main(int argc, char *argv[])
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
     display_init();
-    status("PSPStream v0.8");
+    status("PSPStream v0.9");
 
     char dir[192], err[128];
     app_dir(argc > 0 ? argv[0] : NULL, dir, sizeof(dir));

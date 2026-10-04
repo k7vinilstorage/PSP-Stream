@@ -146,6 +146,7 @@ class GstSource(FrameSource):
         super().__init__()
         self.keepalive = keepalive  # objeto que precisa viver junto (ex.: sessão do portal)
         self._quality = quality
+        self.raw_i420 = codec == "h264p"  # a sessão codifica na hora de enviar
         self.h264 = None
         if codec == "h264":
             from h264 import H264Encoder
@@ -275,9 +276,9 @@ class GstSource(FrameSource):
         if quality != self._quality:
             if self.h264 is not None:
                 self.h264.set_quality(quality)
-            else:
+            elif self.enc is not None:
                 self.enc.set_property("quality", quality)
-            self._quality = quality
+            self._quality = quality  # h264p (cru): quem lê é o encoder da sessão
 
     @property
     def quality(self):

@@ -13,6 +13,7 @@ typedef struct {
     int bench;        /* 1 = mede decode hw x sw com o primeiro frame */
     int input;        /* 1 = envia os controles para o PC (Marco 4) */
     int udp;          /* transporte: 0 = TCP, 1 = UDP */
+    int h264p;        /* aceita H.264 com frames P (o servidor decide com --codec h264p) */
     int early_kb;     /* UDP: pede o próximo frame quando faltar isso do atual (0 = só no fim, -1 = auto) */
     int rxwait;       /* UDP: RXWAIT_AUTO, RXWAIT_SELECT ou RXWAIT_POLL */
     int h264;         /* 1 = aceita H.264 do servidor (--codec h264) */

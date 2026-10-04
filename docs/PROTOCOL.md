@@ -37,7 +37,7 @@ PSP                                   PC
 | 4 | u32 | buttons | máscara `PSP_CTRL_*` (Marco 4) |
 | 8 | u8 | lx | analógico X, 0..255 (128 = centro) |
 | 9 | u8 | ly | analógico Y |
-| 10 | u16 | flags | `0x1` FRAME = quero o próximo frame; `0x2` HELLO = primeira mensagem; `0x4` NACK, `0x8` BYE e `0x10` PING (só UDP, abaixo) |
+| 10 | u16 | flags | `0x1` FRAME = quero o próximo frame; `0x2` HELLO = primeira mensagem; `0x4` NACK, `0x8` BYE e `0x10` PING (só UDP, abaixo); `0x20` IDR = frames P sem referência, mande um IDR (abaixo) |
 | 12 | u32 | ack_frame | último frame **exibido** (0 = nenhum ainda) |
 | 16 | u32 | echo_ts | `send_ts` desse frame, devolvido como veio |
 | 20 | u16 | net_t | 0,1 ms: pedido enviado -> frame recebido por inteiro |
@@ -47,7 +47,7 @@ PSP                                   PC
 | 28 | u16 | first_t | 0,1 ms: pedido -> primeiro pedaço/byte do frame (ida e volta + reação do servidor) |
 | 30 | u16 | burst_t | 0,1 ms: primeiro -> último pedaço (dá a vazão real do enlace) |
 | 32 | u8 | signal | sinal do Wi-Fi do PSP, % |
-| 33 | u8 | wflags | `0x1` = "Economia de energia WLAN" ligada no XMB; `0x2` = esperando pacotes por consulta, não `select()`; `0x4` = decodifica H.264 |
+| 33 | u8 | wflags | `0x1` = "Economia de energia WLAN" ligada no XMB; `0x2` = esperando pacotes por consulta, não `select()`; `0x4` = decodifica H.264; `0x8` = aceita frames P (v0.9) |
 | 34 | u16 | lost | UDP: frames abandonados incompletos desde o início do stream |
 | 36 | u32 | hdr_have | UDP: id do cabeçalho JPEG guardado no PSP (0 = nenhum) |
 | 40 | u16 | ping_select | 0,1 ms: ida e volta pura medida no início, esperando com `select()` |
@@ -79,6 +79,30 @@ PSP distingue pelos primeiros bytes: `FF D8` é JPEG, `00 00 00 01` ou
 `00 00 01` é H.264. Se for menor, o
 PSP centraliza. 4:2:0 é exigência do decoder de hardware (`sceJpeg`); o
 decoder em software aceita qualquer amostragem.
+
+### Frames P (`--codec h264p`, PSP com `wflags & 0x8`)
+
+O payload é **AUD + frame + AUD + cópia + AUD + cópia** (AUD =
+`00 00 00 01 09 F0`). O frame é IDR (com SPS + PPS) ou P; as cópias são P
+sem mudança (~20 bytes). O decoder do PSP só solta o frame N depois de
+receber o N+2, e as duas cópias empurram o frame real para a saída: o PSP
+decodifica os 3 AUs, sem `sceMpegAvcDecodeStop` (que zera as referências), e
+mostra o que sai da última chamada. O PSP reconhece o pacote pelo AUD no
+início e o tipo pela NAL seguinte (7 ou 5 = IDR, senão P).
+
+Regras, porque cada P depende do anterior:
+
+- O servidor só codifica o frame que vai mandar (nunca pula um frame já
+  codificado), e numera em sequência.
+- O PSP decodifica todos, em ordem: prontos ficam numa fila, e um frame
+  completo que chega antes de um mais velho incompleto espera o reenvio dele.
+  O próximo é pedido quando o decode pega o último da fila (sem prefetch de
+  vários frames).
+- Buraco na numeração, frame abandonado depois de 3 NACKs ou erro de decode:
+  os P seguintes ficam sem referência. O PSP pula esses P e manda `IDR`
+  (0x20) em todo pedido até decodificar um IDR. O servidor ignora pedidos de
+  IDR por 150 ms depois de mandar um (é o que ainda está a caminho).
+- Um EBOOT sem `0x8` recebe todo frame IDR (como `--codec h264`).
 
 ## Medição de latência sem sincronizar relógios
 
@@ -141,6 +165,14 @@ esperar por consulta se isso for mais de 1 ms mais rápido.
 | 56 | u32[8] | missing | bit `i` = pedaço `i` faltando |
 
 O servidor reenvia só esses pedaços. Ele guarda os últimos 4 frames enviados.
+
+**FRAME + NACK** (frames P): é um pedido repetido. Um frame P pequeno cabe
+num pacote; se ele some, o PSP nem sabe que o frame existiu, e um frame novo
+chegaria sem a referência. Então o pedido repetido leva um NACK do frame
+esperado (o último completo + 1, todos os pedaços). Se o servidor já mandou
+esse frame (há mais de 10 ms), reenvia o mesmo e não manda outro; se mandou
+há menos de 10 ms, ele ainda está a caminho e o pedido é ignorado; se ainda
+não mandou, quem se perdeu foi o pedido, e ele vale como pedido normal.
 `BYE` (0x8) avisa que o app do PSP está saindo: o servidor solta as teclas e
 encerra a sessão na hora (no UDP não existe "fechar conexão").
 
@@ -153,8 +185,8 @@ encerra a sessão na hora (no UDP não existe "fechar conexão").
 | depois de um NACK | espera a resposta por média + 4 desvios da ida e volta (pedido -> 1º pedaço, 30-200 ms); cada pedaço reenviado que chega adia a espera |
 | chegou o último pedaço do reenvio e ainda faltam outros | NACK de novo na hora |
 | 3 NACKs sem completar | desiste do frame (conta em "perdidos") e pede outro |
-| hora do NACK, mas um frame mais novo já está chegando | desiste do frame sem NACK: o reenvio viria na fila atrás do mais novo |
-| pedido sem nenhuma resposta por uma ida e volta medida (média + 4 desvios do pedido -> 1º pedaço, 30-200 ms) | reenvia o pedido |
+| hora do NACK, mas um frame mais novo já está chegando | desiste do frame sem NACK: o reenvio viria na fila atrás do mais novo (frames P: manda o NACK, o mais novo depende dele) |
+| pedido sem nenhuma resposta por uma ida e volta medida (média + 4 desvios do pedido -> 1º pedaço, 30-200 ms) | reenvia o pedido (frames P: com NACK do frame esperado, ver acima) |
 | 3 s sem completar nenhum frame | o pedido vai com HELLO (o servidor pode ter reiniciado) |
 | pedaço de frame mais antigo ou duplicado | ignorado |
 

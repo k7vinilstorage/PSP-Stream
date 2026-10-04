@@ -16,6 +16,9 @@ class FrameSource:
     # Se True, a fonte não produz frames novos e o mesmo frame é reenviado a
     # cada pedido (modo estático = benchmark de rede + decode).
     repeat = False
+    # Se True, os frames são I420 cru e a sessão codifica na hora de enviar
+    # (--codec h264p: frames P só podem ser codificados se forem enviados).
+    raw_i420 = False
 
     def __init__(self):
         self._cond = threading.Condition()
@@ -63,11 +66,14 @@ class StaticSource(FrameSource):
     mudar (benchmark e modo adaptativo com conteúdo fixo e reproduzível)."""
     repeat = True
 
-    def __init__(self, jpeg: bytes, reencode=None, quality=None):
+    def __init__(self, jpeg: bytes, reencode=None, quality=None, raw_i420=False):
         super().__init__()
         self._reencode = reencode
-        self._quality = quality if reencode else None
-        if jpeg[:2] == b"\xff\xd8":
+        self.raw_i420 = raw_i420
+        self._quality = quality if reencode or raw_i420 else None
+        if raw_i420:
+            log.info("imagem estática: I420 cru, codificada a cada envio (frames P)")
+        elif jpeg[:2] == b"\xff\xd8":
             info = jpeg_info(jpeg)
             for problem in info.problems():
                 log.warning("imagem estática: %s", problem)
@@ -77,6 +83,9 @@ class StaticSource(FrameSource):
         self.publish(jpeg)
 
     def set_quality(self, quality: int) -> None:
+        if self.raw_i420:  # quem codifica é a sessão
+            self._quality = max(1, min(100, int(quality)))
+            return
         if self._reencode is None or quality == self._quality:
             return
         self._quality = max(1, min(100, int(quality)))

@@ -21,6 +21,7 @@ REQ_HELLO = 0x0002
 REQ_NACK = 0x0004  # UDP: seguido de NACK_STRUCT (pedaços que faltam de um frame)
 REQ_BYE = 0x0008   # UDP: o PSP está saindo
 REQ_PING = 0x0010  # UDP: responda já com PONG_STRUCT (mede a ida e volta pura)
+REQ_IDR = 0x0020   # H.264 com frames P: o PSP perdeu a corrente de referências e precisa de um IDR
 
 # UDP: cada frame vai em pedaços de até CHUNK_PAYLOAD bytes (cabe num pacote
 # de 1500 bytes com IP/UDP e o cabeçalho do pedaço).
@@ -95,6 +96,7 @@ class Request:
 WIFI_POWER_SAVE = 0x01  # "Economia de energia WLAN" ligada no XMB
 WIFI_RX_POLL = 0x02     # o PSP espera pacotes consultando o socket (não select())
 CAP_H264 = 0x04         # o PSP decodifica H.264 (todo frame IDR) pelo hardware
+CAP_H264P = 0x08        # ... e também frames P (pacote AUD + frame + 2 cópias, ver h264.H264PEncoder)
 
 IDLE_NONE = -0x8000     # idle_t: não medido (TCP, ou o primeiro frame)
 

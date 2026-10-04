@@ -147,6 +147,7 @@ transport=udp        # udp (padrão) | tcp; SELECT+START+L troca com o stream ro
 early_kb=auto        # UDP: pede o próximo frame quando faltar isso do atual (auto = ida e volta x vazão; 0 = no fim)
 rxwait=auto          # UDP: auto | select | poll (auto mede os dois ao conectar e usa o mais rápido)
 h264=1               # 1 = aceita H.264 (servidor com --codec h264)
+h264p=1              # 1 = aceita H.264 com frames P (servidor com --codec h264p, v0.9)
 rcvbuf=64            # buffer de recepção do socket (KB)
 bench=0              # 1 = mede o decode hw x sw no próprio PSP ao conectar
 ```
@@ -179,6 +180,40 @@ adaptativa e o `-q` continuam na escala do JPEG (q50 do H.264 ≈ q50 do JPEG
 em SSIM). Só em 480x272. O overlay mostra `h264` no lugar de `hw`/`sw`.
 Para o PSP recusar H.264, use `h264=0` no `server.txt`.
 
+### H.264 com frames P (experimental, v0.9)
+
+```sh
+python3 server/pspstream.py --source kms --codec h264p
+```
+
+Com todo frame IDR, cada frame leva a imagem inteira. Com frames P, só vai o
+que mudou desde o anterior: num jogo com a câmera andando, ~5-15% dos bytes
+de um IDR (medido no PC, ver [MEASUREMENTS.md](docs/MEASUREMENTS.md)); com a
+tela parada, ~100 bytes. Como a rede era o gargalo (~450 KB/s no 802.11b),
+isso deve trazer o FPS para perto dos 60 da captura e tirar ~10-30 ms de
+rede por frame. **Testado só no emulador e com o cliente falso; falta o
+PSP de verdade.**
+
+O preço:
+
+- **Decode mais caro: ~12 ms em vez de ~4 ms.** O decoder do PSP só solta o
+  frame N depois de receber o N+2. Então cada pacote leva o frame e 2 cópias
+  dele (P sem mudança, ~20 bytes cada), e o PSP faz 3 chamadas de ~4 ms
+  (medido no PSP-3000 com o `psp/probe`).
+- **Nenhum frame pode ser pulado.** Cada P depende do anterior: o servidor só
+  codifica o frame que vai mandar, e o PSP decodifica todos, em ordem. O
+  próximo é pedido quando o decode pega o atual, para não formar fila.
+- **Perda.** Um pedaço perdido volta pelo NACK, como antes. Um frame pequeno
+  (um pacote só) que some inteiro volta pelo pedido repetido: o PSP diz qual
+  frame esperava, e o servidor reenvia o mesmo. Se nem assim, o PSP pede um
+  IDR e pula os P até ele chegar (o overlay conta em `idr`).
+- **Qualidade adaptativa mais lenta.** O openh264 não troca o QP com o
+  encoder rodando: a qualidade nova entra junto de um IDR que o PSP pediu, ou
+  no máximo a cada 3 s (cada troca é um IDR).
+
+O overlay mostra `h264p`. Com um EBOOT anterior à v0.9 (ou `h264p=0`), o
+servidor avisa e manda todo frame IDR, como no `--codec h264`.
+
 | opção | o que faz |
 |---|---|
 | `--source portal` | tela no Wayland (padrão) |
@@ -199,7 +234,7 @@ Para o PSP recusar H.264, use `h264=0` no `server.txt`.
 | `--input-timeout 0.5` | solta tudo se o PSP sumir por 0,5 s com tecla segurada (evita tecla presa) |
 | `--udp-pace KB/s` | UDP: limitar a taxa de envio dos pedaços (padrão: sem limite; teste 450 se a perda crescer com frames grandes) |
 | `--no-hdr-cache` | UDP: mandar o cabeçalho JPEG (~620 bytes) em todo frame. O padrão manda só quando a qualidade muda; a opção existe para comparar |
-| `--codec auto` | H.264 só com quadros completos, decodificado pelo hardware do PSP, se o openh264enc existir (padrão); `jpeg` força o MJPEG |
+| `--codec auto` | H.264 só com quadros completos, decodificado pelo hardware do PSP, se o openh264enc existir (padrão); `jpeg` força o MJPEG; `h264p` usa frames P (experimental, ver acima) |
 | `--dscp ef` | marca os pacotes para a fila de voz do Wi-Fi (WMM) na placa do PC e no roteador; `0` desliga |
 | `--bench 30,50,70,90` | varre qualidades com o PSP conectado e salva uma tabela |
 
@@ -346,7 +381,7 @@ O que funciona e o que não funciona no emulador:
 | TCP (sceNetInet) | sockets do PC. Socket bloqueante devolve `EAGAIN`; o cliente trata como "tente de novo", o que não muda nada no PSP real |
 | sceJpeg | emulado em software, saída correta. O tempo (~10,8 ms) é um valor fixo do emulador, não medido |
 | libjpeg-turbo | funciona; o tempo emulado não é o do Allegrex |
-| tempos no headless | **inválidos**: o relógio emulado pula o tempo ocioso |
+| tempos no headless | **inválidos**: o relógio emulado pula o tempo ocioso (com frames P, o tempo emulado corre ~30x o real, e os timeouts do PSP disparam à toa) |
 | banda e perdas do 802.11b | não simuladas |
 | H.264 pelo `sceMpegAvcDecode` (caminho "PMP", `psp/probe`) | decodifica com FFmpeg; precisa de `tools/ppsspp-pmp-fix.patch` (sem ele o PPSSPP aborta no 2º frame). Não mostra se o PSP real segura frames |
 
@@ -357,9 +392,9 @@ psp/                   cliente (C, pspdev)
   Makefile             make / make dist
   server.txt.example
   src/main.c           ciclo de vida, decode + exibição, overlay, atalhos, controles
-  src/stream.c         thread de rede, slots, modelo pull
+  src/stream.c         thread de rede, slots, modelo pull, fila em ordem dos frames P
   src/net.c            módulos de rede, Wi-Fi (apctl), TCP
-  src/decode.c         sceJpeg (hw) e libjpeg-turbo (sw)
+  src/decode.c         sceJpeg (hw), libjpeg-turbo (sw) e H.264 (sceMpegAvcDecode)
   src/display.c        framebuffer 8888, triple buffering, texto
   src/config.c         server.txt
   src/protocol.h
@@ -368,7 +403,7 @@ server/                servidor (Python 3)
   gst_source.py        pipeline GStreamer (captura -> 480x272 -> JPEG)
   portal.py            xdg-desktop-portal ScreenCast (Wayland)
   kms.py               captura KMS (--source kms): DMA-BUF do auxiliar -> OpenGL
-  h264.py              encoder H.264 (todo frame IDR, openh264)
+  h264.py              encoders H.264 (todo frame IDR, ou frames P codificados na hora), openh264
   adaptive.py          qualidade adaptativa
   inject.py            uinput (teclado/mouse)
   keymap.json          perfis de controles
