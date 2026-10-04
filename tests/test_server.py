@@ -559,8 +559,9 @@ class H264PEncoderTest(unittest.TestCase):
         return parts
 
     def test_packet_layout_and_idr(self):
+        # pelo GStreamer: trocar o QP refaz o encoder (IDR), então a troca espera
         h264 = self.h264
-        enc = h264.H264PEncoder(480, 272, 70)
+        enc = h264.H264PEncoder(480, 272, 70, backend="gstreamer")
         try:
             first = self.aus(enc.encode(self.raw))
             self.assertTrue(h264.is_idr(first[0]))          # começa com IDR (SPS + PPS + IDR)
@@ -590,6 +591,79 @@ class H264PEncoderTest(unittest.TestCase):
             again = self.aus(enc.encode(self.raw))[0]
             self.assertTrue(h264.is_idr(again))
             self.assertAlmostEqual(len(again), len(idr70), delta=len(idr70) * 0.05)
+        finally:
+            enc.close()
+
+    def direct_or_skip(self):
+        import openh264
+        if not openh264.available():
+            self.skipTest("sem libopenh264")
+        return openh264
+
+    def test_direct_matches_gstreamer(self):
+        # o caminho direto produz o mesmo fluxo que o openh264enc medido no PSP
+        self.direct_or_skip()
+        h264 = self.h264
+        w, h = 480, 272
+        y = self.raw[:w * h]
+        frames = [y[(k * 2 % h) * w:] + y[:(k * 2 % h) * w] + self.raw[w * h:] for k in range(6)]
+        out = {}
+        for backend in ("openh264", "gstreamer"):
+            enc = h264.H264PEncoder(w, h, 70, backend=backend)
+            try:
+                out[backend] = [enc.encode(f) for f in frames]
+            finally:
+                enc.close()
+        self.assertEqual(out["openh264"], out["gstreamer"])
+
+    def test_direct_quality_without_idr(self):
+        self.direct_or_skip()
+        h264 = self.h264
+        enc = h264.H264PEncoder(480, 272, 90, backend="openh264")
+        try:
+            self.assertTrue(enc.live_qp)
+            self.assertTrue(h264.is_idr(self.aus(enc.encode(self.raw))[0]))
+            w, h = 480, 272
+            moved = self.raw[w * 8:w * h] + self.raw[:w * 8] + self.raw[w * h:]
+            hi = self.aus(enc.encode(moved))[0]
+            enc.set_quality(30)
+            lo = self.aus(enc.encode(self.raw))[0]
+            self.assertEqual(h264.nal_types(lo), [1])        # qualidade nova, sem IDR
+            self.assertEqual(enc.applied_quality, 30)
+            self.assertLess(len(lo), len(hi))
+        finally:
+            enc.close()
+
+    def test_direct_failure_falls_back(self):
+        openh264 = self.direct_or_skip()
+        h264 = self.h264
+        real = openh264.Encoder.encode
+
+        def broken(self_, i420):
+            raise openh264.OpenH264Error("layout inesperado (teste)")
+        openh264.Encoder.encode = broken
+        try:
+            enc = h264.H264PEncoder(480, 272, 70)
+            with self.assertLogs("pspstream.h264", "WARNING"):
+                pkt = enc.encode(self.raw)
+            self.assertTrue(h264.is_idr(self.aus(pkt)[0]))
+            self.assertEqual(enc.backend, "gstreamer")
+            self.assertFalse(enc.live_qp)
+            enc.close()
+        finally:
+            openh264.Encoder.encode = real
+
+    def test_intra_direct(self):
+        self.direct_or_skip()
+        h264 = self.h264
+        enc = h264.H264Encoder(480, 272, 70, backend="openh264")
+        try:
+            a = enc.encode(self.raw)
+            enc.set_quality(40)
+            b = enc.encode(self.raw)
+            for au in (a, b):
+                self.assertEqual(h264.nal_types(au), [7, 8, 5])  # SPS + PPS + IDR em todo frame
+            self.assertLess(len(b), len(a))
         finally:
             enc.close()
 

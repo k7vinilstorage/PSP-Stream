@@ -203,8 +203,11 @@ class Session:
             if self.p_capable:
                 # no benchmark cada fase troca a qualidade de propósito: aplica já
                 self.encoder = h264.H264PEncoder(w, h, quality, 0.0 if self.args.bench else h264.QP_CHANGE_MIN_S)
-                log.info("H.264: frames P (IDR só quando o PSP pede; qualidade nova no máximo a cada %.0f s)",
-                         self.encoder.qp_change_min_s)
+                if self.encoder.live_qp:
+                    log.info("H.264: frames P (IDR só quando o PSP pede; a qualidade muda sem IDR)")
+                else:
+                    log.info("H.264: frames P (IDR só quando o PSP pede; qualidade nova no máximo a cada %.0f s)",
+                             self.encoder.qp_change_min_s)
             else:
                 self.encoder = h264.H264Encoder(w, h, quality)
                 log.warning("o EBOOT do PSP não aceita frames P (anterior à v0.9, ou h264p=0 no server.txt): "
@@ -481,9 +484,12 @@ def parse_args(argv=None):
     p.add_argument("--port", type=int, default=protocol.DEFAULT_PORT,
                    help="porta TCP e UDP (padrão %(default)s)")
     p.add_argument("--codec", choices=["auto", "jpeg", "h264", "h264p"], default="auto",
-                   help="h264: todo frame IDR, decodificado pelo hardware do PSP (EBOOT v0.5+); no PSP-3000, "
-                        "23-30%% dos bytes do JPEG e 1,5-3x o FPS na mesma qualidade. auto (padrão) = h264 se "
-                        "o openh264enc estiver instalado, senão jpeg")
+                   help="h264p: H.264 com frames P, ~10x menos bytes por frame (EBOOT v0.9+; um EBOOT antigo "
+                        "recebe todo frame IDR). h264: todo frame IDR (EBOOT v0.5+). auto (padrão) = h264p se "
+                        "o openh264 estiver instalado, senão jpeg")
+    p.add_argument("--h264-encoder", choices=["auto", "openh264", "gstreamer"], default="auto",
+                   help="frames P e imagem estática: auto (padrão) = libopenh264 direto, com o openh264enc do "
+                        "GStreamer de reserva; openh264 ou gstreamer forçam um dos dois")
     p.add_argument("--udp-pace", type=float, default=0, metavar="KB/s",
                    help="UDP: limitar a taxa de envio dos pedaços (0 = sem limite, padrão)")
     p.add_argument("--no-hdr-cache", dest="hdr_cache", action="store_false",
@@ -557,21 +563,26 @@ def main(argv=None) -> int:
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     want = args.codec
+    ok = False
     if want in ("auto", "h264", "h264p"):
         try:
             import h264
-            ok = h264.available()
+            h264.BACKEND = args.h264_encoder
+            ok = h264.available()  # o openh264enc do GStreamer: o --codec h264 codifica dentro da captura
+            if args.codec != "h264" and args.h264_encoder != "gstreamer":
+                import openh264
+                ok = ok or openh264.available()  # frames P: a libopenh264 direto basta
         except (ImportError, ValueError):
             ok = False
         if want == "auto":
-            args.codec = "h264" if ok and tuple(args.size) == (480, 272) else "jpeg"
+            args.codec = "h264p" if ok and tuple(args.size) == (480, 272) else "jpeg"
             if args.codec == "jpeg":
-                log.info("codec: JPEG (%s)", "sem o openh264enc: sudo dnf install gstreamer1-plugin-openh264"
+                log.info("codec: JPEG (%s)", "sem o openh264: sudo dnf install gstreamer1-plugin-openh264"
                          if not ok else "--size diferente de 480x272")
     if args.codec in ("h264", "h264p"):
         if not ok:
-            log.error("--codec %s precisa do openh264enc do GStreamer. No Fedora: "
-                      "sudo dnf install gstreamer1-plugin-openh264 (repositório fedora-cisco-openh264)", args.codec)
+            log.error("--codec %s precisa do openh264. No Fedora: sudo dnf install gstreamer1-plugin-openh264 "
+                      "(repositório fedora-cisco-openh264; traz a libopenh264 junto)", args.codec)
             return 1
         if tuple(args.size) != (480, 272):
             log.error("--codec %s só funciona em 480x272 (o decoder do PSP escreve a tela inteira)", args.codec)
@@ -580,8 +591,6 @@ def main(argv=None) -> int:
             log.info("codec: H.264 (todo frame IDR, decoder de hardware do PSP)")
         else:
             log.info("codec: H.264 com frames P (codificado na hora de enviar; EBOOT v0.9+, senão só IDR)")
-            log.warning("--codec h264p é experimental: no primeiro teste no PSP-3000 o PSP desligou (IDR sem Stop, corrigido). "
-                        "Rode antes o psp/probe (v4.2), que testa a correção (README, \"Teste do decoder H.264\")")
     if args.dmabuf and args.source != "portal":
         log.warning("--dmabuf só vale para --source portal; ignorado")
         args.dmabuf = False
