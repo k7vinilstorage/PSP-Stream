@@ -10,6 +10,7 @@
  *   triângulo = overlay    quadrado = decoder hw/sw
  *   círculo   = vsync      X        = prefetch
  *   L         = transporte TCP/UDP (reconecta)
+ *   R         = tela de configuração (menu.c)
  */
 #include <netinet/in.h>
 #include <pspctrl.h>
@@ -26,6 +27,7 @@
 #include "config.h"
 #include "decode.h"
 #include "display.h"
+#include "menu.h"
 #include "net.h"
 #include "protocol.h"
 #include "stream.h"
@@ -150,9 +152,9 @@ static void stats_add(stats_t *s, const ps_frame_t *f, unsigned dec_us, unsigned
 #define INPUT_PRIO 0x28
 #define STICK_DEADZONE 20 /* analógicos gastos repousam longe de 128 */
 
-enum { ACT_OVERLAY, ACT_DECODER, ACT_VSYNC, ACT_PREFETCH, ACT_TRANSPORT, ACT_COUNT };
+enum { ACT_OVERLAY, ACT_DECODER, ACT_VSYNC, ACT_PREFETCH, ACT_TRANSPORT, ACT_CONFIG, ACT_COUNT };
 static const uint32_t act_button[ACT_COUNT] = {PSP_CTRL_TRIANGLE, PSP_CTRL_SQUARE, PSP_CTRL_CIRCLE, PSP_CTRL_CROSS,
-                                               PSP_CTRL_LTRIGGER};
+                                               PSP_CTRL_LTRIGGER, PSP_CTRL_RTRIGGER};
 /* Só a thread de controles escreve; a principal só lê: sem lock. */
 static volatile unsigned act_count[ACT_COUNT];
 static volatile int input_run;
@@ -222,6 +224,7 @@ typedef struct {
     int overlay, vsync, prefetch, udp;
     int early_auto;       /* early_kb=auto: o overlay mostra o valor calculado */
     int switch_transport; /* atalho L: reconectar com o outro transporte */
+    int open_config;      /* atalho R: parar o stream e abrir a configuração */
     char toast[48];
     unsigned toast_until;
     int clear; /* buffers a limpar (texto antigo do overlay) */
@@ -265,6 +268,9 @@ static void apply_menu(ui_t *ui, unsigned seen[ACT_COUNT])
                 break;
             case ACT_TRANSPORT:
                 ui->switch_transport = 1;
+                break;
+            case ACT_CONFIG:
+                ui->open_config = 1;
                 break;
             }
         }
@@ -332,12 +338,13 @@ static void decode_bench(const ps_frame_t *f)
     sceKernelDelayThread(5 * 1000 * 1000);
 }
 
-/* Um stream completo, até a conexão cair, o usuário sair ou trocar de
- * transporte (devolve 1). */
+/* Um stream completo, até a conexão cair, o usuário sair, trocar de
+ * transporte (devolve 1) ou pedir a configuração (devolve 2). */
 static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_t *cfg, ui_t *ui)
 {
     input_udp = ui->udp;
     ui->switch_transport = 0;
+    ui->open_config = 0;
     stream_set_h264(cfg->h264);
     stream_set_h264p(cfg->h264p);
     int early = cfg->early_kb < 0 ? STREAM_EARLY_AUTO : cfg->early_kb * 1024;
@@ -365,7 +372,7 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
 
     while (g_running) {
         apply_menu(ui, seen);
-        if (ui->switch_transport)
+        if (ui->switch_transport || ui->open_config)
             break;
         if (now_us() - t_wifi > 2 * 1000 * 1000) { /* sinal e economia de energia vão no log do servidor */
             net_ap_info_t ap;
@@ -386,6 +393,7 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
             if (ui->udp && !stream_completed() && now_us() - t_start > 3 * 1000 * 1000 && !waiting_msg) {
                 status("Sem resposta do PC via UDP. Servidor rodando?");
                 status("Firewall liberado para UDP? (firewall-cmd --add-port=5123/udp)");
+                status("SELECT + START + R: tela de configuracao (IP, procurar o PC)");
                 waiting_msg = 1;
             }
             continue;
@@ -455,7 +463,7 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
             g_running = 0;
         }
     }
-    int err = ui->switch_transport ? 1 : stream_error();
+    int err = ui->switch_transport ? 1 : ui->open_config ? 2 : stream_error();
     input_run = 0;
     if (input_thid >= 0) {
         SceUInt timeout = 500 * 1000;
@@ -464,6 +472,83 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
     }
     stream_stop();
     return err;
+}
+
+/* ---- Wi-Fi e tela de configuração ---- */
+static int wifi_profile_up; /* perfil conectado agora (0 = nenhum) */
+
+static int wifi_ensure(int profile)
+{
+    if (wifi_profile_up == profile && net_ap_connected())
+        return 0;
+    if (wifi_profile_up) { /* caiu, ou o perfil mudou na configuração */
+        display_console("Desconectando do Wi-Fi (perfil %d)...", wifi_profile_up);
+        sceNetApctlDisconnect();
+        wifi_profile_up = 0;
+    }
+    display_console("Conectando ao Wi-Fi (perfil %d)...", profile);
+    char ip[32];
+    int r = net_connect_ap(profile, ip, sizeof(ip), status, &g_running);
+    if (r < 0)
+        return r;
+    wifi_profile_up = profile;
+    display_console("IP do PSP: %s", ip);
+    net_ap_info_t ap;
+    net_ap_info(&ap);
+    display_console("Sinal %d%%, canal %d", ap.strength, ap.channel);
+    if (ap.power_save == 1) {
+        status("AVISO: 'Economia de energia WLAN' esta LIGADA.");
+        status("  Ela desliga o radio entre beacons e aumenta muito a latencia.");
+        status("  Desligue em Ajustes > Ajustes de economia de energia.");
+    }
+    return 0;
+}
+
+static int menu_discover(ps_config_t *cfg, char *msg, int len)
+{
+    display_console_clear();
+    int r = wifi_ensure(cfg->wifi_profile);
+    if (r < 0) {
+        snprintf(msg, len, "Falha no Wi-Fi (perfil %d): 0x%08X", cfg->wifi_profile, r);
+        return -1;
+    }
+    display_console("Procurando o servidor na porta %d...", cfg->port);
+    char found[32];
+    if (net_discover(cfg->port, found, sizeof(found), 2 * 1000 * 1000) < 0) {
+        snprintf(msg, len, "Ninguem respondeu na porta %d. Servidor rodando? Firewall?", cfg->port);
+        return -1;
+    }
+    snprintf(cfg->host, sizeof(cfg->host), "%s", found);
+    snprintf(msg, len, "PC achado: %s (START salva e conecta)", found);
+    return 0;
+}
+
+/* Espera até us; 1 se START foi apertado (abrir a configuração). */
+static int wait_or_menu(unsigned us)
+{
+    SceCtrlData pad;
+    sceCtrlPeekBufferPositive(&pad, 1);
+    unsigned prev = pad.Buttons, t0 = now_us();
+    while (g_running && now_us() - t0 < us) {
+        sceKernelDelayThread(50 * 1000);
+        sceCtrlPeekBufferPositive(&pad, 1);
+        if (pad.Buttons & ~prev & PSP_CTRL_START)
+            return 1;
+        prev = pad.Buttons;
+    }
+    return 0;
+}
+
+static void apply_config(const ps_config_t *cfg, ui_t *ui, int decoder_ready)
+{
+    ui->overlay = cfg->overlay;
+    ui->early_auto = cfg->early_kb < 0;
+    ui->vsync = cfg->vsync;
+    ui->prefetch = cfg->prefetch;
+    ui->udp = cfg->udp;
+    input_enabled = cfg->input;
+    if (decoder_ready)
+        decoder_select(cfg->decoder == DEC_SW ? DEC_SW : DEC_HW);
 }
 
 int main(int argc, char *argv[])
@@ -479,65 +564,58 @@ int main(int argc, char *argv[])
     char dir[192], err[128];
     app_dir(argc > 0 ? argv[0] : NULL, dir, sizeof(dir));
     ps_config_t cfg;
-    if (config_load(&cfg, dir, err, sizeof(err)) < 0) {
-        status(err);
-        status("Crie o server.txt com o IP do PC (veja o README).");
-        wait_exit();
-    }
-    display_console("Servidor: %s:%d", cfg.host, cfg.port);
+    int loaded = config_load(&cfg, dir, err, sizeof(err)) == 0;
 
     int r;
     if ((r = net_init()) < 0) {
         display_console("Erro ao iniciar a rede: 0x%08X", r);
         wait_exit();
     }
-    display_console("Conectando ao Wi-Fi (perfil %d)...", cfg.wifi_profile);
-    char ip[32];
-    if ((r = net_connect_ap(cfg.wifi_profile, ip, sizeof(ip), status, &g_running)) < 0) {
-        display_console("Falha no Wi-Fi: 0x%08X", r);
-        status("O perfil existe? A chave WLAN esta ligada?");
-        wait_exit();
-    }
-    display_console("IP do PSP: %s", ip);
-    net_ap_info_t ap;
-    net_ap_info(&ap);
-    display_console("Sinal %d%%, canal %d", ap.strength, ap.channel);
-    if (ap.power_save == 1) {
-        status("AVISO: 'Economia de energia WLAN' esta LIGADA.");
-        status("  Ela desliga o radio entre beacons e aumenta muito a latencia.");
-        status("  Desligue em Ajustes > Ajustes de economia de energia.");
-    }
 
-    if (decoder_init(cfg.decoder) < 0) {
-        display_console("Decoder falhou: %s", decoder_error());
-        wait_exit();
-    }
-    if (cfg.decoder != DEC_SW && decoder_kind() != DEC_HW)
-        display_console("sceJpeg indisponivel (%s), usando software", decoder_error());
-    display_console("Decoder: %s", decoder_name());
-
+    /* Tela de configuração: na abertura (conecta sozinha em menu_wait s se o
+     * IP já está configurado; sem server.txt, fica esperando), com START
+     * quando a conexão falha e com SELECT + START + R no stream. Os testes
+     * no emulador (exit_after) pulam a tela se o IP já está no server.txt. */
+    static const menu_hooks_t hooks = {menu_discover, emu_screenshot};
+    int need_menu = !loaded || (!cfg.exit_after && (cfg.menu_wait > 0 || cfg.menu_shot));
+    int countdown = loaded ? cfg.menu_wait : 0;
+    const char *menu_msg = loaded ? NULL : err;
+    int decoder_ready = 0;
     ui_t ui;
     memset(&ui, 0, sizeof(ui));
-    ui.overlay = cfg.overlay;
-    ui.early_auto = cfg.early_kb < 0;
-    ui.vsync = cfg.vsync;
-    ui.prefetch = cfg.prefetch;
-    ui.udp = cfg.udp;
-    input_enabled = cfg.input;
+    apply_config(&cfg, &ui, 0);
 
     while (g_running) {
-        if (!net_ap_connected()) {
-            display_console("Wi-Fi caiu. Reconectando (perfil %d)...", cfg.wifi_profile);
-            sceNetApctlDisconnect();
-            if (net_connect_ap(cfg.wifi_profile, ip, sizeof(ip), status, &g_running) < 0) {
-                for (int i = 0; i < 30 && g_running; i++) /* tenta de novo em 3 s */
-                    sceKernelDelayThread(100 * 1000);
-                continue;
+        if (need_menu) {
+            if (menu_run(&cfg, dir, countdown, menu_msg, &hooks, &g_running) == MENU_QUIT)
+                break;
+            need_menu = 0;
+            countdown = 0;
+            menu_msg = NULL;
+            apply_config(&cfg, &ui, decoder_ready);
+            display_console_clear();
+            status("PSPStream v0.9");
+        }
+        if (!decoder_ready) {
+            if (decoder_init(cfg.decoder) < 0) {
+                display_console("Decoder falhou: %s", decoder_error());
+                wait_exit();
             }
-            display_console("IP do PSP: %s", ip);
+            if (cfg.decoder != DEC_SW && decoder_kind() != DEC_HW)
+                display_console("sceJpeg indisponivel (%s), usando software", decoder_error());
+            decoder_ready = 1;
+        }
+        if ((r = wifi_ensure(cfg.wifi_profile)) < 0) {
+            display_console("Falha no Wi-Fi: 0x%08X", r);
+            status("O perfil existe? A chave WLAN esta ligada?");
+            status("START: tela de configuracao (ou espere: tenta de novo em 3 s)");
+            if (wait_or_menu(3 * 1000 * 1000))
+                need_menu = 1;
+            continue;
         }
         struct sockaddr_in dest;
         int sock;
+        display_console("Servidor: %s:%d, decoder %s", cfg.host, cfg.port, decoder_name());
         if (ui.udp) {
             display_console("Conectando ao PC %s:%d via UDP...", cfg.host, cfg.port);
             sock = net_open_udp(cfg.host, cfg.port, cfg.rcvbuf_kb, &dest);
@@ -547,8 +625,9 @@ int main(int argc, char *argv[])
         }
         if (sock < 0) {
             status("Sem conexao. Servidor rodando? Firewall liberado?");
-            for (int i = 0; i < 20 && g_running; i++) /* tenta de novo em 2 s */
-                sceKernelDelayThread(100 * 1000);
+            status("START: tela de configuracao (ou espere: tenta de novo em 2 s)");
+            if (wait_or_menu(2 * 1000 * 1000))
+                need_menu = 1;
             continue;
         }
         g_sock = sock;
@@ -558,12 +637,20 @@ int main(int argc, char *argv[])
         if (e == 1) {
             ui.udp = !ui.udp;
             display_console("Trocando para %s...", ui.udp ? "UDP" : "TCP");
+        } else if (e == 2) {
+            /* a tela mostra o estado atual, inclusive o que os atalhos mudaram */
+            cfg.overlay = ui.overlay;
+            cfg.vsync = ui.vsync;
+            cfg.prefetch = ui.prefetch;
+            cfg.udp = ui.udp;
+            need_menu = 1;
         } else if (g_running) {
             display_console("Conexao perdida (%d). Reconectando...", e);
         }
     }
 
-    decoder_term();
+    if (decoder_ready)
+        decoder_term();
     net_term();
     sceKernelExitGame();
     return 0;

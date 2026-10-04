@@ -16,6 +16,7 @@
  *   rxwait=auto      (UDP: auto | select | poll; auto mede os dois no início e fica com o mais rápido)
  *   h264=1           (1 = aceita H.264 do servidor rodando com --codec h264)
  *   h264p=1          (1 = aceita também frames P, do servidor com --codec h264p)
+ *   menu_wait=3      (s com a tela de configuração aberta antes de conectar sozinho; 0 = direto)
  */
 #include "config.h"
 #include "decode.h"
@@ -71,6 +72,10 @@ static void set_key(ps_config_t *cfg, const char *key, const char *value)
         cfg->h264p = v;
     else if (!strcmp(key, "exit_after"))
         cfg->exit_after = v;
+    else if (!strcmp(key, "menu_wait"))
+        cfg->menu_wait = v;
+    else if (!strcmp(key, "menu_shot"))
+        cfg->menu_shot = v;
 }
 
 int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen)
@@ -88,6 +93,7 @@ int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen)
     cfg->early_kb = -1; /* auto; valores fixos de 6-14 KB (JPEG, PSP-3000) pediam cedo demais */
     cfg->h264 = 1;
     cfg->h264p = 1;
+    cfg->menu_wait = 3;
 
     char path[256];
     snprintf(path, sizeof(path), "%sserver.txt", dir);
@@ -130,5 +136,61 @@ int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen)
         cfg->rcvbuf_kb = 64;
     if (cfg->early_kb < -1 || cfg->early_kb > 64)
         cfg->early_kb = -1;
+    if (cfg->menu_wait < 0 || cfg->menu_wait > 30)
+        cfg->menu_wait = 3;
+    return 0;
+}
+
+static const char *onoff(int v)
+{
+    return v ? "1" : "0";
+}
+
+int config_save(const ps_config_t *cfg, const char *dir, char *err, int errlen)
+{
+    char path[256], tmp[260];
+    snprintf(path, sizeof(path), "%sserver.txt", dir);
+    snprintf(tmp, sizeof(tmp), "%s.new", path);
+    FILE *f = fopen(tmp, "w");
+    if (!f) {
+        snprintf(err, errlen, "nao consegui gravar %s", tmp);
+        return -1;
+    }
+    char early[16];
+    if (cfg->early_kb < 0)
+        snprintf(early, sizeof(early), "auto");
+    else
+        snprintf(early, sizeof(early), "%d", cfg->early_kb);
+    fprintf(f, "# PSPStream: gravado pela tela de configuracao do PSP (veja o README para as opcoes)\n");
+    if (cfg->port == PS_DEFAULT_PORT)
+        fprintf(f, "%s\n", cfg->host);
+    else
+        fprintf(f, "%s:%d\n", cfg->host, cfg->port);
+    fprintf(f, "wifi_profile=%d\n", cfg->wifi_profile);
+    fprintf(f, "transport=%s\n", cfg->udp ? "udp" : "tcp");
+    fprintf(f, "h264=%s\n", onoff(cfg->h264));
+    fprintf(f, "h264p=%s\n", onoff(cfg->h264p));
+    fprintf(f, "decoder=%s\n", cfg->decoder == DEC_HW ? "hw" : cfg->decoder == DEC_SW ? "sw" : "auto");
+    fprintf(f, "vsync=%s\n", onoff(cfg->vsync));
+    fprintf(f, "overlay=%s\n", onoff(cfg->overlay));
+    fprintf(f, "input=%s\n", onoff(cfg->input));
+    fprintf(f, "prefetch=%s\n", onoff(cfg->prefetch));
+    fprintf(f, "early_kb=%s\n", early);
+    fprintf(f, "rxwait=%s\n", cfg->rxwait == RXWAIT_SELECT ? "select" : cfg->rxwait == RXWAIT_POLL ? "poll" : "auto");
+    fprintf(f, "rcvbuf=%d\n", cfg->rcvbuf_kb);
+    fprintf(f, "bench=%s\n", onoff(cfg->bench));
+    fprintf(f, "menu_wait=%d\n", cfg->menu_wait);
+    int ok = !ferror(f);
+    if (fclose(f) != 0 || !ok) {
+        snprintf(err, errlen, "erro ao gravar %s", tmp);
+        remove(tmp);
+        return -1;
+    }
+    /* troca só depois de gravar inteiro: se o PSP desligar no meio, o antigo fica */
+    remove(path);
+    if (rename(tmp, path) != 0) {
+        snprintf(err, errlen, "nao consegui renomear %s", tmp);
+        return -1;
+    }
     return 0;
 }

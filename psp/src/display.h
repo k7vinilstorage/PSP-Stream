@@ -12,6 +12,8 @@ void display_init(void);
 
 /* Modo console: texto de status na tela (antes do stream começar). */
 void display_console(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+/* Apaga o console e volta para a primeira linha. */
+void display_console_clear(void);
 
 /* Buffer onde desenhar o próximo frame (endereço com cache, stride 512). */
 uint32_t *display_back(void);

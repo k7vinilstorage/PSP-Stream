@@ -119,8 +119,10 @@ make dist     # monta dist/PSP/GAME/PSPStream/{EBOOT.PBP,server.txt}
 
 1. Copie a pasta `dist/PSP` para a raiz do memory stick. O resultado deve ser
    `ms0:/PSP/GAME/PSPStream/EBOOT.PBP`.
-2. Edite `PSP/GAME/PSPStream/server.txt`: na primeira linha, coloque o IP do
-   PC, que o servidor mostra ao iniciar.
+2. O IP do PC: configure pela tela do próprio PSP (abaixo, "Tela de
+   configuração no PSP"), com "Procurar o PC na rede", ou edite
+   `PSP/GAME/PSPStream/server.txt` e ponha na primeira linha o IP que o
+   servidor mostra ao iniciar.
 3. No XMB, em **Ajustes > Ajustes de rede > Modo infraestrutura**, crie a
    conexão com o seu roteador. Ela é o perfil 1 se for a primeira.
 4. Recomendado: em **Ajustes > Ajustes de economia de energia > Economia de
@@ -132,6 +134,29 @@ make dist     # monta dist/PSP/GAME/PSPStream/{EBOOT.PBP,server.txt}
 misto (b/g/n) e use WPA2-PSK (AES) ou WPA-PSK. Se possível, ligue o PC ao
 roteador por cabo: com o PC também no Wi-Fi, a banda disponível cai pela
 metade.
+
+### Tela de configuração no PSP
+
+Ao abrir, o PSPStream mostra a tela de configuração e conecta sozinho em 3 s
+(`menu_wait`). Qualquer botão para a contagem. Sem IP configurado, ela fica
+esperando.
+
+- **Cima/Baixo** escolhe o item, **Esq/Dir** muda o valor.
+- **IP do PC** e **Porta**: X entra na edição dígito a dígito (Esq/Dir
+  escolhe o dígito, Cima/Baixo muda, X termina).
+- **Perfil de Wi-Fi**: mostra o nome salvo no XMB e só passa pelos que
+  existem.
+- **Procurar o PC na rede**: liga o Wi-Fi e manda um ping em broadcast na
+  porta escolhida; o servidor responde e o IP dele entra no lugar. Precisa
+  do servidor rodando e da porta UDP liberada no firewall.
+- Transporte, H.264, frames P, decoder, vsync, overlay, controles,
+  prefetch, pedido antecipado e espera de pacotes: as mesmas opções do
+  `server.txt` (abaixo).
+- **START** (ou "Salvar e conectar") grava o `server.txt` e conecta; **O**
+  conecta sem gravar. Ao gravar, os comentários do arquivo antigo somem.
+
+A tela também abre com **SELECT + START + R** durante o stream e com
+**START** quando o Wi-Fi ou o PC não respondem.
 
 ### Opções do `server.txt`
 
@@ -150,6 +175,7 @@ h264=1               # 1 = aceita H.264 (servidor com --codec h264)
 h264p=1              # 1 = aceita H.264 com frames P (servidor com --codec h264p, v0.9)
 rcvbuf=64            # buffer de recepção do socket (KB)
 bench=0              # 1 = mede o decode hw x sw no próprio PSP ao conectar
+menu_wait=3          # s com a tela de configuração aberta antes de conectar sozinho (0 = direto)
 ```
 
 ## 3. Uso
@@ -369,7 +395,7 @@ em 0,5 s (`--input-timeout`).
 
 **Atalhos no PSP** (segure **SELECT + START** e aperte): triângulo =
 overlay, quadrado = decoder hw/sw, círculo = vsync, X = prefetch, L =
-transporte TCP/UDP (reconecta). Enquanto o
+transporte TCP/UDP (reconecta), R = tela de configuração. Enquanto o
 atalho estiver segurado, nada é enviado ao PC. O SELECT apertado sozinho
 antes do START chega ao PC.
 
@@ -451,6 +477,7 @@ o `EBOOT.PBP` e um `server.txt` com `127.0.0.1` na pasta
 PPSSPP_HEADLESS=/caminho/PPSSPPHeadless tools/emu_test.sh tela.png --source static
 PPSSPP_HEADLESS=... EXIT_AFTER=120 tools/emu_test.sh tela.png --source test
 PPSSPP_HEADLESS=... python3 tools/emu_input_test.py   # controles; precisa de: pip install websocket-client
+PPSSPP_HEADLESS=... python3 tools/emu_menu_test.py    # tela de configuração: procurar o PC, salvar, conectar
 ```
 
 O que funciona e o que não funciona no emulador:
@@ -476,7 +503,8 @@ psp/                   cliente (C, pspdev)
   src/net.c            módulos de rede, Wi-Fi (apctl), TCP
   src/decode.c         sceJpeg (hw), libjpeg-turbo (sw) e H.264 (sceMpegAvcDecode)
   src/display.c        framebuffer 8888, triple buffering, texto
-  src/config.c         server.txt
+  src/config.c         server.txt (ler e gravar)
+  src/menu.c           tela de configuração (IP, Wi-Fi, opções, procurar o PC)
   src/protocol.h
 server/                servidor (Python 3)
   pspstream.py         sessões TCP, linha de comando, benchmark
@@ -489,7 +517,7 @@ server/                servidor (Python 3)
   gamepad.py           uinput (controle de Xbox 360 virtual)
   keymap.json          perfis de controles
   stats.py, sources.py, jpeginfo.py, protocol.py
-tools/                 fake_client.py, emu_test.sh, emu_input_test.py, bench_sizes.py, make_testcard.sh
+tools/                 fake_client.py, emu_test.sh, emu_input_test.py, emu_menu_test.py, bench_sizes.py, make_testcard.sh
   kms/                 pspstream-kms.c: auxiliar com CAP_SYS_ADMIN que exporta a tela (make; make cap)
 docs/                  PROTOCOL.md, MEASUREMENTS.md
 tests/                 testes do servidor

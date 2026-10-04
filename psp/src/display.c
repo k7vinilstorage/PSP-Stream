@@ -62,6 +62,12 @@ void display_console(const char *fmt, ...)
         draw_idx = 1;
 }
 
+void display_console_clear(void)
+{
+    memset(UNCACHED(fb[0]), 0, FB_BYTES);
+    console_row = 0;
+}
+
 uint32_t *display_back(void)
 {
     return fb[draw_idx];

@@ -37,6 +37,11 @@ int net_wait_readable(int sock, unsigned timeout_us);
 /* Um datagrama sem esperar: devolve o tamanho, 0 se a fila está vazia, < 0 se erro. */
 int net_recv_dgram(int sock, void *buf, int len);
 
+/* Procura o servidor na rede: ping UDP em broadcast (o servidor responde
+ * ping de qualquer endereço). Escreve o IP de quem respondeu. 0 = achou,
+ * < 0 = ninguém respondeu em timeout_us. Precisa do Wi-Fi conectado. */
+int net_discover(int port, char *ip_out, int ip_len, unsigned timeout_us);
+
 /* Desbloqueia um recv() parado em outra thread. */
 void net_abort(int sock);
 

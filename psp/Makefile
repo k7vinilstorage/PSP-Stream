@@ -3,7 +3,7 @@
 #   make dist       -> dist/PSP/GAME/PSPStream/ pronto para copiar no memory stick
 
 TARGET = PSPStream
-OBJS = src/main.o src/config.o src/net.o src/display.o src/decode.o src/stream.o
+OBJS = src/main.o src/config.o src/net.o src/display.o src/decode.o src/stream.o src/menu.o
 
 INCDIR =
 # -MMD -MP: recompila o .c quando um .h muda (o build.mak não rastreia isso)

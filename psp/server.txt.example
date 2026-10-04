@@ -1,5 +1,8 @@
-# PSPStream: IP do PC na primeira linha (porta opcional, padrão 5123)
-192.168.1.100
+# PSPStream: IP do PC na primeira linha (porta opcional, padrão 5123).
+# Tudo aqui também dá para mudar na tela de configuração do próprio PSP,
+# que grava este arquivo (sem os comentários).
+# Sem IP, a tela de configuração abre e espera: use "Procurar o PC na rede".
+# 192.168.1.100
 
 # Perfil de rede salvo em Ajustes > Ajustes de rede (1 = primeiro)
 wifi_profile=1
@@ -47,3 +50,8 @@ rcvbuf=64
 
 # 1 = ao conectar, mede o decode hw x sw no próprio PSP e mostra na tela
 bench=0
+
+# Segundos com a tela de configuração aberta antes de conectar sozinho
+# (qualquer botão para a contagem). 0 = conecta direto; a tela continua
+# abrindo com SELECT + START + R durante o stream.
+menu_wait=3

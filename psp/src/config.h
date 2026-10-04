@@ -18,12 +18,19 @@ typedef struct {
     int rxwait;       /* UDP: RXWAIT_AUTO, RXWAIT_SELECT ou RXWAIT_POLL */
     int h264;         /* 1 = aceita H.264 do servidor (--codec h264) */
     int exit_after;   /* testes: sai depois de exibir N frames (0 = nunca) */
+    int menu_wait;    /* s até conectar sozinho com a tela de configuração aberta (0 = conecta direto) */
+    int menu_shot;    /* testes: desenha a tela de configuração, tira o screenshot e sai */
 } ps_config_t;
 
 /* Como a thread de rede espera pacotes (UDP). */
 enum { RXWAIT_AUTO, RXWAIT_SELECT, RXWAIT_POLL };
 
-/* Lê `dir`/server.txt. Devolve 0 se ok; senão escreve o motivo em err. */
+/* Lê `dir`/server.txt. Devolve 0 se ok; senão escreve o motivo em err (e
+ * *cfg fica com os padrões e o que deu para ler, para a tela de configuração). */
 int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen);
+
+/* Grava `dir`/server.txt com todas as opções (os comentários do arquivo
+ * antigo não são mantidos). Devolve 0 se ok. */
+int config_save(const ps_config_t *cfg, const char *dir, char *err, int errlen);
 
 #endif
