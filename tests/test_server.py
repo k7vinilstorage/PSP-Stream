@@ -476,6 +476,22 @@ class KmsCaptureTest(unittest.TestCase):
         self.assertNotIn("pipewiresrc", factories)
 
 
+class NetcheckTest(unittest.TestCase):
+    def test_pc_band(self):
+        import logging
+        import netcheck
+        out = "Connected to aa:bb:cc:dd:ee:ff (on wlp0s20f3)\n\tSSID: casa\n\tfreq: 5180.0\n\tsignal: -52 dBm\n"
+        self.assertEqual(netcheck.link_freq(out), 5180.0)
+        self.assertIsNone(netcheck.link_freq("Not connected."))
+        level, msg = netcheck.band_advice(5180.0, "wlp0s20f3")
+        self.assertEqual(level, logging.INFO)
+        level, msg = netcheck.band_advice(2437, "wlp0s20f3")
+        self.assertEqual(level, logging.WARNING)
+        self.assertIn("canal 6", msg)
+        self.assertIn("802-11-wireless.band a", msg)
+        self.assertEqual(netcheck.channel_24(2484), 14)
+
+
 class H264QualityTest(unittest.TestCase):
     def test_qp_mapping(self):
         try:

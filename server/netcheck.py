@@ -1,6 +1,7 @@
 """Checagens do lado do PC que pesam muito na latência do PSP."""
 import logging
 import os
+import re
 import subprocess
 
 log = logging.getLogger("pspstream.netcheck")
@@ -16,6 +17,34 @@ def _iface_for(ip: str):
         if len(parts) >= 4 and parts[3].split("/")[0] == ip:
             return parts[1]
     return None
+
+
+def link_freq(iw_link_output: str):
+    """Frequência (MHz) da saída de `iw dev <iface> link`, ou None."""
+    m = re.search(r"freq:\s*([\d.]+)", iw_link_output)
+    return float(m.group(1)) if m else None
+
+
+def channel_24(freq: float):
+    if freq == 2484:
+        return 14
+    return round((freq - 2407) / 5) if 2412 <= freq <= 2472 else None
+
+
+def band_advice(freq, iface: str):
+    """(nível, mensagem) sobre a banda do PC. O PSP só fala 802.11b (2,4 GHz)."""
+    if freq is None:
+        return (logging.WARNING, f"o PC está no Wi-Fi ({iface}): se der, use cabo, ou a rede de 5 GHz do "
+                                 "roteador. No mesmo canal, cada pacote cruza o ar duas vezes e a banda do PSP cai")
+    if freq >= 4900:
+        return (logging.INFO, f"PC no Wi-Fi de {freq / 1000:.1f} GHz ({iface}): bom, ele não disputa o canal "
+                              "de 2,4 GHz do PSP")
+    ch = channel_24(freq)
+    return (logging.WARNING,
+            f"o PC está no Wi-Fi de 2,4 GHz ({iface}, canal {ch if ch else '?'}), o mesmo do PSP: cada pacote "
+            "cruza o mesmo canal duas vezes e a banda do PSP cai pela metade. Use cabo, ou conecte o PC na "
+            "rede de 5 GHz do roteador (o PSP continua no 2,4). Com um nome de rede só para as duas bandas: "
+            "nmcli connection modify <rede> 802-11-wireless.band a")
 
 
 def check_pc_wifi(ip: str) -> None:
@@ -39,8 +68,14 @@ def check_pc_wifi(ip: str) -> None:
             state = False
     except (OSError, subprocess.SubprocessError):
         pass
-    log.warning("o PC está no Wi-Fi (%s): se der, use cabo. No mesmo Wi-Fi, cada pacote cruza o ar duas "
-                "vezes e a banda do PSP cai", iface)
+    freq = None
+    try:
+        freq = link_freq(subprocess.run(["iw", "dev", iface, "link"], capture_output=True, text=True,
+                                        timeout=2).stdout)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    level, msg = band_advice(freq, iface)
+    log.log(level, "%s", msg)
     if state is True:
         log.warning("power save do Wi-Fi do PC LIGADO: o roteador segura os pedidos do PSP até a placa "
                     "acordar. Desligue: sudo iw dev %s set power_save off (até reiniciar) ou "

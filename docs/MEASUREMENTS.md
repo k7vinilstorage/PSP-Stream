@@ -706,6 +706,23 @@ O PSP ficou em 9-28 fps e 60-130 ms, porque nessa rodada a rede limitou:
 A captura foi do monitor 0 de 2 (1280x720 a 59,855 Hz). O log agora lista
 os outros monitores e o `--kms-monitor` de cada um.
 
+**Segunda rodada KMS [PSP]** (tela do notebook em 1280x720, fonte 57,9 fps):
+
+| trecho | KB/frame | FPS | latência / p95 | antes, pelo portal (~38 fps) |
+|---|---|---|---|---|
+| cenas leves | 3,7-4,4 | **43-56** | **32-38 / 54-62 ms** | 25-38 fps, 29-46 ms |
+| jogo, Wi-Fi bom | 8-8,6 | **40-42** | 55-66 / 71-97 ms | 29-39 fps, 35-65 ms (6-11 KB) |
+| jogo, sinal 57-67% | 8-11 | 14-23 | 74-94 / 148-212 ms | |
+
+- Com a captura a 60 fps, o limite agora é o Wi-Fi: 380-460 KB/s na rajada.
+  Nas quedas de sinal, 10-15% dos pedaços são reenviados.
+- Nesta rodada o ping do início deu 9,9 ms (e 28,7 ms com select), então o
+  pedido antecipado ficou em 4-5 KB, contra 2-3 KB nas outras. O tempo morto
+  continuou em 3-5 ms, sem fila.
+- O PC também está no Wi-Fi. O servidor agora lê a banda dele (`iw dev ...
+  link`): no 2,4 GHz, o PC e o PSP dividem o mesmo canal, e a dica é usar o 5
+  GHz do roteador ou cabo.
+
 **Minecraft nesta rodada** (q90, sinal 50-100%): frames de 6-11 KB dão 29-39
 fps e 35-65 ms. Nas cenas de 13-15,6 KB, 24-28 fps e 70-84 ms (p95 88-133
 ms): aí a rede limita, e o decode sobe para 6-7 ms.
