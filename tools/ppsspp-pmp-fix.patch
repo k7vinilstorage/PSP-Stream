@@ -1,0 +1,38 @@
+# Conserta o caminho "PMP" do sceMpegAvcDecode no PPSSPP (usado pelo psp/probe).
+# 1) o pacote do FFmpeg apontava para um buffer que era liberado logo depois;
+# 2) destrutor chamado na mao + reuso do objeto: com -O3 o GCC remove as escritas
+#    que zeram o ponteiro (lifetime DSE) e o 2o frame libera a mesma memoria de novo.
+# Aplicar na raiz do PPSSPP: git apply tools/ppsspp-pmp-fix.patch
+
+diff --git a/Core/HLE/sceMpeg.cpp b/Core/HLE/sceMpeg.cpp
+index ecbda4a..553e2f3 100644
+--- a/Core/HLE/sceMpeg.cpp
++++ b/Core/HLE/sceMpeg.cpp
+@@ -964,11 +964,10 @@ static bool decodePmpVideo(PSPPointer<SceMpegRingBuffer> ringbuffer, u32 pmpctxA
+ 
+ 		// initialize packet
+ 		AVPacket packet;
+-		av_new_packet(&packet, pCodecCtx->width*pCodecCtx->height);
+-
+-		// set packet to source block
+-		packet.data = pmpframes->stream;
+-		packet.size = pmpframes->size;
++		// Local fix: own copy of the data. Pointing packet.data at pmpframes->stream left the
++		// decoder (frame threads) reading it after pmpframes freed it.
++		av_new_packet(&packet, pmpframes->size);
++		memcpy(packet.data, pmpframes->stream, pmpframes->size);
+ 
+ 		// reuse pFrame and pFrameRGB
+ 		int got_picture = 0;
+@@ -1054,7 +1053,10 @@ static bool decodePmpVideo(PSPPointer<SceMpegRingBuffer> ringbuffer, u32 pmpctxA
+ #else
+ 		av_free_packet(&packet);
+ #endif
+-		pmpframes->~H264Frames();
++		// Local fix: an explicit destructor call followed by reuse is UB, and with -O3 GCC drops the
++		// stores that null the pointer (lifetime DSE), so the next frame freed it twice.
++		delete pmpframes;
++		pmpframes = nullptr;
+ 		// must reset pmp_VideoSource address to zero after decoding.
+ 		pmp_videoSource = 0;
+ 		return true;

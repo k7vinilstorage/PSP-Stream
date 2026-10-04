@@ -6,6 +6,11 @@ psp/PARAM.SFO
 psp/src/*.o
 psp/src/*.d
 psp/dist/
+psp/probe/*.o
+psp/probe/*.elf
+psp/probe/*.prx
+psp/probe/*.PBP
+psp/probe/PARAM.SFO
 
 # Python
 __pycache__/

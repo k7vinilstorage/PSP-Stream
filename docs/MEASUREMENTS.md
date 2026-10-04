@@ -200,6 +200,41 @@ O que estes números já dizem, mesmo com a regressão:
   ligado. Então ele não explica tudo, mas é o suspeito que sobra (2), e o
   teste é barato.
 
+### H.264: o Moonlight-PSP e o decoder de hardware
+
+**O [Moonlight-PSP](https://github.com/k4idyn/Moonlight-PSP) usa H.264, mas
+decodificado em software** (OpenH264 na CPU principal; o Media Engine só
+converte as cores). Pelo changelog dele, em 480x272 o resultado é 15-18 fps
+(o preset "Quality" usa 10 fps), com o limite no decode e não na rede (500
+kbps). Hoje o MJPEG com o `sceJpeg` já dá ~20 fps em 480x272. Copiar esse
+caminho seria um passo para trás. O autor tentou o decoder de hardware
+(`sceMpeg`) e desistiu: o ringbuffer espera MPEG-PS em ordem, e o RTP do
+Moonlight entrega pedaços fora de ordem com FEC no meio. **Isso não se aplica
+ao PSPStream**, que entrega cada frame inteiro e em ordem (NACK).
+
+**O decoder de hardware é rápido.** O PPSSPP mediu num PSP real
+(pspautotests `video/mpeg/playertiming`): ~3,4 ms para decodificar um frame
+480x272, mais 2,4 ms para converter para RGBA. É menos que os 7,9 ms do
+`sceJpeg`. A questão era como chamá-lo com H.264 cru:
+
+- O **PMP Mod / PMPlayer** (2006, código do magiK) fazia isso: um ringbuffer
+  vazio, `sceMpegBasePESpacketCopy` levando o frame (Annex B) para a memória
+  do Media Engine em blocos de 4095 bytes, e `sceMpegAvcDecode`, que já
+  devolve RGBA 8888 com largura 512. O PPSSPP emula esse caminho.
+- O pspautotests `video/mp4/mp4timing` mostra outro (sem ringbuffer, com
+  `sceMpegAvcResourceInit`), testado em hardware, mas o PPSSPP só o roda com
+  o `mpeg.prx` original do firmware.
+
+**`psp/probe` usa o caminho do PMP** [EMU]: no PPSSPP (com
+`tools/ppsspp-pmp-fix.patch`), os 60 frames de cada clipe (baseline/CAVLC e
+main/CABAC) decodificam, inclusive direto na VRAM, e o número desenhado em
+cada frame confere com o AU entregue. O emulador decodifica com FFmpeg em
+modo de baixa latência e com tempo fixo, então **não responde** às perguntas
+que importam: o tempo real e se o PSP segura frames. Dois erros meus que
+travariam o PSP apareceram no emulador e foram corrigidos: o
+`SceMpegRingbuffer` do pspsdk tem 44 bytes e a biblioteca escreve 48, e uma
+leitura de u32 desalinhada.
+
 ## 1. Tamanho de frame [PC]
 
 Mesmo pipeline do servidor (`videoscale` -> I420 -> `jpegenc`), saída 480x272

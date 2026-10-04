@@ -241,6 +241,23 @@ python3 server/pspstream.py --source static --fixed-quality -q 70
 python3 server/pspstream.py --source static --image captura_do_jogo.png --bench 30,50,70,90
 ```
 
+### Teste do decoder H.264 de hardware (experimental)
+
+`psp/probe` é um EBOOT separado que decodifica clipes H.264 curtos (embutidos
+nele) pelo decoder de hardware do PSP. Ele mede o que só o hardware responde
+antes de trocar o MJPEG por H.264: se o decoder funciona, quanto tempo leva
+por frame e se segura frames (o que somaria latência).
+
+```sh
+cd psp/probe && make
+# copie EBOOT.PBP para ms0:/PSP/GAME/PSPStreamH264/ e rode pelo XMB
+```
+
+Leva alguns segundos. O resultado aparece na tela e fica em
+`PSP/GAME/PSPStreamH264/resultado_h264.txt` (gravado a cada passo: se o PSP
+travar, o arquivo mostra até onde foi). Os clipes vêm de
+`tools/h264_probe_clips.py` (ffmpeg com libx264).
+
 ## 5. Testar sem o PSP
 
 ```sh
@@ -277,6 +294,7 @@ O que funciona e o que não funciona no emulador:
 | libjpeg-turbo | funciona; o tempo emulado não é o do Allegrex |
 | tempos no headless | **inválidos**: o relógio emulado pula o tempo ocioso |
 | banda e perdas do 802.11b | não simuladas |
+| H.264 pelo `sceMpegAvcDecode` (caminho "PMP", `psp/probe`) | decodifica com FFmpeg; precisa de `tools/ppsspp-pmp-fix.patch` (sem ele o PPSSPP aborta no 2º frame). Não mostra se o PSP real segura frames |
 
 ## Estrutura
 
