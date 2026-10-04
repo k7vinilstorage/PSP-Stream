@@ -449,6 +449,33 @@ H.264, power save do PC desligado, `early_kb=0`, v0.6:
   ("repet"). Simulação (`fake_client --loss 0.02 --loss-up 0.05 --rtt-ms 8`,
   H.264 q30) [SIM]: **63-70 fps** contra 40-47 fps com os 200 ms.
 
+#### v0.7 no PSP-3000: o FPS dobrou [PSP]
+
+H.264, `--source static`, prefetch=1, `early_kb=0`, power save do PC
+desligado, sinal 72%:
+
+| q | KB | FPS | latência / p95 | rede | 1º pedaço: média (mín, mediana) | ping no stream | rajada | reenviados |
+|---|---|---|---|---|---|---|---|---|
+| 30 | 1,7 | **64,2** | 19 / 37 ms | 14,3 | 12,7 (5,1, 6,7) | 11,4 | 7,0 | 0,5% |
+| 50 | 2,4 | **60,6** | 20 / 39 ms | 15,7 | 12,0 (1,8, 7,2) | 9,7 | 3,8 | 1,5% |
+| 70 | 3,8 | **53,4** | 23 / 40 ms | 18,7 | 11,6 (1,8, 6,9) | 10,4 | 7,2 | 1,4% |
+| 90 | 5,4 | **43,3** | 28 / 55 ms | 22,7 | 12,9 (1,8, 6,9) | 24,1 | 9,9 | 1,1% |
+
+- A média do 1º pedaço caiu de 21-42 ms para 12-13 ms (mediana ~7 ms): as
+  travadas de 200 ms sumiram.
+- q30-q50 bate no limite da tela do PSP (60 Hz). Na q90, quem limita é a
+  rede: 5,4 KB por frame.
+
+**Evolução na mesma imagem (`--source static`):**
+
+| versão | q50: FPS / latência | q90: FPS / latência |
+|---|---|---|
+| v0.3 (JPEG, TCP pull) | 8,5 / 203 ms | 3,0 / 265 ms |
+| v0.3 (JPEG, UDP) | 19,7 / 46 ms | 10,9 / 90 ms |
+| v0.5 (H.264 intra + Stop) | 28,7 / 28 ms | 22,1 / 33 ms |
+| v0.6 (+ power save do PC desligado) | 42,8 / 19 ms | 28,6 / 29 ms |
+| **v0.7 (repetição de pedido adaptativa)** | **60,6 / 20 ms** | **43,3 / 28 ms** |
+
 ## 1. Tamanho de frame [PC]
 
 Mesmo pipeline do servidor (`videoscale` -> I420 -> `jpegenc`), saída 480x272

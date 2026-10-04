@@ -170,7 +170,9 @@ python3 server/pspstream.py --codec jpeg      # força o MJPEG
 ```
 
 Todo frame vai como IDR (quadro completo), decodificado pelo hardware do PSP
-(~3,7 ms por frame medidos no PSP-3000) e sem frames de atraso. Na mesma
+(~3,7 ms por frame medidos no PSP-3000) e sem frames de atraso. Medido no
+PSP-3000 (v0.7, imagem estática): 60 fps com 20 ms de latência média em
+q50, e 43 fps com 28 ms em q90. Com JPEG eram 20 fps / 46 ms e 11 fps / 90 ms. Na mesma
 qualidade, os frames têm ~33-45% dos bytes do JPEG (medido no PC). Cada
 frame continua independente: uma perda estraga só aquele frame. A qualidade
 adaptativa e o `-q` continuam na escala do JPEG (q50 do H.264 ≈ q50 do JPEG
