@@ -569,7 +569,7 @@ O FPS é o do PSP falso, e a latência e o tempo morto vêm do log do servidor.
   O FPS encostou no da fonte, então quem limitava passou a ser a captura.
 - **Desktop:** de 24-30 para 29-37,5 fps, também perto da fonte. O tempo
   morto aqui é a espera por um frame novo.
-- Os ~38 fps da "fonte" eram um defeito do servidor (abaixo).
+- A "fonte" de ~38 fps vem do próprio portal (abaixo), não do servidor.
 
 #### Captura do portal: o videorate cortava 60 fps para ~38 [PC]
 
@@ -585,13 +585,40 @@ frames treme ±1 ms. Nessa situação, o videorate (GStreamer 1.24) descarta
 | tremor ±2 ms | 39,5 | 37,7 | 60,0 |
 | ao vivo, pipeline completo, ±1-2 ms | **37,3** | - | **60,0** |
 
-É a "fonte" de 36-40 fps de todos os logs com o portal. O videorate saiu, e
-o `--fps` agora é aplicado por uma sonda na saída da fila (`RateLimiter`):
-agenda de 1/fps com 25% de tolerância. Uma fonte de 60 Hz passa inteira, e
-uma de 144 Hz fica em ~60-70 fps. O servidor agora loga quanto a fonte
-entrega, quanto passa pelo limite e quanto é codificado. A medida no portal
-de verdade ainda falta: o próprio GNOME também poderia limitar a taxa, e o
-log novo mostra isso.
+O videorate saiu. O `--fps` agora é aplicado por uma sonda na saída da fila
+(`RateLimiter`): agenda de 1/fps com 25% de tolerância. Uma fonte de 60 Hz
+passa inteira, e uma de 144 Hz fica em ~60-70 fps. O servidor agora loga
+quanto a fonte entrega, quanto passa pelo limite e quanto é codificado.
+
+**No portal de verdade, isso não era o limite [PSP].** Com o log novo (Fedora
+44, GNOME, tela 2240x1400 a 59,998 Hz, Minecraft aberto), o próprio PipeWire
+entrega 37,7-38,7 fps, e tudo passa pelo limite:
+
+```
+formato da captura: video/x-raw, format=BGRA, width=2240, height=1400, framerate=0/1,
+                    max-framerate=7864015/131072 (59,998), ...
+captura: a fonte entrega 37.7 fps (intervalo mediano 32.2 ms, p10 16.8, p90 33.8);
+         passam pelo limite de 60 fps: 37.7; codificados: 37.9
+```
+
+Os intervalos são de 1 ou 2 quadros da tela (16,7 ou 33,3 ms), com ~40% de
+1 quadro. Duas explicações cabem, e um teste separa as duas:
+
+1. **O jogo roda a ~38-40 fps.** Uma GPU integrada com o Minecraft em
+   2240x1400 dá isso fácil. O GNOME só manda frame quando a tela muda, então
+   a captura não passa do FPS do jogo.
+2. **O GNOME (mutter) limita a captura.** O limitador dele usa um intervalo
+   mínimo igual ao período da tela (16 667 µs). Um frame que chega alguns µs
+   adiantado é pulado, e o seguinte vem 2 quadros depois. A outra hipótese é
+   a cópia da tela inteira (2240x1400, 12,5 MB) para a memória comum, feita
+   pelo próprio GNOME.
+
+Teste: ver a "fonte" com algo que muda a 60 fps de verdade (o mouse girando
+sem parar no desktop, ou um vídeo de 60 fps) e o FPS do Minecraft na tela F3.
+
+**Minecraft nesta rodada** (q90, sinal 50-100%): frames de 6-11 KB dão 29-39
+fps e 35-65 ms. Nas cenas de 13-15,6 KB, 24-28 fps e 70-84 ms (p95 88-133
+ms): aí a rede limita, e o decode sobe para 6-7 ms.
 
 ## 1. Tamanho de frame [PC]
 
