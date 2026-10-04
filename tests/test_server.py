@@ -3,6 +3,7 @@
   python3 -m unittest discover tests
 """
 import argparse
+import math
 import socket
 import sys
 import threading
@@ -665,6 +666,108 @@ class JpegInfoTest(unittest.TestCase):
     def test_not_jpeg(self):
         with self.assertRaises(ValueError):
             jpeg_info(b"\x89PNG....")
+
+
+class GamepadTest(unittest.TestCase):
+    """Controle de Xbox 360 virtual (server/gamepad.py), sem uinput: só os eventos."""
+
+    def make(self, profile="xbox", timeout=0.5):
+        from gamepad import GamepadInjector
+        return GamepadInjector(load_profile(str(ROOT / "server/keymap.json"), profile), dry_run=True,
+                               timeout=timeout)
+
+    def state(self, pad):
+        return {code: v for (kind, code), v in pad.state.items() if v}
+
+    def test_sdl_layout(self):
+        # O SDL numera botões e eixos pela ordem dos códigos do kernel e usa o
+        # mapeamento do 045e:028e: a:b0 b:b1 x:b2 y:b3 leftshoulder:b4
+        # rightshoulder:b5 back:b6 start:b7 guide:b8 leftstick:b9 rightstick:b10,
+        # leftx:a0 lefty:a1 lefttrigger:a2 rightx:a3 righty:a4 righttrigger:a5.
+        try:
+            from evdev import ecodes
+        except ImportError:
+            self.skipTest("sem python-evdev")
+        import gamepad
+        by_code = sorted(gamepad.BUTTON_CODES.items(), key=lambda kv: getattr(ecodes, kv[1]))
+        self.assertEqual([k for k, _ in by_code], ["A", "B", "X", "Y", "LB", "RB", "BACK", "START", "GUIDE",
+                                                   "L3", "R3"])
+        axes = sorted(["ABS_X", "ABS_Y", "ABS_Z", "ABS_RX", "ABS_RY", "ABS_RZ"], key=lambda c: getattr(ecodes, c))
+        self.assertEqual(axes, ["ABS_X", "ABS_Y", "ABS_Z", "ABS_RX", "ABS_RY", "ABS_RZ"])
+        self.assertEqual((gamepad.VENDOR, gamepad.PRODUCT), (0x045E, 0x028E))
+
+    def test_buttons_triggers_dpad(self):
+        pad = self.make()
+        pad.update(PSP_BUTTONS["CROSS"] | PSP_BUTTONS["R"] | PSP_BUTTONS["UP"] | PSP_BUTTONS["LEFT"], 128, 128)
+        self.assertEqual(self.state(pad), {"BTN_A": 1, "ABS_RZ": 255, "ABS_HAT0Y": -1, "ABS_HAT0X": -1})
+        pad.update(PSP_BUTTONS["TRIANGLE"], 128, 128)
+        self.assertEqual(self.state(pad), {"BTN_Y": 1})
+        pad.update(0, 128, 128)
+        self.assertEqual(self.state(pad), {})
+        pad.close()
+
+    def test_analog_deadzone_and_full_range(self):
+        pad = self.make()
+        pad.update(0, 140, 118)  # ruído perto do centro (o analógico do PSP não para em 128)
+        self.assertEqual(self.state(pad), {})
+        pad.update(0, 245, 128)  # ~92% já é o fim do curso
+        self.assertEqual(pad.state[("abs", "ABS_X")], 32767)
+        pad.update(0, 128, 0)    # para cima = negativo, como no xpad
+        self.assertEqual(pad.state[("abs", "ABS_Y")], -32767)
+        pad.update(0, 220, 220)  # diagonal: o vetor é limitado ao círculo
+        x, y = pad.state[("abs", "ABS_X")], pad.state[("abs", "ABS_Y")]
+        self.assertAlmostEqual(x, y, delta=2)
+        self.assertLessEqual(math.hypot(x, y), 32767 * 1.001)
+        pad.close()
+
+    def test_shift_layer_and_tap(self):
+        pad = self.make()
+        sel, l_btn, up = PSP_BUTTONS["SELECT"], PSP_BUTTONS["L"], PSP_BUTTONS["UP"]
+        pad.update(sel, 128, 128)
+        pad.update(sel | l_btn | up, 128, 128)  # SELECT + L = LB, SELECT + cima = analógico direito
+        self.assertEqual(self.state(pad), {"BTN_TL": 1, "ABS_RY": -32767})
+        pad.update(l_btn | up, 128, 128)        # soltou o SELECT antes: continuam LB e RS
+        self.assertEqual(self.state(pad), {"BTN_TL": 1, "ABS_RY": -32767})
+        pad.update(0, 128, 128)
+        self.assertEqual(self.state(pad), {})
+        self.assertNotIn(("BTN_SELECT", 1), pad.out.events)  # usado como shift: sem BACK
+        # toque rápido no SELECT sozinho = BACK, solto logo depois
+        pad.update(sel, 128, 128)
+        pad.update(0, 128, 128)
+        self.assertEqual(self.state(pad), {"BTN_SELECT": 1})
+        time.sleep(0.15)
+        self.assertEqual(self.state(pad), {})
+        # segurado e solto sem nada no meio, mas devagar: não é toque
+        pad.update(sel, 128, 128)
+        pad.shift_t -= 1.0
+        pad.update(0, 128, 128)
+        self.assertEqual(self.state(pad), {})
+        pad.close()
+
+    def test_camera_profile(self):
+        pad = self.make("xbox-camera")
+        pad.update(PSP_BUTTONS["CIRCLE"] | PSP_BUTTONS["DOWN"], 255, 128)
+        st = self.state(pad)
+        self.assertEqual(st["BTN_A"], 1)                         # direcional para baixo = A
+        self.assertEqual(st["ABS_RX"], round(0.8 * 32767))       # bola = câmera para a direita
+        self.assertEqual(st["ABS_X"], 32767)                     # analógico = andar
+        pad.close()
+
+    def test_release_all_and_timeout(self):
+        pad = self.make(timeout=0.05)
+        pad.update(PSP_BUTTONS["CROSS"] | PSP_BUTTONS["L"], 255, 128)
+        self.assertTrue(self.state(pad))
+        time.sleep(0.25)  # o PSP sumiu: tudo volta ao neutro
+        self.assertEqual(self.state(pad), {})
+        pad.update(PSP_BUTTONS["CROSS"], 128, 128)
+        pad.release_all()
+        self.assertEqual(self.state(pad), {})
+        pad.close()
+
+    def test_bad_target(self):
+        from gamepad import GamepadInjector
+        with self.assertRaises(SystemExit):
+            GamepadInjector({"type": "gamepad", "buttons": {"CROSS": "BOTAO_X"}}, dry_run=True)
 
 
 class InjectorTest(unittest.TestCase):

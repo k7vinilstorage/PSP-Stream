@@ -534,7 +534,9 @@ def parse_args(argv=None):
     p.add_argument("--input-dry-run", action="store_true",
                    help="só mostrar no log as teclas/movimentos que seriam injetados")
     p.add_argument("--keymap", default=str(here / "keymap.json"), help="arquivo de mapeamento (padrão keymap.json)")
-    p.add_argument("--profile", default="jogo", help="perfil do keymap: jogo, desktop, setas... (padrão %(default)s)")
+    p.add_argument("--profile", default="jogo",
+                   help="perfil do keymap: jogo, desktop, setas (teclado e mouse); xbox, xbox-camera, "
+                        "xbox-ombros (controle de Xbox 360 virtual). Padrão %(default)s")
     p.add_argument("--mouse-speed", type=float, default=1.0, help="multiplica a velocidade do mouse do perfil")
     p.add_argument("--input-timeout", type=float, default=0.5, metavar="S",
                    help="solta todas as teclas se o PSP ficar S segundos sem mandar nada enquanto algo está "
@@ -595,9 +597,16 @@ def main(argv=None) -> int:
     if not args.no_input:
         from inject import Injector, load_profile
         try:
-            injector = Injector(load_profile(args.keymap, args.profile), args.input_dry_run, args.mouse_speed,
-                                args.input_timeout)
-            log.info("controles: perfil '%s'%s", args.profile, " (dry-run)" if args.input_dry_run else "")
+            profile = load_profile(args.keymap, args.profile)
+            if profile.get("type") == "gamepad":
+                from gamepad import GamepadInjector
+                injector = GamepadInjector(profile, args.input_dry_run, args.input_timeout)
+                kind = "controle de Xbox 360 virtual"
+            else:
+                injector = Injector(profile, args.input_dry_run, args.mouse_speed, args.input_timeout)
+                kind = "teclado e mouse"
+            log.info("controles: perfil '%s' (%s)%s", args.profile, kind,
+                     " (dry-run)" if args.input_dry_run else "")
         except RuntimeError as exc:
             log.warning("controles desativados: %s", exc)
 

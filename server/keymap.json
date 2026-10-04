@@ -21,6 +21,65 @@
     "analog": {"mode": "mouse", "speed": 700, "deadzone": 0.15, "curve": 2.2}
   },
 
+  "_ajuda_xbox": "type gamepad: o PC ganha um controle de Xbox 360 virtual. Destinos: A B X Y LB RB LT RT BACK START GUIDE L3 R3, DPAD_UP/DOWN/LEFT/RIGHT, LS_UP/DOWN/LEFT/RIGHT e RS_UP/DOWN/LEFT/RIGHT (analógicos no digital); + aperta mais de um. shift: segurando esse botão vale a tabela shift.buttons (o que não estiver nela usa a normal); um toque rápido nele sozinho vale shift.tap. analog.stick = left | right | dpad | none; deadzone e max em fração do curso; digital_stick = quanto o analógico vai com RS_*/LS_* (1 = até o fim).",
+
+  "xbox": {
+    "type": "gamepad",
+    "buttons": {
+      "CROSS": "A", "CIRCLE": "B", "SQUARE": "X", "TRIANGLE": "Y",
+      "UP": "DPAD_UP", "DOWN": "DPAD_DOWN", "LEFT": "DPAD_LEFT", "RIGHT": "DPAD_RIGHT",
+      "L": "LT", "R": "RT", "START": "START"
+    },
+    "shift": {
+      "button": "SELECT", "tap": "BACK",
+      "buttons": {
+        "L": "LB", "R": "RB",
+        "UP": "RS_UP", "DOWN": "RS_DOWN", "LEFT": "RS_LEFT", "RIGHT": "RS_RIGHT",
+        "CROSS": "L3", "CIRCLE": "R3", "TRIANGLE": "GUIDE", "SQUARE": "BACK"
+      }
+    },
+    "analog": {"stick": "left", "deadzone": 0.15, "max": 0.92, "curve": 1.0},
+    "digital_stick": 1.0
+  },
+
+  "xbox-camera": {
+    "type": "gamepad",
+    "buttons": {
+      "TRIANGLE": "RS_UP", "CROSS": "RS_DOWN", "SQUARE": "RS_LEFT", "CIRCLE": "RS_RIGHT",
+      "UP": "Y", "DOWN": "A", "LEFT": "X", "RIGHT": "B",
+      "L": "LT", "R": "RT", "START": "START"
+    },
+    "shift": {
+      "button": "SELECT", "tap": "BACK",
+      "buttons": {
+        "L": "LB", "R": "RB",
+        "UP": "DPAD_UP", "DOWN": "DPAD_DOWN", "LEFT": "DPAD_LEFT", "RIGHT": "DPAD_RIGHT",
+        "CROSS": "L3", "CIRCLE": "R3", "TRIANGLE": "GUIDE", "SQUARE": "BACK"
+      }
+    },
+    "analog": {"stick": "left", "deadzone": 0.15, "max": 0.92, "curve": 1.0},
+    "digital_stick": 0.8
+  },
+
+  "xbox-ombros": {
+    "type": "gamepad",
+    "buttons": {
+      "CROSS": "A", "CIRCLE": "B", "SQUARE": "X", "TRIANGLE": "Y",
+      "UP": "DPAD_UP", "DOWN": "DPAD_DOWN", "LEFT": "DPAD_LEFT", "RIGHT": "DPAD_RIGHT",
+      "L": "LB", "R": "RB", "START": "START"
+    },
+    "shift": {
+      "button": "SELECT", "tap": "BACK",
+      "buttons": {
+        "L": "LT", "R": "RT",
+        "UP": "RS_UP", "DOWN": "RS_DOWN", "LEFT": "RS_LEFT", "RIGHT": "RS_RIGHT",
+        "CROSS": "L3", "CIRCLE": "R3", "TRIANGLE": "GUIDE", "SQUARE": "BACK"
+      }
+    },
+    "analog": {"stick": "left", "deadzone": 0.15, "max": 0.92, "curve": 1.0},
+    "digital_stick": 1.0
+  },
+
   "setas": {
     "buttons": {
       "UP": "KEY_UP", "DOWN": "KEY_DOWN", "LEFT": "KEY_LEFT", "RIGHT": "KEY_RIGHT",

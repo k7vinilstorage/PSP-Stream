@@ -327,6 +327,46 @@ Perfil `desktop`: direcional = setas, X/círculo = cliques, SELECT = Alt+Tab.
 Perfil `setas`: para emuladores e jogos antigos. Para criar o seu, edite
 `server/keymap.json`.
 
+#### Controle de Xbox (`--profile xbox`)
+
+```sh
+python3 server/pspstream.py --source kms --codec h264p --profile xbox
+```
+
+Como no Sunshine, o PC ganha um **controle de Xbox 360 virtual**: o mesmo
+fabricante e modelo (045e:028e), os mesmos botões e eixos do driver `xpad`.
+Jogos nativos e do Proton (SDL), o Steam e o navegador reconhecem sem
+configurar nada, com os botões no lugar certo. Usa a mesma permissão de
+`/dev/uinput` do teclado (acima). Sem vibração: o PSP não tem motor.
+
+O PSP tem menos controles que um Xbox (um analógico, sem gatilhos
+analógicos, sem L3/R3). O resto vem de uma camada: **segurando SELECT**, os
+outros botões mudam de função, e **um toque rápido no SELECT sozinho** vale
+BACK (View).
+
+| PSP | `xbox` | segurando SELECT |
+|---|---|---|
+| X / círculo / quadrado / triângulo | A / B / X / Y | L3 / R3 / BACK / Guide |
+| direcional | direcional | analógico direito |
+| L / R | LT / RT (gatilho inteiro) | LB / RB |
+| START | Start | (SELECT + START é o menu do PSP) |
+| analógico | analógico esquerdo | analógico esquerdo |
+| SELECT (toque) | BACK | |
+
+Outros perfis prontos:
+- `xbox-camera`: para jogos 3D, como o "claw" dos jogos de PSP. Os botões
+  X/círculo/quadrado/triângulo viram o **analógico direito** (câmera), e o
+  direcional vira A/B/X/Y (baixo = A, direita = B, esquerda = X, cima = Y).
+  Segurando SELECT, o direcional volta a ser direcional.
+- `xbox-ombros`: L/R = LB/RB e SELECT + L/R = LT/RT, para jogos que usam
+  mais os ombros que os gatilhos.
+
+O analógico do PSP tem zona morta de 15% (ele não volta exatamente ao
+centro) e chega ao fim do curso a 92%. Tudo isso é ajustável por perfil no
+`keymap.json` (`"type": "gamepad"`; os destinos possíveis estão em
+`_ajuda_xbox`). Se o PSP sumir com algo apertado, o controle volta ao neutro
+em 0,5 s (`--input-timeout`).
+
 **Atalhos no PSP** (segure **SELECT + START** e aperte): triângulo =
 overlay, quadrado = decoder hw/sw, círculo = vsync, X = prefetch, L =
 transporte TCP/UDP (reconecta). Enquanto o
@@ -446,6 +486,7 @@ server/                servidor (Python 3)
   h264.py              encoders H.264 (todo frame IDR, ou frames P codificados na hora), openh264
   adaptive.py          qualidade adaptativa
   inject.py            uinput (teclado/mouse)
+  gamepad.py           uinput (controle de Xbox 360 virtual)
   keymap.json          perfis de controles
   stats.py, sources.py, jpeginfo.py, protocol.py
 tools/                 fake_client.py, emu_test.sh, emu_input_test.py, bench_sizes.py, make_testcard.sh
