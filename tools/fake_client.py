@@ -60,9 +60,10 @@ class FakePSP:
         self.dropped = 0
         self.error = None
         self.running = True
+        self.buttons, self.lx, self.ly = 0, 128, 128
 
     def send_req(self, flags):
-        r = Request(flags=flags)
+        r = Request(flags=flags, buttons=self.buttons, lx=self.lx, ly=self.ly)
         with self.cond:
             a = self.last_ack
         if a:
@@ -95,8 +96,24 @@ class FakePSP:
             with self.cond:
                 self.cond.notify_all()
 
+    def input_demo(self):
+        """Sequência fixa de controles, enviada como no PSP (mensagens só de entrada)."""
+        cross, up = 0x4000, 0x0010
+        steps = [(0.5, cross, 128, 128), (0.7, 0, 128, 128), (0.9, up, 128, 128), (1.1, 0, 128, 128),
+                 (1.3, 0, 255, 128), (1.8, 0, 128, 128), (2.0, 0, 128, 0), (2.3, 0, 128, 128)]
+        t0 = time.monotonic()
+        for at, buttons, lx, ly in steps:
+            time.sleep(max(0.0, at - (time.monotonic() - t0)))
+            self.buttons, self.lx, self.ly = buttons, lx, ly
+            try:
+                self.send_req(0)
+            except OSError:
+                return
+
     def run(self):
         threading.Thread(target=self.net_loop, daemon=True).start()
+        if self.args.input_demo:
+            threading.Thread(target=self.input_demo, daemon=True).start()
         sizes, nets, locals_ = [], [], []
         jpeg = b""
         start = time.monotonic()
@@ -151,6 +168,8 @@ def main(argv=None):
     p.add_argument("--no-prefetch", action="store_true",
                    help="só pedir o próximo frame depois de 'decodificar' o atual")
     p.add_argument("--save", help="salvar o último JPEG exibido neste arquivo")
+    p.add_argument("--input-demo", action="store_true",
+                   help="enviar uma sequência de teste: X, cima, analógico p/ direita e p/ cima")
     p.add_argument("--json", action="store_true", help="imprimir o resumo em JSON")
     args = p.parse_args(argv)
 

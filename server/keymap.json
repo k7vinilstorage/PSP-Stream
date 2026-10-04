@@ -1,0 +1,34 @@
+{
+  "_ajuda": "Botões: UP DOWN LEFT RIGHT CROSS CIRCLE SQUARE TRIANGLE L R START SELECT. Valores: nomes do evdev (KEY_*, BTN_LEFT/RIGHT/MIDDLE); use + para combinações (KEY_LEFTALT+KEY_TAB). Analógico: mode = mouse | keys | none; speed = pixels/s com o direcional no máximo; curve > 1 = mais precisão perto do centro.",
+
+  "jogo": {
+    "buttons": {
+      "UP": "KEY_W", "DOWN": "KEY_S", "LEFT": "KEY_A", "RIGHT": "KEY_D",
+      "CROSS": "KEY_SPACE", "CIRCLE": "KEY_LEFTCTRL", "SQUARE": "KEY_R", "TRIANGLE": "KEY_E",
+      "L": "BTN_RIGHT", "R": "BTN_LEFT",
+      "START": "KEY_ESC", "SELECT": "KEY_TAB"
+    },
+    "analog": {"mode": "mouse", "speed": 900, "deadzone": 0.15, "curve": 2.0}
+  },
+
+  "desktop": {
+    "buttons": {
+      "UP": "KEY_UP", "DOWN": "KEY_DOWN", "LEFT": "KEY_LEFT", "RIGHT": "KEY_RIGHT",
+      "CROSS": "BTN_LEFT", "CIRCLE": "BTN_RIGHT", "SQUARE": "KEY_ENTER", "TRIANGLE": "KEY_LEFTMETA",
+      "L": "KEY_PAGEUP", "R": "KEY_PAGEDOWN",
+      "START": "KEY_ESC", "SELECT": "KEY_LEFTALT+KEY_TAB"
+    },
+    "analog": {"mode": "mouse", "speed": 700, "deadzone": 0.15, "curve": 2.2}
+  },
+
+  "setas": {
+    "buttons": {
+      "UP": "KEY_UP", "DOWN": "KEY_DOWN", "LEFT": "KEY_LEFT", "RIGHT": "KEY_RIGHT",
+      "CROSS": "KEY_Z", "CIRCLE": "KEY_X", "SQUARE": "KEY_A", "TRIANGLE": "KEY_S",
+      "L": "KEY_Q", "R": "KEY_W",
+      "START": "KEY_ENTER", "SELECT": "KEY_BACKSPACE"
+    },
+    "analog": {"mode": "keys", "deadzone": 0.5,
+               "keys": {"up": "KEY_UP", "down": "KEY_DOWN", "left": "KEY_LEFT", "right": "KEY_RIGHT"}}
+  }
+}

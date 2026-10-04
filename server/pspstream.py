@@ -277,6 +277,12 @@ def parse_args(argv=None):
     p.add_argument("--window", action="store_true", help="portal: escolher uma janela em vez de um monitor")
     p.add_argument("--no-cursor", action="store_true", help="portal: não desenhar o cursor")
     p.add_argument("--forget", action="store_true", help="portal: não reutilizar/guardar a escolha de tela")
+    p.add_argument("--no-input", action="store_true", help="não injetar os controles do PSP no PC")
+    p.add_argument("--input-dry-run", action="store_true",
+                   help="só mostrar no log as teclas/movimentos que seriam injetados")
+    p.add_argument("--keymap", default=str(here / "keymap.json"), help="arquivo de mapeamento (padrão keymap.json)")
+    p.add_argument("--profile", default="jogo", help="perfil do keymap: jogo, desktop, setas... (padrão %(default)s)")
+    p.add_argument("--mouse-speed", type=float, default=1.0, help="multiplica a velocidade do mouse do perfil")
     p.add_argument("--stats-interval", type=float, default=2.0, help="segundos entre linhas de estatística")
     p.add_argument("--bench", metavar="Q1,Q2,...", nargs="?", const="30,50,70,90",
                    help="benchmark: quando o PSP conectar, roda cada qualidade por --bench-seconds e salva "
@@ -299,6 +305,15 @@ def main(argv=None) -> int:
         log.error("não foi possível iniciar a captura: %s", exc)
         return 1
 
+    injector = None
+    if not args.no_input:
+        from inject import Injector, load_profile
+        try:
+            injector = Injector(load_profile(args.keymap, args.profile), args.input_dry_run, args.mouse_speed)
+            log.info("controles: perfil '%s'%s", args.profile, " (dry-run)" if args.input_dry_run else "")
+        except RuntimeError as exc:
+            log.warning("controles desativados: %s", exc)
+
     srv = socket.create_server((args.bind, args.port))
     log.info("aguardando o PSP em %s:%d (coloque este IP no server.txt)", local_ip(), args.port)
     srv.settimeout(0.5)
@@ -318,7 +333,7 @@ def main(argv=None) -> int:
             if current is not None:
                 current[0].close()
                 current[1].join(timeout=2)
-            session = Session(conn, addr, source, args)
+            session = Session(conn, addr, source, args, injector)
             thread = threading.Thread(target=session.run, name="session", daemon=True)
             thread.start()
             current = (session, thread)
@@ -327,6 +342,8 @@ def main(argv=None) -> int:
     finally:
         if current is not None:
             current[0].close()
+        if injector:
+            injector.close()
         source.stop()
         srv.close()
     return 0

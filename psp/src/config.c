@@ -10,6 +10,7 @@
  *   overlay=1
  *   rcvbuf=64        (KB)
  *   bench=0          (1 = mede decode hw x sw no primeiro frame)
+ *   input=1          (1 = controles do PSP viram teclado/mouse no PC)
  */
 #include "config.h"
 #include "decode.h"
@@ -51,6 +52,8 @@ static void set_key(ps_config_t *cfg, const char *key, const char *value)
         cfg->rcvbuf_kb = v;
     else if (!strcmp(key, "bench"))
         cfg->bench = v;
+    else if (!strcmp(key, "input"))
+        cfg->input = v;
     else if (!strcmp(key, "exit_after"))
         cfg->exit_after = v;
 }
@@ -65,6 +68,7 @@ int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen)
     cfg->prefetch = 1;
     cfg->overlay = 1;
     cfg->rcvbuf_kb = 64;
+    cfg->input = 1;
 
     char path[256];
     snprintf(path, sizeof(path), "%sserver.txt", dir);

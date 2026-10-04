@@ -16,3 +16,12 @@ prefetch=1
 
 # 1 = mostra FPS, KB/frame, tempos de decode e rede
 overlay=1
+
+# 1 = os botões e o analógico do PSP viram teclado/mouse no PC
+input=1
+
+# Buffer de recepção TCP em KB (janela TCP). Para experimentar: 32, 64, 128
+rcvbuf=64
+
+# 1 = ao conectar, mede o decode hw x sw no próprio PSP e mostra na tela
+bench=0

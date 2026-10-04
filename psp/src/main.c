@@ -3,6 +3,8 @@
  *
  * Thread principal (prioridade baixa): decode + exibição.
  * Thread de rede (stream.c, prioridade alta): pede e recebe frames.
+ * Thread de controles: lê o direcional a 60 Hz e manda mudanças na hora, sem
+ * esperar o próximo frame (latência de entrada baixa mesmo com FPS baixo).
  *
  * Atalhos locais (segure SELECT + START e aperte):
  *   triângulo = overlay    quadrado = decoder hw/sw
@@ -14,6 +16,7 @@
 #include <pspkernel.h>
 #include <psppower.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -136,8 +139,60 @@ static void stats_add(stats_t *s, const ps_frame_t *f, unsigned dec_us, unsigned
     }
 }
 
-/* ---- atalhos locais ---- */
+/* ---- controles e atalhos locais ---- */
 #define MENU_COMBO (PSP_CTRL_SELECT | PSP_CTRL_START)
+#define FORWARD_MASK (PSP_CTRL_SELECT | PSP_CTRL_START | PSP_CTRL_UP | PSP_CTRL_RIGHT | PSP_CTRL_DOWN | \
+                      PSP_CTRL_LEFT | PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER | PSP_CTRL_TRIANGLE | \
+                      PSP_CTRL_CIRCLE | PSP_CTRL_CROSS | PSP_CTRL_SQUARE)
+#define INPUT_PRIO 0x28
+#define STICK_DEADZONE 20 /* analógicos gastos repousam longe de 128 */
+
+enum { ACT_OVERLAY, ACT_DECODER, ACT_VSYNC, ACT_PREFETCH, ACT_COUNT };
+static const uint32_t act_button[ACT_COUNT] = {PSP_CTRL_TRIANGLE, PSP_CTRL_SQUARE, PSP_CTRL_CIRCLE, PSP_CTRL_CROSS};
+/* Só a thread de controles escreve; a principal só lê: sem lock. */
+static volatile unsigned act_count[ACT_COUNT];
+static volatile int input_run;
+static int input_enabled = 1;
+
+static int stick(int v)
+{
+    return (v > 128 - STICK_DEADZONE && v < 128 + STICK_DEADZONE) ? 128 : v;
+}
+
+static int input_thread(SceSize args, void *argp)
+{
+    uint32_t prev_raw = 0, sent = 0;
+    int sent_lx = 128, sent_ly = 128;
+    while (input_run) {
+        SceCtrlData pad;
+        if (sceCtrlReadBufferPositive(&pad, 1) < 0) { /* espera a próxima amostra (vblank) */
+            sceKernelDelayThread(16 * 1000);
+            continue;
+        }
+        uint32_t raw = pad.Buttons & FORWARD_MASK;
+        uint32_t b = raw;
+        int lx = stick(pad.Lx), ly = stick(pad.Ly);
+        if ((raw & MENU_COMBO) == MENU_COMBO) {
+            uint32_t pressed = raw & ~prev_raw;
+            for (int i = 0; i < ACT_COUNT; i++)
+                if (pressed & act_button[i])
+                    act_count[i]++;
+            b = 0; /* nada vai para o PC enquanto o atalho está segurado */
+            lx = ly = 128;
+        }
+        prev_raw = raw;
+        if (!input_enabled)
+            continue;
+        if (b != sent || abs(lx - sent_lx) > 2 || abs(ly - sent_ly) > 2) {
+            stream_set_input(b, lx, ly);
+            stream_send_input();
+            sent = b;
+            sent_lx = lx;
+            sent_ly = ly;
+        }
+    }
+    return 0;
+}
 
 typedef struct {
     int overlay, vsync, prefetch;
@@ -153,33 +208,37 @@ static void toast(ui_t *ui, const char *msg)
     ui->clear = 3;
 }
 
-static void handle_menu(ui_t *ui, uint32_t buttons, uint32_t *prev)
+static void apply_menu(ui_t *ui, unsigned seen[ACT_COUNT])
 {
-    uint32_t pressed = buttons & ~*prev;
-    *prev = buttons;
-    if ((buttons & MENU_COMBO) != MENU_COMBO)
-        return;
     char msg[48];
-    if (pressed & PSP_CTRL_TRIANGLE) {
-        ui->overlay = !ui->overlay;
-        ui->clear = 3;
-    }
-    if (pressed & PSP_CTRL_SQUARE) {
-        int k = decoder_select(decoder_kind() == DEC_HW ? DEC_SW : DEC_HW);
-        snprintf(msg, sizeof(msg), "decoder: %s%s", decoder_name(),
-                 k == DEC_SW && decoder_error()[0] ? " (hw falhou)" : "");
-        toast(ui, msg);
-    }
-    if (pressed & PSP_CTRL_CIRCLE) {
-        ui->vsync = !ui->vsync;
-        snprintf(msg, sizeof(msg), "vsync: %s", ui->vsync ? "on" : "off");
-        toast(ui, msg);
-    }
-    if (pressed & PSP_CTRL_CROSS) {
-        ui->prefetch = !ui->prefetch;
-        stream_set_prefetch(ui->prefetch);
-        snprintf(msg, sizeof(msg), "prefetch: %s", ui->prefetch ? "on" : "off");
-        toast(ui, msg);
+    for (int i = 0; i < ACT_COUNT; i++) {
+        while (seen[i] != act_count[i]) {
+            seen[i]++;
+            switch (i) {
+            case ACT_OVERLAY:
+                ui->overlay = !ui->overlay;
+                ui->clear = 3;
+                break;
+            case ACT_DECODER: {
+                int k = decoder_select(decoder_kind() == DEC_HW ? DEC_SW : DEC_HW);
+                snprintf(msg, sizeof(msg), "decoder: %s%s", decoder_name(),
+                         k == DEC_SW && decoder_error()[0] ? " (hw falhou)" : "");
+                toast(ui, msg);
+                break;
+            }
+            case ACT_VSYNC:
+                ui->vsync = !ui->vsync;
+                snprintf(msg, sizeof(msg), "vsync: %s", ui->vsync ? "on" : "off");
+                toast(ui, msg);
+                break;
+            case ACT_PREFETCH:
+                ui->prefetch = !ui->prefetch;
+                stream_set_prefetch(ui->prefetch);
+                snprintf(msg, sizeof(msg), "prefetch: %s", ui->prefetch ? "on" : "off");
+                toast(ui, msg);
+                break;
+            }
+        }
     }
 }
 
@@ -235,15 +294,19 @@ static int run_stream(int sock, const ps_config_t *cfg, ui_t *ui)
     stats_t st;
     memset(&st, 0, sizeof(st));
     st.t0 = now_us();
-    uint32_t prev_buttons = 0;
+    unsigned seen[ACT_COUNT];
+    for (int i = 0; i < ACT_COUNT; i++)
+        seen[i] = act_count[i];
+    input_run = 1;
+    SceUID input_thid = sceKernelCreateThread("ps_input", input_thread, INPUT_PRIO, 16 * 1024, PSP_THREAD_ATTR_USER, NULL);
+    if (input_thid >= 0)
+        sceKernelStartThread(input_thid, 0, NULL);
     int shown = 0, last_w = SCR_W, last_h = SCR_H;
     int bench_pending = cfg->bench;
     ui->clear = 3;
 
     while (g_running) {
-        SceCtrlData pad;
-        sceCtrlPeekBufferPositive(&pad, 1);
-        handle_menu(ui, pad.Buttons, &prev_buttons);
+        apply_menu(ui, seen);
 
         ps_frame_t *f = stream_take(100 * 1000);
         if (!f) {
@@ -294,6 +357,12 @@ static int run_stream(int sock, const ps_config_t *cfg, ui_t *ui)
         }
     }
     int err = stream_error();
+    input_run = 0;
+    if (input_thid >= 0) {
+        SceUInt timeout = 500 * 1000;
+        sceKernelWaitThreadEnd(input_thid, &timeout);
+        sceKernelDeleteThread(input_thid);
+    }
     stream_stop();
     return err;
 }
@@ -353,6 +422,7 @@ int main(int argc, char *argv[])
     ui.overlay = cfg.overlay;
     ui.vsync = cfg.vsync;
     ui.prefetch = cfg.prefetch;
+    input_enabled = cfg.input;
 
     while (g_running) {
         display_console("Conectando ao PC %s:%d...", cfg.host, cfg.port);
