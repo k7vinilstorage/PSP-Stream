@@ -213,6 +213,7 @@ static int input_thread(SceSize args, void *argp)
 
 typedef struct {
     int overlay, vsync, prefetch, udp;
+    int early_auto;       /* early_kb=auto: o overlay mostra o valor calculado */
     int switch_transport; /* atalho L: reconectar com o outro transporte */
     char toast[48];
     unsigned toast_until;
@@ -276,6 +277,12 @@ static void draw_overlay(const ui_t *ui, const stats_t *s)
             display_text(0, 2, 0xFF00FF00, "perdidos %u nack %u repet %u ping %.1f ms (min %.1f, ini %.1f %s)",
                          stream_lost(), stream_nacks(), stream_retries(), live / 1000.0f, live_min / 1000.0f,
                          (polling ? poll : sel) / 1000.0f, polling ? "poll" : "sel");
+            unsigned early = stream_early();
+            if (early)
+                display_text(0, 3, 0xFF00FF00, "pede o proximo faltando %.1f KB%s", early / 1024.0f,
+                             ui->early_auto ? " (auto)" : "");
+            else
+                display_text(0, 3, 0xFF00FF00, "pede o proximo no fim do frame");
         }
     }
     if (ui->toast_until && (int)(ui->toast_until - now_us()) > 0)
@@ -325,7 +332,8 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
     input_udp = ui->udp;
     ui->switch_transport = 0;
     stream_set_h264(cfg->h264);
-    if (stream_start(sock, ui->udp, dest, ui->prefetch, cfg->early_kb * 1024, cfg->rxwait, &g_running) < 0) {
+    int early = cfg->early_kb < 0 ? STREAM_EARLY_AUTO : cfg->early_kb * 1024;
+    if (stream_start(sock, ui->udp, dest, ui->prefetch, early, cfg->rxwait, &g_running) < 0) {
         status("Erro ao iniciar a thread de rede");
         return -1;
     }
@@ -412,7 +420,7 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
         ps_ack_t ack = {f->frame_no, f->send_ts, t2, tenth_ms(f->t_recv - f->t_req), tenth_ms(t2 - f->t_recv),
                         tenth_ms(t1 - t0),
                         (int)(f->t_first - f->t_req) > 0 ? tenth_ms(f->t_first - f->t_req) : 0,
-                        tenth_ms(f->t_recv - f->t_first)};
+                        tenth_ms(f->t_recv - f->t_first), f->idle_t};
         stats_add(&st, f, t1 - t0, t2 - f->t_recv);
         stream_release(f, &ack);
 
@@ -442,7 +450,7 @@ int main(int argc, char *argv[])
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
     display_init();
-    status("PSPStream v0.7");
+    status("PSPStream v0.8");
 
     char dir[192], err[128];
     app_dir(argc > 0 ? argv[0] : NULL, dir, sizeof(dir));
@@ -487,6 +495,7 @@ int main(int argc, char *argv[])
     ui_t ui;
     memset(&ui, 0, sizeof(ui));
     ui.overlay = cfg.overlay;
+    ui.early_auto = cfg.early_kb < 0;
     ui.vsync = cfg.vsync;
     ui.prefetch = cfg.prefetch;
     ui.udp = cfg.udp;

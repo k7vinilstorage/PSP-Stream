@@ -200,9 +200,9 @@ class Session:
         table = [
             "| q | KB/frame | FPS | fonte (fps) | Wi-Fi (KB/s) | latência média (ms) | p95 (ms) | rede (ms) "
             "| 1º pedaço (ms) | ping no stream (ms) | rajada (ms) | vazão na rajada (KB/s) "
-            "| espera por frame novo (ms) | decode (ms) | PSP recebido->exibido (ms) | reenvios 1 s "
-            "| pedaços reenviados | frames perdidos |",
-            "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+            "| espera por frame novo (ms) | tempo morto entre frames (ms) | pedido antecipado (KB) "
+            "| decode (ms) | PSP recebido->exibido (ms) | reenvios 1 s | pedaços reenviados | frames perdidos |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
         ] + [
             f"| {r['quality']} | {r['kb_per_frame']:.1f} | {r['fps']:.1f} | "
             f"{'-' if r['source_fps'] is None else format(r['source_fps'], '.1f')} | "
@@ -210,7 +210,9 @@ class Session:
             f"{r['first_ms']:.1f} (mín {r['first_min_ms']:.1f}, mediana {r['first_med_ms']:.1f}) | "
             f"{r['ping_ms']:.1f} (mín {r['ping_min_ms']:.1f}) | {r['burst_ms']:.1f} | "
             f"{r['burst_kbps']:.0f} | "
-            f"{r['wait_ms']:.1f} | {r['decode_ms']:.1f} | {r['local_ms']:.1f} | {r['keepalive']} | "
+            f"{r['wait_ms']:.1f} | {'-' if r['idle_ms'] is None else format(r['idle_ms'], '+.1f')} | "
+            f"{format(r['early_kb'], '.1f') if r['early_kb'] else 'no fim'} | "
+            f"{r['decode_ms']:.1f} | {r['local_ms']:.1f} | {r['keepalive']} | "
             f"{r['resent_pct']:.1f}% | {r['lost']} |"
             for r in rows
         ]
@@ -263,6 +265,7 @@ class Server:
         self.lock = threading.Lock()
         self.current = None  # (Session, Thread)
         self.running = True
+        self.old_warned = set()  # endereços de PSPs com EBOOT antigo já avisados
 
     def replace(self, transport):
         with self.lock:
@@ -288,6 +291,11 @@ class Server:
                 return
             try:
                 req, nack = parse_datagram(data)
+            except protocol.OldEbootError as exc:
+                if addr not in self.old_warned:  # sem isso, o PSP só fica sem imagem
+                    self.old_warned.add(addr)
+                    log.warning("%s:%d: %s", *addr, exc)
+                continue
             except (ValueError, Exception):  # lixo na porta: ignora
                 continue
             if req.flags & protocol.REQ_PING:  # responde já, sem passar pela sessão

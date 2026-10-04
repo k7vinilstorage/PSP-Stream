@@ -12,7 +12,7 @@
  *   bench=0          (1 = mede decode hw x sw no primeiro frame)
  *   input=1          (1 = controles do PSP viram teclado/mouse no PC)
  *   transport=udp    (udp | tcp)
- *   early_kb=0       (UDP, experimental: pede o próximo frame quando faltar isso do atual)
+ *   early_kb=auto    (UDP: pede o próximo frame quando faltar isso do atual; auto = ida e volta x vazão, 0 = só no fim)
  *   rxwait=auto      (UDP: auto | select | poll; auto mede os dois no início e fica com o mais rápido)
  *   h264=1           (1 = aceita H.264 do servidor rodando com --codec h264)
  */
@@ -61,7 +61,7 @@ static void set_key(ps_config_t *cfg, const char *key, const char *value)
     else if (!strcmp(key, "transport"))
         cfg->udp = strcmp(value, "tcp") != 0;
     else if (!strcmp(key, "early_kb"))
-        cfg->early_kb = v;
+        cfg->early_kb = !strcmp(value, "auto") ? -1 : v;
     else if (!strcmp(key, "rxwait"))
         cfg->rxwait = !strcmp(value, "select") ? RXWAIT_SELECT : !strcmp(value, "poll") ? RXWAIT_POLL : RXWAIT_AUTO;
     else if (!strcmp(key, "h264"))
@@ -82,7 +82,7 @@ int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen)
     cfg->rcvbuf_kb = 64;
     cfg->input = 1;
     cfg->udp = 1; /* medido no PSP-3000: UDP sem travadas, TCP com várias */
-    cfg->early_kb = 0; /* medido no PSP-3000: não aumentou o FPS e piorou a latência */
+    cfg->early_kb = -1; /* auto; valores fixos de 6-14 KB (JPEG, PSP-3000) pediam cedo demais */
     cfg->h264 = 1;
 
     char path[256];
@@ -124,7 +124,7 @@ int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen)
         cfg->port = PS_DEFAULT_PORT;
     if (cfg->rcvbuf_kb < 8 || cfg->rcvbuf_kb > 256)
         cfg->rcvbuf_kb = 64;
-    if (cfg->early_kb < 0 || cfg->early_kb > 64)
-        cfg->early_kb = 0;
+    if (cfg->early_kb < -1 || cfg->early_kb > 64)
+        cfg->early_kb = -1;
     return 0;
 }

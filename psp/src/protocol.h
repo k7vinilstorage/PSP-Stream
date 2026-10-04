@@ -1,5 +1,5 @@
 /*
- * PSPStream - protocolo v4 (TCP ou UDP, little-endian). Ver docs/PROTOCOL.md.
+ * PSPStream - protocolo v5 (TCP ou UDP, little-endian). Ver docs/PROTOCOL.md.
  * Manter em sincronia com server/protocol.py.
  */
 #ifndef PSPSTREAM_PROTOCOL_H
@@ -9,7 +9,7 @@
 
 #define PS_DEFAULT_PORT 5123
 
-#define PS_MAGIC_REQ   0x34435350u /* "PSC4" (v4: ping durante o stream) */
+#define PS_MAGIC_REQ   0x35435350u /* "PSC5" (v5: pedido antecipado automático) */
 #define PS_MAGIC_FRAME 0x31465350u /* "PSF1" */
 #define PS_MAGIC_CHUNK 0x32555350u /* "PSU2" */
 #define PS_MAGIC_PONG  0x314F5350u /* "PSO1" */
@@ -28,7 +28,7 @@
 #define PS_CHUNK_PAYLOAD 1400
 #define PS_MAX_CHUNKS 256
 
-/* PSP -> PC (48 bytes). Toda mensagem leva o estado dos controles. */
+/* PSP -> PC (52 bytes). Toda mensagem leva o estado dos controles. */
 typedef struct __attribute__((packed)) {
     uint32_t magic;     /* PS_MAGIC_REQ */
     uint32_t buttons;   /* máscara PSP_CTRL_* */
@@ -53,11 +53,16 @@ typedef struct __attribute__((packed)) {
     /* v4 */
     uint16_t ping_live;     /* 0,1 ms: ping a cada 1 s durante o stream, média móvel (0 = ainda não) */
     uint16_t ping_live_min; /* 0,1 ms: o menor dos últimos 8 */
+    /* v5 */
+    int16_t idle_t;  /* 0,1 ms: fim do frame anterior -> 1º pedaço deste (negativo = chegou antes, em fila) */
+    uint16_t early_b; /* UDP: pede o próximo quando faltam estes bytes do atual (0 = só no fim) */
 } ps_req_t;
 
 #define PS_WIFI_POWER_SAVE 0x01 /* "Economia de energia WLAN" ligada no XMB */
 #define PS_WIFI_RX_POLL 0x02    /* esperando pacotes por consulta, não select() */
 #define PS_CAP_H264 0x04        /* decodifica H.264 (todo frame IDR) pelo hardware */
+
+#define PS_IDLE_NONE (-0x8000) /* idle_t: não medido (TCP) */
 
 /* PC -> PSP (16 bytes), seguido de `size` bytes de JPEG. */
 typedef struct __attribute__((packed)) {
@@ -98,7 +103,7 @@ typedef struct __attribute__((packed)) {
     uint32_t missing[PS_MAX_CHUNKS / 32]; /* bit i = pedaço i faltando */
 } ps_nack_t;
 
-_Static_assert(sizeof(ps_req_t) == 48, "ps_req_t deve ter 48 bytes");
+_Static_assert(sizeof(ps_req_t) == 52, "ps_req_t deve ter 52 bytes");
 _Static_assert(sizeof(ps_chunk_hdr_t) == 24, "ps_chunk_hdr_t deve ter 24 bytes");
 _Static_assert(sizeof(ps_pong_t) == 8, "ps_pong_t deve ter 8 bytes");
 _Static_assert(sizeof(ps_nack_t) == 36, "ps_nack_t deve ter 36 bytes");

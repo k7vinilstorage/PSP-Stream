@@ -1,4 +1,4 @@
-# Protocolo PSPStream v4
+# Protocolo PSPStream v5
 
 TCP **ou** UDP, porta padrão **5123** (o servidor atende os dois ao mesmo
 tempo; o PSP escolhe com `transport=` no `server.txt`). Todos os inteiros são **little-endian** (PSP e PC
@@ -29,11 +29,11 @@ PSP                                   PC
 - Pedir antes de decodificar ("prefetch") sobrepõe rede e decode. Nesse modo,
   quem limita o FPS é o mais lento dos dois, não a soma.
 
-## PSP -> PC: pedido (48 bytes)
+## PSP -> PC: pedido (52 bytes)
 
 | offset | tipo | campo | descrição |
 |---|---|---|---|
-| 0 | char[4] | magic | `"PSC4"` (v4; um EBOOT antigo, `"PSC1"` a `"PSC3"`, é recusado com aviso no log) |
+| 0 | char[4] | magic | `"PSC5"` (v5; um EBOOT antigo, `"PSC1"` a `"PSC4"`, é recusado com aviso no log) |
 | 4 | u32 | buttons | máscara `PSP_CTRL_*` (Marco 4) |
 | 8 | u8 | lx | analógico X, 0..255 (128 = centro) |
 | 9 | u8 | ly | analógico Y |
@@ -54,6 +54,8 @@ PSP                                   PC
 | 42 | u16 | ping_poll | 0,1 ms: o mesmo, consultando o socket a cada 0,5 ms (0 = não medido) |
 | 44 | u16 | ping_live | 0,1 ms: ping a cada 1 s **durante** o stream, média móvel (0 = ainda não) |
 | 46 | u16 | ping_live_min | 0,1 ms: o menor dos últimos 8 |
+| 48 | i16 | idle_t | 0,1 ms: último pedaço do frame anterior -> 1º pedaço deste ("tempo morto"; negativo = chegou antes de o anterior completar, em fila). `-32768` = não medido (TCP) |
+| 50 | u16 | early_b | UDP: bytes que faltavam no frame atual quando o PSP pediu o próximo (0 = só no fim) |
 
 `first_t` e `burst_t` separam o tempo de rede em ida e volta (fixo por frame)
 e transferência (proporcional ao tamanho). Cada parte tem um remédio
@@ -130,13 +132,13 @@ separa o tempo do rádio sob o tráfego do stream do tempo das respostas com
 frame. Com `rxwait=auto`, o PSP passa a
 esperar por consulta se isso for mais de 1 ms mais rápido.
 
-**PSP -> PC:** o mesmo pedido de 48 bytes, um por datagrama. Com a flag
+**PSP -> PC:** o mesmo pedido de 52 bytes, um por datagrama. Com a flag
 `NACK` (0x4), vem logo depois:
 
 | offset | tipo | campo | descrição |
 |---|---|---|---|
-| 48 | u32 | frame_no | frame incompleto |
-| 52 | u32[8] | missing | bit `i` = pedaço `i` faltando |
+| 52 | u32 | frame_no | frame incompleto |
+| 56 | u32[8] | missing | bit `i` = pedaço `i` faltando |
 
 O servidor reenvia só esses pedaços. Ele guarda os últimos 4 frames enviados.
 `BYE` (0x8) avisa que o app do PSP está saindo: o servidor solta as teclas e
@@ -151,15 +153,21 @@ encerra a sessão na hora (no UDP não existe "fechar conexão").
 | depois de um NACK | espera a resposta por média + 4 desvios da ida e volta (pedido -> 1º pedaço, 30-200 ms); cada pedaço reenviado que chega adia a espera |
 | chegou o último pedaço do reenvio e ainda faltam outros | NACK de novo na hora |
 | 3 NACKs sem completar | desiste do frame (conta em "perdidos") e pede outro |
+| hora do NACK, mas um frame mais novo já está chegando | desiste do frame sem NACK: o reenvio viria na fila atrás do mais novo |
 | pedido sem nenhuma resposta por uma ida e volta medida (média + 4 desvios do pedido -> 1º pedaço, 30-200 ms) | reenvia o pedido |
 | 3 s sem completar nenhum frame | o pedido vai com HELLO (o servidor pode ter reiniciado) |
 | pedaço de frame mais antigo ou duplicado | ignorado |
 
-**Pedido antecipado** (`early_kb`, experimental, padrão 0 = desligado): quando
-faltam `early_kb` KB do frame atual, o PSP já pede o próximo. No PSP-3000
-medido, não aumentou o FPS e piorou a latência (ver MEASUREMENTS.md). Ele chega logo atrás do atual, e o
-rádio não fica parado durante a ida e volta do pedido (~21 ms medidos). Por
-isso podem existir **dois frames em remontagem**. Quando um mais novo
+**Pedido antecipado** (`early_kb`, padrão `auto`): quando faltam `early_kb`
+KB do frame atual, o PSP já pede o próximo. Com `auto`, o limite é a ida e
+volta vezes a vazão: o ping mediano do início dividido pelo intervalo médio
+entre pedaços, vezes 1400 bytes (~2-3 KB no PSP-3000, teto de 8 KB). Assim o
+1º pedaço do próximo chega logo depois do último do atual, sem rádio parado
+e sem fila. Valores fixos de 6-14 KB, testados no PSP-3000 com JPEG, pediam
+cedo demais: o frame seguinte esperava inteiro na fila do roteador e a
+latência subia. Um frame com buraco não antecipa, para o próximo não ficar na
+frente do reenvio. `early_kb=0` pede só no fim, como até a v0.7. Com pedido
+antecipado podem existir **dois frames em remontagem**. Quando um mais novo
 completa, o mais velho incompleto é abandonado: mostrar o N depois do N+1 não
 serve para nada, e esperar o NACK atrasaria o N+1. Na prática, uma perda no fim
 de um frame vira um pulo de frame em vez de uma travada. A "rede" reportada

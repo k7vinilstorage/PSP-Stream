@@ -3,6 +3,8 @@ import logging
 import statistics
 import time
 
+import protocol
+
 log = logging.getLogger("pspstream.stats")
 
 
@@ -47,6 +49,8 @@ class Window:
         self.burst_rate = []  # KB/s dentro da rajada: vazão real do enlace
         self.ping = []     # ping durante o stream, informado pelo PSP (ms)
         self.ping_min = []
+        self.idle = []     # fim do frame anterior -> 1º pedaço deste, no PSP (ms; < 0 = chegou em fila)
+        self.early = []    # bytes que faltavam quando o PSP pediu o próximo (0 = só no fim)
         self.lost0 = None  # contador de frames perdidos do PSP no início da janela
         self.lost1 = 0
 
@@ -83,6 +87,8 @@ class Window:
             "burst_kbps": statistics.median(self.burst_rate) if self.burst_rate else 0.0,
             "ping_ms": _avg(self.ping),
             "ping_min_ms": min(self.ping_min) if self.ping_min else 0.0,
+            "idle_ms": statistics.median(self.idle) if self.idle else None,
+            "early_kb": statistics.median(self.early) / 1024 if self.early else 0.0,
             "lost": (self.lost1 - self.lost0) if self.lost0 is not None else 0,
             "quality": quality,
             "frames": self.frames,
@@ -100,6 +106,10 @@ def format_summary(s: dict) -> str:
         f"| rede = 1º pedaço {s['first_ms']:4.1f} + rajada {s['burst_ms']:4.1f} ms ({s['burst_kbps']:4.0f} KB/s) "
         f"| decode {s['decode_ms']:4.1f} ms | espera por frame novo {s['wait_ms']:4.1f} ms"
     )
+    if s["idle_ms"] is not None:
+        line += f" | tempo morto {s['idle_ms']:+5.1f} ms"
+        if s["early_kb"]:
+            line += f" (antecipa {s['early_kb']:.1f} KB)"
     if s["ping_ms"]:
         line += f" | ping no stream {s['ping_ms']:4.1f} ms (mín {s['ping_min_ms']:4.1f})"
     if s["quality"] is not None:
@@ -171,6 +181,11 @@ class SessionStats:
                 w.rate.append(size / 1024 / (transfer / 1000))
             w.local.append(req.local_t / 10)
             w.decode.append(decode)
+            if req.early_b:
+                w.early.append(req.early_b)
+            # reenvio por tela parada: o "tempo morto" é a espera de ~1 s, não a rede
+            if req.idle_t != protocol.IDLE_NONE and not resend:
+                w.idle.append(req.idle_t / 10)
             if req.burst_t:
                 w.first.append(req.first_t / 10)
                 w.burst.append(req.burst_t / 10)

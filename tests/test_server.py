@@ -18,6 +18,7 @@ import protocol  # noqa: E402
 from adaptive import AdaptiveQuality  # noqa: E402
 from inject import Injector, PSP_BUTTONS, load_profile  # noqa: E402
 from jpeginfo import jpeg_info  # noqa: E402
+import stats  # noqa: E402
 
 
 class ProtocolTest(unittest.TestCase):
@@ -25,11 +26,13 @@ class ProtocolTest(unittest.TestCase):
         req = protocol.Request(buttons=0x4010, lx=12, ly=250, flags=protocol.REQ_FRAME, ack_frame=7,
                                echo_ts=0xFFFFFFF0, net_t=123, local_t=45, since_t=6, decode_t=108,
                                first_t=210, burst_t=260, signal=87, wflags=protocol.WIFI_POWER_SAVE, lost=3,
-                               hdr_have=0x7ABCDEF1, ping_select=52, ping_poll=31, ping_live=250, ping_live_min=61)
+                               hdr_have=0x7ABCDEF1, ping_select=52, ping_poll=31, ping_live=250, ping_live_min=61,
+                               idle_t=-123, early_b=2150)
         data = req.pack()
-        self.assertEqual(len(data), 48)
-        self.assertEqual(data[:4], b"PSC4")
+        self.assertEqual(len(data), 52)
+        self.assertEqual(data[:4], b"PSC5")
         self.assertEqual(protocol.Request.unpack(data), req)
+        self.assertEqual(protocol.Request().idle_t, protocol.IDLE_NONE)  # TCP / não medido
 
     def test_frame_header(self):
         hdr = protocol.pack_frame_header(3, 12345, 2**32 + 5)  # send_ts dá a volta em 32 bits
@@ -38,11 +41,13 @@ class ProtocolTest(unittest.TestCase):
 
     def test_bad_magic(self):
         with self.assertRaises(ValueError):
-            protocol.Request.unpack(b"XXXX" + bytes(44))
+            protocol.Request.unpack(b"XXXX" + bytes(48))
+        with self.assertRaisesRegex(ValueError, "curto"):
+            protocol.Request.unpack(protocol.MAGIC_REQ + bytes(44))
 
     def test_old_eboot_rejected_clearly(self):
-        for magic in (b"PSC1", b"PSC2", b"PSC3"):
-            with self.assertRaisesRegex(ValueError, "versão antiga"):
+        for magic in (b"PSC1", b"PSC2", b"PSC3", b"PSC4"):
+            with self.assertRaisesRegex(protocol.OldEbootError, "versão antiga"):
                 protocol.Request.unpack(magic + bytes(44))
 
     def test_matches_c_header(self):
@@ -50,8 +55,9 @@ class ProtocolTest(unittest.TestCase):
         self.assertIn(f"#define PS_DEFAULT_PORT {protocol.DEFAULT_PORT}", header)
         self.assertIn("#define PS_MAX_JPEG (256 * 1024)", header)
         self.assertEqual(protocol.MAX_JPEG, 256 * 1024)
-        self.assertIn('0x34435350u /* "PSC4"', header)
-        self.assertEqual(int.from_bytes(protocol.MAGIC_REQ, "little"), 0x34435350)
+        self.assertIn('0x35435350u /* "PSC5"', header)
+        self.assertEqual(int.from_bytes(protocol.MAGIC_REQ, "little"), 0x35435350)
+        self.assertIn(f"#define PS_IDLE_NONE (-0x{-protocol.IDLE_NONE:04x})", header)
         self.assertIn(f'_Static_assert(sizeof(ps_req_t) == {protocol.REQ_STRUCT.size}', header)
         self.assertIn(f"#define PS_WIFI_POWER_SAVE 0x{protocol.WIFI_POWER_SAVE:02x}", header)
         self.assertIn(f"#define PS_WIFI_RX_POLL 0x{protocol.WIFI_RX_POLL:02x}", header)
@@ -127,6 +133,7 @@ class UdpEndToEndTest(unittest.TestCase):
                                              decode_ms=5, no_prefetch=False, frames=0, seconds=seconds,
                                              input_demo=False, rtt_ms=rtt_ms, early_kb=early_kb, loss_up=0)
             summary, jpeg = fake_client.FakePSP(client_args).run()
+            self.session = server.current[0] if server.current else None
         finally:
             server.close()
             sock.close()
@@ -208,6 +215,42 @@ class UdpEndToEndTest(unittest.TestCase):
         summary, jpeg, card = self.run_stream(early_kb=10)
         self.assertGreater(summary["frames"], 20)
         self.assertEqual(jpeg, card)
+
+    def test_early_auto_reports_threshold(self):
+        # early_kb=auto (padrão do PSP): limite = ping x vazão, informado ao
+        # servidor junto com o tempo morto entre frames
+        summary, jpeg, card = self.run_stream(early_kb="auto", loss=0.02, rtt_ms=8)
+        self.assertGreater(summary["frames"], 20)
+        self.assertEqual(jpeg, card)
+        w = self.session.stats.phase
+        self.assertTrue(w.early, "o PSP falso não informou o limite")
+        self.assertTrue(all(0 < e <= 8 * 1024 for e in w.early), w.early)
+        self.assertTrue(w.idle)
+        s = w.summary(60)
+        self.assertGreater(s["early_kb"], 0)
+        self.assertIn("tempo morto", stats.format_summary(s))
+
+    def test_old_eboot_warned_once(self):
+        import pspstream
+        from sources import StaticSource
+        args = argparse.Namespace(adaptive=False, bench=None, stats_interval=60, udp_pace=0, hdr_cache=True,
+                                  codec="jpeg")
+        server = pspstream.Server(StaticSource((ROOT / "assets/testcard.jpg").read_bytes()), args, None)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(("127.0.0.1", 0))
+        threading.Thread(target=server.serve_udp, args=(sock,), daemon=True).start()
+        client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            with self.assertLogs("pspstream", "WARNING") as logs:
+                for _ in range(3):
+                    client.sendto(b"PSC4" + bytes(44), sock.getsockname())
+                time.sleep(0.3)
+        finally:
+            server.close()
+            sock.close()
+            client.close()
+        self.assertEqual(len(logs.output), 1, logs.output)
+        self.assertIn("v4", logs.output[0])
 
 
 class H264QualityTest(unittest.TestCase):

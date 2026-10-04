@@ -11,6 +11,7 @@ typedef struct {
     unsigned t_req;    /* us: pedido enviado (ou rádio livre para este frame) */
     unsigned t_first;  /* us: primeiro pedaço/byte chegou */
     unsigned t_recv;   /* us: frame recebido por inteiro */
+    int16_t idle_t;    /* 0,1 ms: fim do frame anterior -> 1º pedaço deste (< 0 = em fila); PS_IDLE_NONE */
 } ps_frame_t;
 
 /* Dados do último frame exibido; vão no próximo pedido (ack + estatísticas). */
@@ -20,6 +21,7 @@ typedef struct {
     unsigned t_shown;
     uint16_t net_t, local_t, decode_t; /* 0,1 ms */
     uint16_t first_t, burst_t;         /* 0,1 ms: ida e volta, rajada */
+    int16_t idle_t;                    /* 0,1 ms: tempo morto antes do frame (ps_frame_t) */
 } ps_ack_t;
 
 struct sockaddr_in;
@@ -27,7 +29,9 @@ struct sockaddr_in;
 /* Inicia a thread de rede, que pede e recebe frames sem parar.
  * udp = 1: sock é UDP e dest é o servidor; udp = 0: sock é TCP conectado.
  * early_bytes (só UDP): pede o próximo frame quando faltarem tantos bytes do
- * atual (0 = só depois de receber inteiro). rxwait: RXWAIT_* (só UDP). */
+ * atual (0 = só depois de receber inteiro; STREAM_EARLY_AUTO = ida e volta x
+ * vazão, medidas). rxwait: RXWAIT_* (só UDP). */
+#define STREAM_EARLY_AUTO (-1)
 int stream_start(int sock, int udp, const struct sockaddr_in *dest, int prefetch, int early_bytes, int rxwait,
                  volatile int *running);
 
@@ -67,6 +71,9 @@ unsigned stream_lost(void);
 unsigned stream_nacks(void);
 /* UDP: pedidos repetidos por falta de resposta (pedido ou resposta perdidos). */
 unsigned stream_retries(void);
+
+/* UDP: bytes que faltam no frame atual quando o próximo é pedido (0 = só no fim). */
+unsigned stream_early(void);
 
 /* Frames completos recebidos nesta conexão. */
 unsigned stream_completed(void);

@@ -55,6 +55,8 @@ RTT_SAMPLE_MAX_S = 0.150             # acima disso o servidor esperou frame novo
 MAX_NACKS = 3          # depois disso desiste do frame e pede outro
 # pedido sem resposta: reenvia depois de uma ida e volta medida (rtt.timeout(RTO_MIN_S, RTO_MAX_S))
 STALL_S = 3.0          # nada completo por 3 s: recomeça (HELLO)
+EARLY_AUTO_MAX = 8 * 1024  # pedido antecipado automático: ping / intervalo entre pedaços x pedaço (teto)
+EARLY_PING_DEFAULT_S = 0.006
 
 
 class Estimator:
@@ -91,6 +93,7 @@ class FakePSP:
         self.hdr_have = 0
         self.stripped = 0     # frames que vieram sem o cabeçalho
         self.ping_us = 0
+        self.early_cur = 0    # bytes que faltavam no último pedido antecipado (0 = só no fim)
         self.cond = threading.Condition()
         self.ready = None          # frame mais novo ainda não decodificado
         self.last_ack = None       # (frame_no, send_ts, shown_at, net_t, local_t, decode_t)
@@ -110,7 +113,9 @@ class FakePSP:
             r.since_t = clamp_u16((time.monotonic() - a[2]) * 10000)
             r.net_t, r.local_t, r.decode_t = a[3], a[4], a[5]
             r.first_t, r.burst_t = a[6], a[7]
+            r.idle_t = a[8]
         r.hdr_have = self.hdr_have
+        r.early_b = clamp_u16(self.early_cur)
         r.ping_select = clamp_u16(self.ping_us / 100)
         data = r.pack() + nack
         if self.args.rtt_ms and self.udp:
@@ -175,7 +180,8 @@ class FakePSP:
         """Mesma lógica do stream.c do PSP: até dois frames em remontagem,
         pedido antecipado, NACK, desistência e reenvio de pedido."""
         P = protocol.CHUNK_PAYLOAD
-        early = self.args.early_kb * 1024
+        auto = self.args.early_kb == "auto"
+        fixed = 0 if auto else int(float(self.args.early_kb) * 1024)
         try:
             asm = []          # frames em remontagem, do mais velho ao mais novo
             done = 0
@@ -191,6 +197,14 @@ class FakePSP:
 
             gap = Estimator(0.003, 0.003)   # entre pedaços seguidos de um frame
             rtt = Estimator(0.030, 0.010)   # pedido -> primeiro pedaço
+
+            def early_bytes():
+                if not auto:
+                    self.early_cur = fixed
+                    return fixed
+                ping = self.ping_us / 1e6 or EARLY_PING_DEFAULT_S
+                self.early_cur = min(EARLY_AUTO_MAX, int(ping * P / max(gap.avg, 0.0002)))
+                return self.early_cur
 
             def send_nack(a):
                 missing = [i for i in range(a["count"]) if i not in a["have"]]
@@ -213,7 +227,9 @@ class FakePSP:
                         timeout = min(timeout, left)
                         continue
                     acted = True
-                    if a["nacks"] < MAX_NACKS:
+                    # um mais novo já chegando: o reenvio viria atrás dele na fila
+                    newer = a is asm[0] and len(asm) == 2
+                    if a["nacks"] < MAX_NACKS and not newer:
                         send_nack(a)
                     else:
                         done = max(done, a["no"])
@@ -271,7 +287,7 @@ class FakePSP:
                             continue
                         self.stripped += 1
                     t_first = time.monotonic()
-                    a = {"no": no, "count": fcount, "have": set(), "nacks": 0, "asked": False,
+                    a = {"no": no, "count": fcount, "have": set(), "nacks": 0, "asked": False, "hi": 0,
                          "last_rx": t_first, "t_first": t_first, "buf": bytearray(head) + bytearray(fsize),
                          "ts": fts, "t_req": t_first, "deadline": 0.0, "base": len(head), "hdr": hdr}
                     if req_q:
@@ -284,6 +300,7 @@ class FakePSP:
                     if a["have"] and not a["nacks"] and t_rx - a["last_rx"] < 0.1:
                         gap.update(t_rx - a["last_rx"])
                     a["have"].add(idx)
+                    a["hi"] = max(a["hi"], idx + 1)
                     off = a["base"] + idx * P
                     a["buf"][off: off + len(payload)] = payload
                 else:
@@ -292,6 +309,7 @@ class FakePSP:
                 if len(a["have"]) == a["count"]:
                     t = time.monotonic()
                     t_req = max(a["t_req"], link_free)
+                    idle = max(-0x7FFF, min(0x7FFF, int((a["t_first"] - link_free) * 10000)))
                     link_free = last_done = t
                     done = max(done, no)
                     asm.remove(a)
@@ -300,7 +318,7 @@ class FakePSP:
                     for older in [x for x in asm if x["no"] < no]:
                         asm.remove(older)
                         self.lost += 1
-                    self.publish((no, a["ts"], bytes(a["buf"]), t_req, t, a["t_first"]))
+                    self.publish((no, a["ts"], bytes(a["buf"]), t_req, t, a["t_first"], idle))
                     if self.args.no_prefetch or (not a["asked"] and not req_q):
                         ask(REQ_FRAME)
                     continue
@@ -311,8 +329,10 @@ class FakePSP:
                     d = t_rx + gap.timeout(GAP_MIN_S, GAP_MAX_S)
                     if (len(a["have"]) == 1 and not a["nacks"]) or d > a["deadline"]:
                         a["deadline"] = d
-                if (not self.args.no_prefetch and early > 0 and not a["asked"] and not req_q
-                      and len(a["buf"]) - a["base"] - len(a["have"]) * P <= early):
+                # com buraco, não antecipa: o próximo entraria na fila na frente do reenvio
+                if (not self.args.no_prefetch and (auto or fixed) and not a["asked"] and not req_q
+                      and len(a["have"]) == a["hi"]
+                      and len(a["buf"]) - a["base"] - len(a["have"]) * P <= early_bytes()):
                     a["asked"] = True  # pedido antecipado
                     ask(REQ_FRAME)
         except (OSError, ValueError) as exc:
@@ -328,7 +348,7 @@ class FakePSP:
                 frame_no, size, send_ts = protocol.unpack_frame_header(recv_exact(self.sock, 16, self.throttle))
                 t_first = time.monotonic()
                 jpeg = recv_exact(self.sock, size, self.throttle)
-                self.publish((frame_no, send_ts, jpeg, t_req, time.monotonic(), t_first))
+                self.publish((frame_no, send_ts, jpeg, t_req, time.monotonic(), t_first, protocol.IDLE_NONE))
                 t_req = time.monotonic()
                 self.send_req(REQ_FRAME)
         except (OSError, ConnectionError, ValueError) as exc:
@@ -369,7 +389,7 @@ class FakePSP:
                     break
                 if self.ready is None:
                     continue
-                frame_no, send_ts, jpeg, t_req, t_recv, t_first = self.ready
+                frame_no, send_ts, jpeg, t_req, t_recv, t_first, idle = self.ready
                 self.ready = None
             if self.args.decode_ms:
                 time.sleep(self.args.decode_ms / 1000)
@@ -381,7 +401,8 @@ class FakePSP:
             with self.cond:
                 self.last_ack = (frame_no, send_ts, shown, clamp_u16((t_recv - t_req) * 10000),
                                  clamp_u16((shown - t_recv) * 10000), clamp_u16(self.args.decode_ms * 10),
-                                 clamp_u16((t_first - t_req) * 10000), clamp_u16((t_recv - t_first) * 10000))
+                                 clamp_u16(max(0.0, t_first - t_req) * 10000), clamp_u16((t_recv - t_first) * 10000),
+                                 idle)
             self.want.set()
         elapsed = time.monotonic() - start
         self.running = False
@@ -415,7 +436,9 @@ def main(argv=None):
     p.add_argument("--loss-up", type=float, default=0,
                    help="UDP: fração dos pedidos do PSP perdidos na subida (ex.: 0.05)")
     p.add_argument("--rtt-ms", type=float, default=0, help="UDP: atraso fixo por pedido (ex.: 21, medido no PSP)")
-    p.add_argument("--early-kb", type=float, default=0, help="UDP: pedido antecipado (0 = desligado), como no PSP")
+    p.add_argument("--early-kb", default="auto",
+                   help="UDP: pedido antecipado, como no PSP: auto (padrão) = ida e volta x vazão, "
+                        "0 = só no fim do frame, N = quando faltarem N KB")
     p.add_argument("--kbps", type=float, default=0, help="limitar a vazão (KB/s), ex.: 400")
     p.add_argument("--decode-ms", type=float, default=0, help="simular o tempo de decode do PSP")
     p.add_argument("--no-prefetch", action="store_true",

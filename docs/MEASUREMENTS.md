@@ -123,7 +123,7 @@ fixa. Isso decide o que vale a pena:
 | 360x204 + ampliação | parte proporcional | 59% dos bytes | ~+25% de FPS |
 | redução multithread no PC (feito) | captura no PC | 4,0 -> 2,5 ms/frame em 2240x1400 | -1,5 ms de latência |
 | NACK rápido + espera de uma ida e volta (feito) | perdas | piso de 6 ms **piorou no PSP**; corrigido (abaixo) | p95 menor com perda |
-| pedido antecipado | parte fixa | **piorou no PSP** | desligado |
+| pedido antecipado | parte fixa | fixo em 6-14 KB **piorou no PSP**; v0.8: automático (~2-3 KB), +12-33% de FPS [SIM] | a medir no PSP |
 | **descobrir os ~25 ms fixos** | parte fixa | `first_t` (v2) + ping no início (v0.4) | até ~2x de FPS se for algo corrigível |
 | reação do servidor (pedido -> 1º pedaço enviado) | parte fixa | **0,6 ms** (mediana; p95 1,2-2,4 ms) em localhost, fonte estática e ao vivo | nada a ganhar: não é o servidor |
 | esperar pacotes consultando o socket em vez de `select()` (`rxwait=auto`, v0.4) | parte fixa | o PSP mede os dois ao conectar | depende de quanto o `select()` do PSP demora para acordar |
@@ -475,6 +475,65 @@ desligado, sinal 72%:
 | v0.5 (H.264 intra + Stop) | 28,7 / 28 ms | 22,1 / 33 ms |
 | v0.6 (+ power save do PC desligado) | 42,8 / 19 ms | 28,6 / 29 ms |
 | **v0.7 (repetição de pedido adaptativa)** | **60,6 / 20 ms** | **43,3 / 28 ms** |
+
+#### v0.7 com a tela de verdade: desktop e Minecraft [PSP]
+
+`python3 server/pspstream.py --codec h264` (portal, adaptativo com alvo de 20
+fps, que ficou em q90), `early_kb=0`, sinal do PSP oscilando entre 47% e 92%.
+Linhas do log a cada 2 s:
+
+| trecho | KB/frame | FPS (fonte) | latência / p95 | 1º pedaço | rajada (vazão) | espera por frame novo | reenviados |
+|---|---|---|---|---|---|---|---|
+| desktop | 2,0-2,6 | 24-30 (36-40) | 27-34 / 48-81 ms | 24-35 ms | 4-7 ms | 8-10 ms | 0-3% |
+| Minecraft | 6-10,7 | 18-36, típico ~28 (37-42) | 38-72 / 57-170 ms | 9-33, típico ~13 ms | 13-45 ms (243-485 KB/s) | 0,3-4,6 ms | 0-16,5% |
+| queda de sinal (50%) | 2,6 | 9 | 102 / 200 ms | 54 ms | 56 ms (29 KB/s) | 1,3 ms | 16,7% |
+
+- **Minecraft:** a rede é o gargalo. Cada frame passa ~12 ms esperando o 1º
+  pedaço e 15-30 ms transferindo. O tempo morto entre um frame e o pedido do
+  próximo é ~1/3 do ciclo.
+- **Desktop:** frames pequenos. O servidor espera ~10 ms por um frame novo da
+  captura, e o FPS (24-30) fica abaixo do da captura (36-40).
+- Em aberto: no desktop, "1º pedaço" menos "espera" dá ~20 ms. No jogo dá
+  ~10 ms e no bench estático ~7 ms (mediana). Ainda não sei de onde vêm os ~10
+  ms a mais.
+
+#### v0.8: pedido antecipado automático [SIM]
+
+O pedido antecipado volta, agora calculado: o PSP pede o próximo frame quando
+o que falta do atual leva uma ida e volta para chegar. Em bytes, isso é ping
+do início / intervalo médio entre pedaços x 1400 bytes. No PSP-3000, ~5 ms /
+~3 ms x 1400 ≈ 2-3 KB, com teto de 8 KB. Os testes antigos (6-14 KB fixos,
+JPEG) pediam 2-5x cedo demais: o frame seguinte ia inteiro para a fila do
+roteador, e a latência subia sem ganho de FPS. Duas regras evitam desperdício:
+
+- **Frame com buraco não antecipa.** O próximo entraria na fila na frente do
+  reenvio, e o frame com perda seria descartado.
+- **Frame com buraco e um mais novo já chegando:** descarta o frame em vez de
+  pedir reenvio. O reenvio chegaria depois do mais novo e seria jogado fora.
+  A 1ª simulação, sem essas regras, perdia 12% dos frames e reenviava ~80
+  pedaços à toa a cada 12 s.
+
+Simulação: `tools/fake_client.py` com 400 KB/s, ida e volta de 5 ms, 2% de
+perda e decode de 4 ms. Servidor H.264 local, captura a 38 fps como o portal.
+O FPS é o do PSP falso, e a latência e o tempo morto vêm do log do servidor.
+
+| cenário | `early_kb=0`: FPS / latência / tempo morto | `auto`: FPS / latência / tempo morto | antecipa |
+|---|---|---|---|
+| desktop (fonte de teste, 2,3 KB) | 37,5-37,8 / 27-30 ms / 26-28 ms | 37,0-37,7 / 26,4-26,8 ms / 29 ms | 2,5 KB |
+| jogo (pinwheel q70, 10 KB) | 26,7-28,1 / 63-68 ms / 9,7-10 ms | **31,0-31,6** / 60-64 ms / 3,9-4,5 ms | 2,3 KB |
+| estático q30 (4,7 KB) | 49,7 / 24,2 ms / 9,8 ms | **66,2** / 24,2 ms / 3,8 ms | 2,6 KB |
+| estático q90 (8,4 KB) | 31,9 / 35,6 ms / 9,8 ms | **36,3** / 35,3 ms / 4,8 ms | 2,5 KB |
+| estático q90, 5% de perda, 10 ms, 350 KB/s | 22,4 / 50 (p95 74) ms | **26,6** / 47 (p95 58) ms | 4,0 KB |
+
+- O "tempo morto" mede do último pedaço de um frame ao 1º do seguinte. O
+  piso é o intervalo de um pedaço (~3,5 ms a 400 KB/s), então os ~4 ms do
+  `auto` são o máximo possível.
+- A latência não subiu, então não se formou fila. No desktop, os dois modos
+  já acompanham a captura na simulação. Lá a ida e volta simulada é limpa (5
+  ms), e no PSP real o "1º pedaço" do desktop foi de 24-35 ms.
+- **Isto é simulação.** A primeira versão do pedido antecipado também ganhou
+  na simulação (+62%) e não ganhou nada no PSP. O bench e o teste com o jogo
+  no PSP decidem. `early_kb=0` no `server.txt` volta ao comportamento da v0.7.
 
 ## 1. Tamanho de frame [PC]
 

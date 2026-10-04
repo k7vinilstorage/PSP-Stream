@@ -27,11 +27,16 @@
  * esperando com select() e metade consultando o socket a cada 0,5 ms. Mostra
  * a parte fixa da rede sem frame no meio e escolhe a espera mais rápida.
  *
- * Pedido antecipado (UDP, experimental, desligado por padrão): quando faltam
- * `early` bytes do frame atual, já pedimos o próximo, para esconder a ida e
- * volta do pedido. No PSP-3000 não aumentou o FPS e piorou a latência (o
- * 802.11b é half duplex). Com ele podem existir dois frames sendo remontados;
- * quando um mais novo completa, o mais velho incompleto é abandonado.
+ * Pedido antecipado (UDP): quando faltam `early` bytes do frame atual, já
+ * pedimos o próximo. O pedido leva uma ida e volta para virar o 1º pedaço do
+ * próximo frame, e nesse tempo o rádio entrega ida_e_volta x vazão bytes. Com
+ * early = isso, o próximo começa a chegar logo depois do último pedaço do
+ * atual: sem tempo morto entre frames e sem fila. É o padrão (auto): a ida e
+ * volta é o ping do início, e a vazão vem do intervalo médio entre pedaços.
+ * Valores fixos maiores (6-14 KB, testados no PSP-3000 com JPEG) pediam cedo
+ * demais: o frame novo esperava na fila do roteador e a latência subia. Com
+ * pedido antecipado podem existir dois frames sendo remontados; quando um
+ * mais novo completa, o mais velho incompleto é abandonado.
  */
 #include "stream.h"
 #include "config.h"
@@ -80,7 +85,8 @@ static int g_sock = -1;
 static int g_udp;
 static struct sockaddr_in g_dest;
 static volatile int g_prefetch;
-static int g_early; /* bytes que faltam no frame atual para pedir o próximo (0 = desligado) */
+static int g_early; /* bytes que faltam no frame atual para pedir o próximo (0 = desligado, < 0 = auto) */
+static volatile int early_cur; /* valor em uso (auto muda com a vazão) */
 static volatile int *g_running;
 static volatile int net_error;
 static volatile int stopping;
@@ -164,7 +170,11 @@ static int send_req(uint16_t flags, const ps_nack_t *nack)
         r->since_t = clamp_u16((now_us() - a.t_shown) / 100);
         r->first_t = a.first_t;
         r->burst_t = a.burst_t;
+        r->idle_t = a.idle_t;
+    } else {
+        r->idle_t = PS_IDLE_NONE;
     }
+    r->early_b = clamp_u16(early_cur);
     r->signal = wifi_signal;
     r->wflags = wifi_flags | (rx_poll ? PS_WIFI_RX_POLL : 0) | (cap_h264 ? PS_CAP_H264 : 0);
     r->lost = lost > 0xFFFF ? 0xFFFF : lost;
@@ -257,6 +267,7 @@ static int net_thread_tcp(void)
         f->t_req = t_req;
         f->t_first = t_first;
         f->t_recv = now_us();
+        f->idle_t = PS_IDLE_NONE;
         publish_slot(idx);
 
         if (!g_prefetch)
@@ -273,6 +284,7 @@ typedef struct {
     int idx;           /* slot; -1 = vazio */
     uint32_t frame_no;
     int count, got, nacks;
+    int hi;            /* maior pedaço recebido + 1: got < hi = há buraco (chegam em ordem) */
     int base;          /* bytes de cabeçalho copiados do cache antes do payload */
     uint32_t hdr;      /* campo hdr do pedaço */
     int nack_last;     /* maior pedaço pedido no último NACK (o último do reenvio) */
@@ -519,6 +531,26 @@ static void live_pong(const uint8_t *buf)
     live_min_us = m;
 }
 
+/* Pedido antecipado automático: ida e volta x vazão = ping / intervalo entre
+ * pedaços x tamanho do pedaço. O ping é a mediana do início (rede parada, no
+ * modo de espera em uso): sob carga a ida e volta é maior, mas pedir um pouco
+ * tarde só deixa sobrar tempo morto, enquanto pedir cedo cria fila. */
+#define EARLY_AUTO_MAX (8 * 1024) /* no PSP-3000 a conta dá ~2-4 KB; 6-14 KB fixos criavam fila */
+#define EARLY_PING_DEFAULT_US 6000 /* sem ping medido (todos perdidos) */
+static int early_threshold(void)
+{
+    int e = g_early;
+    if (e < 0) {
+        unsigned ping = rx_poll ? ping_poll_us : ping_sel_us;
+        if (!ping)
+            ping = EARLY_PING_DEFAULT_US;
+        int gap = gap_avg > 200 ? gap_avg : 200;
+        e = clampi((int)((unsigned long long)ping * PS_CHUNK_PAYLOAD / (unsigned)gap), 0, EARLY_AUTO_MAX);
+    }
+    early_cur = e;
+    return e;
+}
+
 static int net_thread_udp(void)
 {
     static uint8_t pkt[sizeof(ps_chunk_hdr_t) + PS_CHUNK_PAYLOAD + 64];
@@ -566,7 +598,11 @@ static int net_thread_udp(void)
                 continue;
             }
             acted = 1;
-            if (a->nacks < MAX_NACKS) {
+            /* Um frame mais novo já está chegando: o reenvio ficaria na fila
+             * atrás dele e chegaria depois que ele completasse, quando este já
+             * teria sido descartado. Descarta já e não gasta o ar. */
+            int newer = k == 0 && as[1].idx >= 0;
+            if (a->nacks < MAX_NACKS && !newer) {
                 if (send_nack(a) < 0)
                     return -1;
             } else { /* desiste do frame */
@@ -700,6 +736,8 @@ static int net_thread_udp(void)
             a->have[h.chunk / 32] |= 1u << (h.chunk % 32);
             memcpy(slots[a->idx].data + a->base + h.chunk * PS_CHUNK_PAYLOAD, pkt + sizeof(h), plen);
             a->got++;
+            if (h.chunk >= a->hi)
+                a->hi = h.chunk + 1;
         }
         a->last_rx = t_rx;
 
@@ -710,6 +748,7 @@ static int net_thread_udp(void)
             f->t_req = (int)(a->t_req - link_free) > 0 ? a->t_req : link_free;
             f->t_first = a->t_first;
             f->t_recv = t;
+            f->idle_t = clampi((int)(a->t_first - link_free) / 100, -0x7FFF, 0x7FFF);
             link_free = last_done = t;
             int asked = a->asked_next;
             if (a->frame_no > done)
@@ -742,8 +781,10 @@ static int net_thread_udp(void)
             if ((a->got == 1 && a->nacks == 0) || (int)(d - a->deadline) > 0)
                 a->deadline = d;
         }
-        if (a->idx >= 0 && a->got < a->count && g_prefetch && g_early > 0 && !a->asked_next && pending == 0 &&
-            (int)slots[a->idx].size - a->base - a->got * PS_CHUNK_PAYLOAD <= g_early) {
+        /* Com buraco no frame, não antecipa: o próximo entraria na fila na
+         * frente do reenvio, e este frame seria descartado. */
+        if (a->idx >= 0 && a->got < a->count && a->got == a->hi && g_prefetch && g_early && !a->asked_next &&
+            pending == 0 && (int)slots[a->idx].size - a->base - a->got * PS_CHUNK_PAYLOAD <= early_threshold()) {
             a->asked_next = 1; /* pedido antecipado */
             ASK(PS_REQ_FRAME);
         }
@@ -767,6 +808,7 @@ int stream_start(int sock, int udp, const struct sockaddr_in *dest, int prefetch
     g_sock = sock;
     g_udp = udp;
     g_early = early_bytes;
+    early_cur = early_bytes > 0 ? early_bytes : 0;
     g_rxwait = rxwait;
     rx_poll = 0;
     ping_sel_us = ping_poll_us = 0;
@@ -885,6 +927,11 @@ unsigned stream_nacks(void)
 unsigned stream_retries(void)
 {
     return retries;
+}
+
+unsigned stream_early(void)
+{
+    return early_cur;
 }
 
 unsigned stream_completed(void)

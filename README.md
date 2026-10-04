@@ -144,7 +144,7 @@ prefetch=1           # 1 = rede e decode em paralelo
 overlay=1            # FPS, KB/frame, KB/s, decode, rede, descartes
 input=1              # controles do PSP -> PC
 transport=udp        # udp (padrão) | tcp; SELECT+START+L troca com o stream rodando
-early_kb=0           # UDP, experimental (no PSP-3000 piorou a latência; ver MEASUREMENTS.md)
+early_kb=auto        # UDP: pede o próximo frame quando faltar isso do atual (auto = ida e volta x vazão; 0 = no fim)
 rxwait=auto          # UDP: auto | select | poll (auto mede os dois ao conectar e usa o mais rápido)
 h264=1               # 1 = aceita H.264 (servidor com --codec h264)
 rcvbuf=64            # buffer de recepção do socket (KB)
@@ -362,13 +362,18 @@ tests/                 testes do servidor
   a segundos (era a causa da tecla presa). No UDP, um pedaço perdido é pedido
   de volta (NACK). Resultado medido: UDP 14-27 fps e p95 de 55-150 ms,
   contra TCP 0,5-14 fps e p95 de até 1 s ([MEASUREMENTS.md](docs/MEASUREMENTS.md)).
-- **Pedido antecipado: testado e desligado.** A ideia era pedir o próximo
-  frame antes de o atual terminar, para "esconder" os ~21 ms fixos por frame.
-  Na simulação deu +62% de FPS; no PSP real, o FPS não subiu e a latência
-  piorou 10-30 ms (p95 quase dobrou). O 802.11b é half duplex: o pedido
-  disputa o ar com o frame que ainda está chegando, e o frame seguinte só
-  espera na fila do roteador. Ficou como opção `early_kb` (padrão 0) para
-  outras redes.
+- **Pedido antecipado, na medida (v0.8).** O PSP pede o próximo frame
+  quando o que falta do atual leva uma ida e volta para chegar: ping do
+  início / intervalo médio entre pedaços x 1400 bytes, ~2-3 KB no PSP-3000.
+  Assim o próximo frame começa a chegar logo depois do último pedaço do
+  atual, sem tempo morto e sem fila. A primeira tentativa usava 6-14 KB
+  fixos. Na simulação deu +62% de FPS, mas no PSP real o FPS não subiu e a
+  latência piorou 10-30 ms, porque o frame seguinte ia inteiro para a fila
+  do roteador. A versão automática deu +12-33% de FPS na simulação, sem
+  subir a latência; ainda falta medir no PSP. Um frame com perda não
+  antecipa, para o reenvio não ficar atrás do frame seguinte. O overlay
+  mostra o valor em uso, e o bench mostra o "tempo morto entre frames".
+  `early_kb=0` volta ao comportamento antigo.
 - **Cabeçalho JPEG enviado uma vez (UDP).** As tabelas no início de cada
   JPEG (623 bytes no `jpegenc`) só mudam com a qualidade. O PSP guarda as
   duas últimas e diz ao servidor qual tem; o servidor manda só os dados

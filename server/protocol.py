@@ -1,4 +1,4 @@
-"""Protocolo v4 do PSPStream (TCP ou UDP, little-endian). Ver docs/PROTOCOL.md.
+"""Protocolo v5 do PSPStream (TCP ou UDP, little-endian). Ver docs/PROTOCOL.md.
 
 Manter em sincronia com psp/src/protocol.h.
 """
@@ -8,8 +8,8 @@ from dataclasses import dataclass
 
 DEFAULT_PORT = 5123
 
-MAGIC_REQ = b"PSC4"       # v4: ping durante o stream
-MAGIC_REQ_OLD = (b"PSC1", b"PSC2", b"PSC3")  # EBOOT antigo: recusado com mensagem clara
+MAGIC_REQ = b"PSC5"       # v5: pedido antecipado automático
+MAGIC_REQ_OLD = (b"PSC1", b"PSC2", b"PSC3", b"PSC4")  # EBOOT antigo: recusado com mensagem clara
 MAGIC_FRAME = b"PSF1"
 MAGIC_CHUNK = b"PSU2"
 MAGIC_PONG = b"PSO1"
@@ -27,16 +27,20 @@ REQ_PING = 0x0010  # UDP: responda já com PONG_STRUCT (mede a ida e volta pura)
 CHUNK_PAYLOAD = 1400
 MAX_CHUNKS = 256
 
-REQ_STRUCT = struct.Struct("<4sIBBHIIHHHHHHBBHIHHHH")
+REQ_STRUCT = struct.Struct("<4sIBBHIIHHHHHHBBHIHHHHhH")
 FRAME_HDR_STRUCT = struct.Struct("<4sIII")
 CHUNK_HDR_STRUCT = struct.Struct("<4sIIIHHI")  # magic, frame_no, size, send_ts, chunk, count, hdr
 NACK_STRUCT = struct.Struct("<I8I")            # frame_no, máscara de 256 bits
 PONG_STRUCT = struct.Struct("<4sI")            # magic, token (o echo_ts do ping)
-assert REQ_STRUCT.size == 48
+assert REQ_STRUCT.size == 52
 assert FRAME_HDR_STRUCT.size == 16
 assert CHUNK_HDR_STRUCT.size == 24
 assert NACK_STRUCT.size == 36
 assert (MAX_JPEG + CHUNK_PAYLOAD - 1) // CHUNK_PAYLOAD <= MAX_CHUNKS
+
+
+class OldEbootError(ValueError):
+    pass
 
 
 @dataclass
@@ -61,6 +65,8 @@ class Request:
     ping_poll: int = 0    # ... e consultando o socket a cada 0,5 ms (0 = não medido)
     ping_live: int = 0    # 0,1 ms: ping a cada 1 s durante o stream (média móvel; 0 = ainda não)
     ping_live_min: int = 0  # 0,1 ms: o menor dos últimos 8
+    idle_t: int = -0x8000  # 0,1 ms: fim do frame anterior -> 1º pedaço deste no PSP (< 0 = em fila; IDLE_NONE)
+    early_b: int = 0  # UDP: o PSP pede o próximo quando faltam estes bytes do atual (0 = só no fim)
 
     def pack(self) -> bytes:
         return REQ_STRUCT.pack(
@@ -69,13 +75,18 @@ class Request:
             self.net_t, self.local_t, self.since_t, self.decode_t,
             self.first_t, self.burst_t, self.signal, self.wflags, self.lost,
             self.hdr_have, self.ping_select, self.ping_poll, self.ping_live, self.ping_live_min,
+            self.idle_t, self.early_b,
         )
 
     @classmethod
     def unpack(cls, data: bytes) -> "Request":
         if data[:4] in MAGIC_REQ_OLD:
-            raise ValueError("o EBOOT do PSP é de uma versão antiga do protocolo: atualize-o")
-        magic, *fields = REQ_STRUCT.unpack(data)
+            raise OldEbootError("o EBOOT do PSP é de uma versão antiga do protocolo "
+                                f"(v{data[3] - 0x30}, este servidor fala v{MAGIC_REQ[3] - 0x30}): "
+                                "compile e copie o EBOOT.PBP desta versão")
+        if len(data) < REQ_STRUCT.size:
+            raise ValueError(f"pedido curto: {len(data)} bytes (esperado {REQ_STRUCT.size})")
+        magic, *fields = REQ_STRUCT.unpack(data[:REQ_STRUCT.size])
         if magic != MAGIC_REQ:
             raise ValueError(f"magic inválido no pedido: {magic!r}")
         return cls(*fields)
@@ -84,6 +95,8 @@ class Request:
 WIFI_POWER_SAVE = 0x01  # "Economia de energia WLAN" ligada no XMB
 WIFI_RX_POLL = 0x02     # o PSP espera pacotes consultando o socket (não select())
 CAP_H264 = 0x04         # o PSP decodifica H.264 (todo frame IDR) pelo hardware
+
+IDLE_NONE = -0x8000     # idle_t: não medido (TCP, ou o primeiro frame)
 
 # Campo hdr do pedaço UDP: bits 0-30 = id do cabeçalho deste JPEG, bit 31 = o
 # cabeçalho foi tirado (o PSP põe de volta o que guardou com esse id).
