@@ -72,24 +72,42 @@ nas estatísticas.
   72 ms): **enlace de ~470 KB/s + ~21 ms fixos por frame** (ida e volta do
   pedido). Esses 21 ms com o rádio parado motivaram o pedido antecipado.
 
-### Pedido antecipado (`early_kb`) [SIM com os parâmetros medidos]
+### Pedido antecipado (`early_kb`): a simulação errou, o PSP decidiu [PSP]
 
-`fake_client.py --transport udp --kbps 470 --rtt-ms 21 --decode-ms 7.5`,
-desktop 1080p em q60 (14,7 KB/frame):
+A hipótese: os ~21 ms fixos por frame (da reta acima) seriam rádio parado
+esperando o pedido ir e voltar. Pedir o próximo frame antes de o atual
+terminar esconderia esse tempo. A simulação (`fake_client --rtt-ms 21
+--kbps 470`) previa 17,8 -> 28,9 fps com a mesma latência.
 
-| perda | early_kb | FPS | latência média | p95 |
+No PSP-3000 (UDP, `--source static`, mesma imagem; ordem das rodadas: 10, 14, 0, 6):
+
+| early_kb | q30: fps / lat / p95 | q50: fps / lat / p95 | q70: fps / lat / p95 | q90: fps / lat / p95 |
 |---|---|---|---|---|
-| 0% | 0 | 17.8 | 63.6 ms | 64.7 ms |
-| 0% | 6 | 22.6 | 64.3 ms | 65.2 ms |
-| 0% | 10 | 28.9 | 63.1 ms | 63.9 ms |
-| 2% | 0 | 16.1 | 69.7 ms | 106.1 ms |
-| 2% | 6 | 19.5 | 66.4 ms | 107.7 ms |
-| 2% | 10 | 22.6 | 64.1 ms | 67.0 ms |
+| **0** | 20.3 / **38** / **89** | **19.7** / **46** / **75** | 16.6 / **51** / **80** | 10.9 / 90 / 162 |
+| 6 | 20.7 / 48 / 105 | 16.5 / 61 / 143 | 15.8 / 67 / 115 | 10.5 / 89 / 160 |
+| 10 | 22.4 / 49 / 100 | 16.0 / 64 / 126 | 15.1 / 73 / 134 | 11.4 / 105 / 175 |
+| 14 | 14.9 / 65 / 137 | 14.0 / 76 / 155 | 17.5 / 76 / 126 | 12.2 / 114 / 188 |
 
-O FPS sobe até 62% e a latência fica igual. O tempo antes ocioso vira o
-próximo frame chegando. O valor ideal é overhead x vazão ≈ 21 ms x 470 KB/s
-≈ 10 KB, que é o padrão. **A validar no PSP:** rode `--bench` com
-`early_kb=0`, `6`, `10` e `14` no `server.txt`.
+**O FPS não subiu e a latência piorou 10-30 ms (p95 quase dobrou).** O
+modelo da simulação estava errado: aqueles ~21 ms não são rádio parado. O
+802.11b é half duplex. O pedido antecipado disputa o ar com o frame que
+ainda está chegando, e o frame seguinte só fica esperando na fila do
+roteador (é a latência extra). Os 21 ms são custo de ar por frame (disputa
+do meio, ACKs), não espera. **`early_kb=0` voltou a ser o padrão.**
+
+Outras observações destas rodadas:
+
+- **Variação entre rodadas:** a mesma configuração (sem pedido antecipado)
+  deu q30 = 26,9 fps no primeiro dia e 20,3 fps agora. O Wi-Fi varia uns 20%.
+  Só diferenças maiores que isso contam, como o p95, que dobrou de forma
+  consistente.
+- **Perda cresce com o tamanho do frame:** ~1% dos pedaços em q30 (6
+  pedaços por frame) e 4-8% em q90 (18 pedaços). Isso aponta para rajadas
+  estourando algum buffer (fila do roteador ou do PSP). Teste possível:
+  `--udp-pace 450` espaça os pedaços na velocidade do enlace.
+- **Alvo da qualidade adaptativa:** até q30 leva ~46 ms de rede, então o
+  antigo `--target-fps 30` era inalcançável e jogava a qualidade para o
+  mínimo. O padrão agora é **20 fps**, que leva a ~q55: ~20 fps e ~48 ms.
 
 ## 1. Tamanho de frame [PC]
 
@@ -179,10 +197,10 @@ Benchmark de qualidade fixa (`--bench 30,60,90`, mesmo cenário):
 Fonte de teste ao vivo (720p60), mesmo modelo: ~47 ms, decompostos em
 captura 9 + idade 7 + rede 19 + PSP 11.
 
-**Conclusão provisória:** com 802.11b, a rede domina a latência. Cada KB a
-menos por frame economiza ~2,5 ms a 400 KB/s. Por isso o padrão é a
-qualidade adaptativa: a maior qualidade cuja transferência cabe em 1/30 s
-(ou no tempo de decode, se ele for maior).
+**Conclusão provisória** (antes dos testes no PSP): com 802.11b, a rede
+domina a latência. Por isso o padrão é a qualidade adaptativa, que escolhe a
+maior qualidade cuja transferência cabe no orçamento de tempo por frame. O
+alvo virou 20 fps depois das medições no PSP (seção 0).
 
 ## 4. Emulador [EMU] (não representativo)
 
@@ -269,7 +287,7 @@ desligada. O PSPStream avisa na tela quando ela está ligada.
 | vazão Wi-Fi medida, UDP (KB/s) | 367-412 (enlace ~470 descontando o overhead) |
 | UDP, q50: FPS / latência / p95 | 21.8 / 42 / 63 ms |
 | TCP, q50: FPS / latência / p95 | 8.5 / 203 / 805 ms |
-| UDP + early_kb=10, q50: FPS / latência | |
+| UDP + early_kb=10, q50: FPS / latência / p95 | 16.0 / 64 / 126 ms (pior que sem: 19.7 / 46 / 75 ms) |
 | FPS em q50 / q70 (bench) | |
 | latência servidor (captura -> exibido), q adaptativo | |
 | latência vidro a vidro (câmera) | |

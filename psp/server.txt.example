@@ -25,10 +25,10 @@ input=1
 # (libere as duas portas no firewall do PC: 5123/udp e 5123/tcp)
 transport=udp
 
-# UDP: pede o próximo frame quando faltarem N KB do atual, para o rádio não
-# ficar parado esperando o pedido ir e voltar (~20 ms por frame). 0 = desligado.
-# Ideal ~ (tempo de ida e volta) x (vazão): 10 no Wi-Fi medido.
-early_kb=10
+# UDP, experimental: pede o próximo frame quando faltarem N KB do atual.
+# No PSP-3000 medido NÃO ajudou (mesmo FPS, latência 10-30 ms pior): o 802.11b
+# é half duplex e o frame seguinte só fica na fila do roteador. 0 = desligado.
+early_kb=0
 
 # Buffer de recepção do socket em KB. Para experimentar: 32, 64, 128
 rcvbuf=64

@@ -23,7 +23,7 @@ log = logging.getLogger("pspstream.adaptive")
 
 
 class AdaptiveQuality:
-    def __init__(self, source, target_fps: float = 30, q_min: int = 25, q_max: int = 90,
+    def __init__(self, source, target_fps: float = 20, q_min: int = 25, q_max: int = 90,
                  interval: float = 0.5):
         self.source = source
         self.budget_ms = 1000.0 / target_fps

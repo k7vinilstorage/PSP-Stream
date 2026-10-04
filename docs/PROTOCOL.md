@@ -114,8 +114,9 @@ encerra a sessão na hora (no UDP não existe "fechar conexão").
 | 3 s sem completar nenhum frame | o pedido vai com HELLO (o servidor pode ter reiniciado) |
 | pedaço de frame mais antigo ou duplicado | ignorado |
 
-**Pedido antecipado** (`early_kb`, padrão 10): quando faltam `early_kb` KB do
-frame atual, o PSP já pede o próximo. Ele chega logo atrás do atual, e o
+**Pedido antecipado** (`early_kb`, experimental, padrão 0 = desligado): quando
+faltam `early_kb` KB do frame atual, o PSP já pede o próximo. No PSP-3000
+medido, não aumentou o FPS e piorou a latência (ver MEASUREMENTS.md). Ele chega logo atrás do atual, e o
 rádio não fica parado durante a ida e volta do pedido (~21 ms medidos). Por
 isso podem existir **dois frames em remontagem**. Quando um mais novo
 completa, o mais velho incompleto é abandonado: mostrar o N depois do N+1 não

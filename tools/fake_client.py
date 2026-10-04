@@ -307,7 +307,7 @@ def main(argv=None):
     p.add_argument("--transport", choices=["tcp", "udp"], default="tcp")
     p.add_argument("--loss", type=float, default=0, help="UDP: fração de pacotes perdidos (ex.: 0.02)")
     p.add_argument("--rtt-ms", type=float, default=0, help="UDP: atraso fixo por pedido (ex.: 21, medido no PSP)")
-    p.add_argument("--early-kb", type=float, default=10, help="UDP: pedido antecipado (0 = desligado), como no PSP")
+    p.add_argument("--early-kb", type=float, default=0, help="UDP: pedido antecipado (0 = desligado), como no PSP")
     p.add_argument("--kbps", type=float, default=0, help="limitar a vazão (KB/s), ex.: 400")
     p.add_argument("--decode-ms", type=float, default=0, help="simular o tempo de decode do PSP")
     p.add_argument("--no-prefetch", action="store_true",

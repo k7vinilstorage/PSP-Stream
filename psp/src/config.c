@@ -12,7 +12,7 @@
  *   bench=0          (1 = mede decode hw x sw no primeiro frame)
  *   input=1          (1 = controles do PSP viram teclado/mouse no PC)
  *   transport=udp    (udp | tcp)
- *   early_kb=10      (UDP: pede o próximo frame quando faltar isso do atual; 0 = desligado)
+ *   early_kb=0       (UDP, experimental: pede o próximo frame quando faltar isso do atual)
  */
 #include "config.h"
 #include "decode.h"
@@ -76,7 +76,7 @@ int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen)
     cfg->rcvbuf_kb = 64;
     cfg->input = 1;
     cfg->udp = 1; /* medido no PSP-3000: UDP sem travadas, TCP com várias */
-    cfg->early_kb = 10;
+    cfg->early_kb = 0; /* medido no PSP-3000: não aumentou o FPS e piorou a latência */
 
     char path[256];
     snprintf(path, sizeof(path), "%sserver.txt", dir);
@@ -118,6 +118,6 @@ int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen)
     if (cfg->rcvbuf_kb < 8 || cfg->rcvbuf_kb > 256)
         cfg->rcvbuf_kb = 64;
     if (cfg->early_kb < 0 || cfg->early_kb > 64)
-        cfg->early_kb = 10;
+        cfg->early_kb = 0;
     return 0;
 }

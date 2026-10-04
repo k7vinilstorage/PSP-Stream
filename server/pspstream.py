@@ -312,9 +312,10 @@ def parse_args(argv=None):
                    help="qualidade JPEG 1-100: inicial (adaptativo) ou fixa (--fixed-quality). Padrão %(default)s")
     p.add_argument("--fixed-quality", dest="adaptive", action="store_false",
                    help="não adaptar a qualidade à banda medida")
-    p.add_argument("--target-fps", type=float, default=30,
-                   help="adaptativo: FPS que a banda precisa sustentar (padrão %(default)s). Menor = mais "
-                        "qualidade e mais latência por frame")
+    p.add_argument("--target-fps", type=float, default=20,
+                   help="adaptativo: FPS que a banda precisa sustentar (padrão %(default)s, medido no "
+                        "PSP-3000: ~q55 com ~48 ms; 30 é inalcançável no 802.11b e derruba a qualidade "
+                        "para o mínimo). Menor = mais qualidade e mais latência por frame")
     p.add_argument("--q-min", type=int, default=25, help="adaptativo: qualidade mínima (padrão %(default)s)")
     p.add_argument("--q-max", type=int, default=90, help="adaptativo: qualidade máxima (padrão %(default)s)")
     p.add_argument("--scale", default="bilinear2",

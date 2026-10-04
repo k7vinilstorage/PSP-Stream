@@ -139,7 +139,7 @@ prefetch=1           # 1 = rede e decode em paralelo
 overlay=1            # FPS, KB/frame, KB/s, decode, rede, descartes
 input=1              # controles do PSP -> PC
 transport=udp        # udp (padrão) | tcp; SELECT+START+L troca com o stream rodando
-early_kb=10          # UDP: pede o próximo frame quando faltar isso do atual (0 = desligado)
+early_kb=0           # UDP, experimental (no PSP-3000 piorou a latência; ver MEASUREMENTS.md)
 rcvbuf=64            # buffer de recepção do socket (KB)
 bench=0              # 1 = mede o decode hw x sw no próprio PSP ao conectar
 ```
@@ -161,7 +161,7 @@ janela. A escolha fica salva em `~/.config/pspstream/portal_token`; use
 | `--source static --image arq.png` | uma imagem fixa (benchmark reproduzível) |
 | `--source x11` / `--source gst --gst-src "..."` | sessão X11 / pipeline GStreamer próprio |
 | `--window` | portal: capturar uma janela em vez do monitor |
-| `--target-fps 30` | qualidade adaptativa: FPS que a banda precisa sustentar (padrão 30) |
+| `--target-fps 20` | qualidade adaptativa: FPS que a banda precisa sustentar (padrão 20) |
 | `--fixed-quality -q 70` | qualidade fixa em vez de adaptativa |
 | `--q-min 25 --q-max 90` | limites da qualidade adaptativa |
 | `--size 480x272` | resolução enviada (menor = menos banda; o PSP centraliza) |
@@ -188,10 +188,16 @@ com o relógio do servidor, sem sincronizar relógios (ver
 Com 802.11b, a rede domina a latência: cada KB a menos por frame economiza
 ~2,5 ms a 400 KB/s. Por isso a qualidade é **adaptativa** por padrão. O
 servidor mede a vazão real do Wi-Fi pelos relatórios do PSP e escolhe a
-**maior qualidade cuja transferência cabe em 1/30 s**. Se o decode do PSP
+**maior qualidade cuja transferência cabe em 1/20 s**. Se o decode do PSP
 for mais lento que isso, usa o tempo do decode como limite, porque aí uma
-qualidade maior sai de graça. Para mais qualidade com menos FPS, use
-`--target-fps 20`. Para menos latência, `--target-fps 40`.
+qualidade maior sai de graça.
+
+O alvo de 20 fps veio das medições no PSP-3000. Cada frame custa ~25 ms
+fixos no 802.11b (disputa do meio, ACKs, o pedido), além do tempo
+proporcional ao tamanho. Até q30 leva ~46 ms, então 30 fps é inalcançável,
+e com esse alvo o controlador derrubava a qualidade para o mínimo sem ganhar
+nada. Com 20, ele para em ~q55: ~20 fps e ~48 ms de latência. Para mais
+qualidade, use `--target-fps 15`.
 
 O filtro de redução também conta. O bilinear comum serrilha o texto ao
 reduzir 1080p para 480x272. O `bilinear2`, padrão aqui, deixa o texto legível
@@ -308,13 +314,15 @@ tests/                 testes do servidor
   1-3% dos pacotes. Com um frame em trânsito, cada perda vira um timeout de
   retransmissão no TCP: o vídeo **e os controles** travam por centenas de ms
   a segundos (era a causa da tecla presa). No UDP, um pedaço perdido é pedido
-  de volta (NACK) ou, com o pedido antecipado, o frame é pulado e o próximo
-  já está chegando. Resultado medido: UDP 14-27 fps e p95 de 55-150 ms,
+  de volta (NACK). Resultado medido: UDP 14-27 fps e p95 de 55-150 ms,
   contra TCP 0,5-14 fps e p95 de até 1 s ([MEASUREMENTS.md](docs/MEASUREMENTS.md)).
-- **Pedido antecipado.** Cada frame custava ~21 ms fixos (ida e volta do
-  pedido) com o rádio parado. O PSP pede o próximo quando faltam `early_kb`
-  do atual. Na simulação com os parâmetros medidos: +62% de FPS com a mesma
-  latência.
+- **Pedido antecipado: testado e desligado.** A ideia era pedir o próximo
+  frame antes de o atual terminar, para "esconder" os ~21 ms fixos por frame.
+  Na simulação deu +62% de FPS; no PSP real, o FPS não subiu e a latência
+  piorou 10-30 ms (p95 quase dobrou). O 802.11b é half duplex: o pedido
+  disputa o ar com o frame que ainda está chegando, e o frame seguinte só
+  espera na fila do roteador. Ficou como opção `early_kb` (padrão 0) para
+  outras redes.
 - **Escrita direta no framebuffer em vez de sceGu.** Os dois decoders
   escrevem direto na VRAM (stride 512), sem cópias. O sceGu só valeria a pena
   para ampliar um stream menor (240x136, por exemplo) com filtro, o que ainda
@@ -330,8 +338,6 @@ tests/                 testes do servidor
 ## Limitações conhecidas
 
 - Um PSP por vez. Nenhuma segurança: use só na rede local, como o RNDS-Stream.
-- O pedido antecipado (`early_kb`) ainda não foi medido no PSP real: o ganho
-  vem de simulação com a vazão e o overhead medidos no seu Wi-Fi.
 - O PSP entrando em modo de espera durante o stream não foi tratado.
 - Sem áudio.
 - Resoluções menores que 480x272 aparecem centralizadas, sem ampliação.
