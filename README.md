@@ -33,7 +33,7 @@ Tudo foi desenvolvido sem acesso a um PSP. Testes feitos:
 | decode libjpeg-turbo e sceJpeg, cores e stride | PPSSPPHeadless (screenshots comparados) | ok |
 | stream contínuo, overlay, reconexão | PPSSPPHeadless | ok |
 | controles PSP -> PC (X, direcional, analógico -> mouse) | PPSSPPHeadless + depurador WebSocket, injetor em modo dry-run | ok (TCP e UDP) |
-| transporte UDP (pedaços, NACK, BYE) | PPSSPPHeadless + teste com 5% de perda simulada | ok |
+| transporte UDP (pedaços, NACK, BYE) | PPSSPPHeadless + teste com 5% de perda simulada + **PSP real** | ok; no PSP: 14-27 fps, p95 55-150 ms |
 | PSPStream no PSP-3000 + Fedora 44 (TCP) | **seu hardware** | funciona; decode hw 7,9 ms, sw 34 ms |
 | captura GStreamer, escala, jpegenc, qualidade adaptativa | PC + cliente falso | ok |
 | `pipewiresrc` com fd + nó (o que o portal entrega) | PipeWire de teste no container | ok, 59 fps em 1080p |
@@ -138,7 +138,8 @@ vsync=1              # 1 = sem rasgo na imagem (+0 a 16 ms); 0 = troca imediata
 prefetch=1           # 1 = rede e decode em paralelo
 overlay=1            # FPS, KB/frame, KB/s, decode, rede, descartes
 input=1              # controles do PSP -> PC
-transport=tcp        # tcp | udp (SELECT+START+L troca com o stream rodando)
+transport=udp        # udp (padrão) | tcp; SELECT+START+L troca com o stream rodando
+early_kb=10          # UDP: pede o próximo frame quando faltar isso do atual (0 = desligado)
 rcvbuf=64            # buffer de recepção do socket (KB)
 bench=0              # 1 = mede o decode hw x sw no próprio PSP ao conectar
 ```
@@ -302,12 +303,18 @@ tests/                 testes do servidor
   janelas Wayland, e o `kmsgrab` exige root. Rodando dentro do processo
   (PyGObject), o `appsink` entrega um JPEG por vez, sem procurar marcadores,
   e a qualidade do `jpegenc` muda em tempo real.
-- **TCP e UDP, os dois no modelo pull.** O pull resolve a fila, que é o
-  principal problema do TCP em vídeo. O UDP tira o que sobra: os ACKs do TCP
-  ocupando o rádio do 802.11b e a espera por retransmissão quando um pacote
-  se perde (o vídeo e os controles travam juntos). Perder um pedaço não
-  perde o frame: o PSP pede de volta só os que faltam (NACK). Qual é melhor
-  no seu Wi-Fi se decide com `--bench` nos dois (a tabela diz o transporte).
+- **UDP (padrão) e TCP, os dois no modelo pull.** O pull resolve a fila, que
+  é o principal problema do TCP em vídeo. No PSP-3000 medido, o Wi-Fi perde
+  1-3% dos pacotes. Com um frame em trânsito, cada perda vira um timeout de
+  retransmissão no TCP: o vídeo **e os controles** travam por centenas de ms
+  a segundos (era a causa da tecla presa). No UDP, um pedaço perdido é pedido
+  de volta (NACK) ou, com o pedido antecipado, o frame é pulado e o próximo
+  já está chegando. Resultado medido: UDP 14-27 fps e p95 de 55-150 ms,
+  contra TCP 0,5-14 fps e p95 de até 1 s ([MEASUREMENTS.md](docs/MEASUREMENTS.md)).
+- **Pedido antecipado.** Cada frame custava ~21 ms fixos (ida e volta do
+  pedido) com o rádio parado. O PSP pede o próximo quando faltam `early_kb`
+  do atual. Na simulação com os parâmetros medidos: +62% de FPS com a mesma
+  latência.
 - **Escrita direta no framebuffer em vez de sceGu.** Os dois decoders
   escrevem direto na VRAM (stride 512), sem cópias. O sceGu só valeria a pena
   para ampliar um stream menor (240x136, por exemplo) com filtro, o que ainda
@@ -323,8 +330,8 @@ tests/                 testes do servidor
 ## Limitações conhecidas
 
 - Um PSP por vez. Nenhuma segurança: use só na rede local, como o RNDS-Stream.
-- UDP ainda não foi medido no PSP real (só no emulador e em simulação com
-  perda de pacotes).
+- O pedido antecipado (`early_kb`) ainda não foi medido no PSP real: o ganho
+  vem de simulação com a vazão e o overhead medidos no seu Wi-Fi.
 - O PSP entrando em modo de espera durante o stream não foi tratado.
 - Sem áudio.
 - Resoluções menores que 480x272 aparecem centralizadas, sem ampliação.

@@ -46,6 +46,51 @@ Leitura:
 - A rede é a maior parte da latência que sobra (58-81 ms em q50-q70). Por
   isso vale comparar com o transporte UDP.
 
+### TCP x UDP (`--bench`, `--source static`, mesma imagem)
+
+| q | KB/frame | UDP: FPS | UDP: latência / p95 | UDP: rede | UDP: pedaços reenviados | TCP: FPS | TCP: latência / p95 | TCP: rede |
+|---|---|---|---|---|---|---|---|---|
+| 30 | 7.4 | 26.9 | 34 / 55 ms | 36 ms | 0.9% | 0.5* | 1314 / 6445 ms* | 53 ms |
+| 50 | 9.9 | 21.8 | 42 / 63 ms | 50 ms | 1.3% | 8.5 | 203 / 805 ms | 169 ms |
+| 70 | 13.1 | 19.6 | 47 / 72 ms | 51 ms | 2.1% | 14.1 | 67 / 66 ms | 59 ms |
+| 90 | 24.2 | 13.9 | 74 / 151 ms | 72 ms | 2.7% | 3.0 | 265 / 1038 ms | 257 ms |
+
+\* A fase q30 do TCP inclui uma pausa de ~6 s do benchmark de decode
+(`bench=1` ficou ligado). Depois disso, o frame do benchmark deixou de entrar
+nas estatísticas.
+
+- **O Wi-Fi perde 1-3% dos pacotes** (coluna "pedaços reenviados"). Com um
+  frame em trânsito, cada perda no TCP vira um timeout de retransmissão, com
+  travadas de centenas de ms a segundos. O UDP recupera com NACK em
+  milissegundos. **O UDP virou o padrão.**
+- No uso real com TCP (portal, jogo rodando), o servidor registrou três vezes
+  "PSP sem mandar nada há ~505 ms, soltando tudo". Era a pilha TCP do PSP
+  parada, com os controles presos atrás. Essa era a causa da tecla presa.
+- A captura do jogo pelo portal entrega **~37 fps** ("fonte"). O limite
+  estava no transporte, não na captura.
+- Ajustando uma reta na coluna "rede" do UDP (7,4 KB -> 36 ms, 24,2 KB ->
+  72 ms): **enlace de ~470 KB/s + ~21 ms fixos por frame** (ida e volta do
+  pedido). Esses 21 ms com o rádio parado motivaram o pedido antecipado.
+
+### Pedido antecipado (`early_kb`) [SIM com os parâmetros medidos]
+
+`fake_client.py --transport udp --kbps 470 --rtt-ms 21 --decode-ms 7.5`,
+desktop 1080p em q60 (14,7 KB/frame):
+
+| perda | early_kb | FPS | latência média | p95 |
+|---|---|---|---|---|
+| 0% | 0 | 17.8 | 63.6 ms | 64.7 ms |
+| 0% | 6 | 22.6 | 64.3 ms | 65.2 ms |
+| 0% | 10 | 28.9 | 63.1 ms | 63.9 ms |
+| 2% | 0 | 16.1 | 69.7 ms | 106.1 ms |
+| 2% | 6 | 19.5 | 66.4 ms | 107.7 ms |
+| 2% | 10 | 22.6 | 64.1 ms | 67.0 ms |
+
+O FPS sobe até 62% e a latência fica igual. O tempo antes ocioso vira o
+próximo frame chegando. O valor ideal é overhead x vazão ≈ 21 ms x 470 KB/s
+≈ 10 KB, que é o padrão. **A validar no PSP:** rode `--bench` com
+`early_kb=0`, `6`, `10` e `14` no `server.txt`.
+
 ## 1. Tamanho de frame [PC]
 
 Mesmo pipeline do servidor (`videoscale` -> I420 -> `jpegenc`), saída 480x272
@@ -221,7 +266,10 @@ desligada. O PSPStream avisa na tela quando ela está ligada.
 | decode sw, q70 (ms/frame) | 34 |
 | decode hw, q70 (ms/frame) | 7,91 |
 | vazão Wi-Fi medida, TCP (KB/s, coluna "Wi-Fi" do bench) | 235-356 |
-| vazão Wi-Fi medida, UDP (KB/s) | |
+| vazão Wi-Fi medida, UDP (KB/s) | 367-412 (enlace ~470 descontando o overhead) |
+| UDP, q50: FPS / latência / p95 | 21.8 / 42 / 63 ms |
+| TCP, q50: FPS / latência / p95 | 8.5 / 203 / 805 ms |
+| UDP + early_kb=10, q50: FPS / latência | |
 | FPS em q50 / q70 (bench) | |
 | latência servidor (captura -> exibido), q adaptativo | |
 | latência vidro a vidro (câmera) | |

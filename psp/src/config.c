@@ -11,7 +11,8 @@
  *   rcvbuf=64        (KB)
  *   bench=0          (1 = mede decode hw x sw no primeiro frame)
  *   input=1          (1 = controles do PSP viram teclado/mouse no PC)
- *   transport=tcp    (tcp | udp)
+ *   transport=udp    (udp | tcp)
+ *   early_kb=10      (UDP: pede o próximo frame quando faltar isso do atual; 0 = desligado)
  */
 #include "config.h"
 #include "decode.h"
@@ -56,7 +57,9 @@ static void set_key(ps_config_t *cfg, const char *key, const char *value)
     else if (!strcmp(key, "input"))
         cfg->input = v;
     else if (!strcmp(key, "transport"))
-        cfg->udp = !strcmp(value, "udp");
+        cfg->udp = strcmp(value, "tcp") != 0;
+    else if (!strcmp(key, "early_kb"))
+        cfg->early_kb = v;
     else if (!strcmp(key, "exit_after"))
         cfg->exit_after = v;
 }
@@ -72,6 +75,8 @@ int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen)
     cfg->overlay = 1;
     cfg->rcvbuf_kb = 64;
     cfg->input = 1;
+    cfg->udp = 1; /* medido no PSP-3000: UDP sem travadas, TCP com várias */
+    cfg->early_kb = 10;
 
     char path[256];
     snprintf(path, sizeof(path), "%sserver.txt", dir);
@@ -112,5 +117,7 @@ int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen)
         cfg->port = PS_DEFAULT_PORT;
     if (cfg->rcvbuf_kb < 8 || cfg->rcvbuf_kb > 256)
         cfg->rcvbuf_kb = 64;
+    if (cfg->early_kb < 0 || cfg->early_kb > 64)
+        cfg->early_kb = 10;
     return 0;
 }

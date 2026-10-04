@@ -82,7 +82,7 @@ class UdpChunkTest(unittest.TestCase):
 class UdpEndToEndTest(unittest.TestCase):
     """Servidor UDP de verdade + cliente falso (mesma lógica do PSP) com perda."""
 
-    def test_stream_with_loss(self):
+    def run_stream(self, early_kb, loss=0.05, seconds=2.0):
         import pspstream
         from sources import StaticSource
         import fake_client
@@ -96,16 +96,27 @@ class UdpEndToEndTest(unittest.TestCase):
         port = sock.getsockname()[1]
         threading.Thread(target=server.serve_udp, args=(sock,), daemon=True).start()
         try:
-            client_args = argparse.Namespace(host="127.0.0.1", port=port, transport="udp", loss=0.05, kbps=0,
-                                             decode_ms=5, no_prefetch=False, frames=0, seconds=2.0,
-                                             input_demo=False)
+            client_args = argparse.Namespace(host="127.0.0.1", port=port, transport="udp", loss=loss, kbps=2000,
+                                             decode_ms=5, no_prefetch=False, frames=0, seconds=seconds,
+                                             input_demo=False, rtt_ms=0, early_kb=early_kb)
             summary, jpeg = fake_client.FakePSP(client_args).run()
         finally:
             server.close()
             sock.close()
+        return summary, jpeg, card
+
+    def test_nack_recovers_losses(self):
+        summary, jpeg, card = self.run_stream(early_kb=0)
         self.assertGreater(summary["frames"], 20)
-        self.assertGreater(summary["nacks"], 0)        # perdas aconteceram e foram pedidas de novo
-        self.assertEqual(jpeg, card)                   # e o frame chegou inteiro
+        self.assertGreater(summary["nacks"], 0)  # perdas aconteceram e foram pedidas de novo
+        self.assertEqual(jpeg, card)             # e o frame chegou inteiro
+
+    def test_early_request_keeps_streaming(self):
+        # Com pedido antecipado, uma perda no fim do frame N vira pulo para o
+        # N+1 (que já está chegando) em vez de esperar o NACK.
+        summary, jpeg, card = self.run_stream(early_kb=10)
+        self.assertGreater(summary["frames"], 20)
+        self.assertEqual(jpeg, card)
 
 
 class JpegInfoTest(unittest.TestCase):

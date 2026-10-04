@@ -4,6 +4,7 @@ psp/*.prx
 psp/*.PBP
 psp/PARAM.SFO
 psp/src/*.o
+psp/src/*.d
 psp/dist/
 
 # Python

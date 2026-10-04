@@ -15,6 +15,12 @@
  *    (NACK). Depois de MAX_NACKS desistimos do frame e pedimos outro. Pedido
  *    sem resposta é reenviado a cada REQ_RETRY_US (o servidor ignora
  *    duplicados).
+ *
+ * Pedido antecipado (UDP): cada frame custa ~20 ms fixos de ida e volta do
+ * pedido, com o rádio parado. Quando faltam `early` bytes do frame atual, já
+ * pedimos o próximo: ele chega logo atrás, e o rádio não fica ocioso. Por isso
+ * podem existir dois frames sendo remontados; quando um mais novo completa, o
+ * mais velho incompleto é abandonado (o mais novo é o que interessa).
  */
 #include "stream.h"
 #include "net.h"
@@ -25,7 +31,7 @@
 #include <pspkernel.h>
 #include <string.h>
 
-#define NUM_SLOTS 3
+#define NUM_SLOTS 4 /* 1 decodificando + 1 pronto + até 2 recebendo (UDP) */
 /* Acima do decode (0x38) e das threads da pilha de rede (42/48): quando
  * chegam dados, o recv() roda na hora. */
 #define NET_THREAD_PRIO 0x24
@@ -49,6 +55,7 @@ static int g_sock = -1;
 static int g_udp;
 static struct sockaddr_in g_dest;
 static volatile int g_prefetch;
+static int g_early; /* bytes que faltam no frame atual para pedir o próximo (0 = desligado) */
 static volatile int *g_running;
 static volatile int net_error;
 static volatile int stopping;
@@ -194,49 +201,108 @@ static int net_thread_tcp(void)
     return 0;
 }
 
+/* Um frame sendo remontado (UDP). */
+typedef struct {
+    int idx;           /* slot; -1 = vazio */
+    uint32_t frame_no;
+    int count, got, nacks;
+    int asked_next;    /* já pediu o próximo antecipado */
+    unsigned last_rx;
+    unsigned t_req;    /* quando saiu o pedido que gerou este frame */
+    uint32_t have[PS_MAX_CHUNKS / 32];
+} asm_t;
+
+static void asm_drop(asm_t *a)
+{
+    if (a->idx >= 0) {
+        free_slot(a->idx);
+        a->idx = -1;
+    }
+}
+
+static int asm_missing(const asm_t *a, int i)
+{
+    return !(a->have[i / 32] >> (i % 32) & 1);
+}
+
 static int net_thread_udp(void)
 {
     static uint8_t pkt[sizeof(ps_chunk_hdr_t) + PS_CHUNK_PAYLOAD + 64];
-    uint32_t have[PS_MAX_CHUNKS / 32];
-    uint32_t cur = 0;    /* frame sendo remontado (ou o último completo) */
-    int idx = -1;        /* slot desse frame, enquanto incompleto */
-    int complete = 1, got = 0, count = 0, frame_nacks = 0;
-    unsigned t_req = now_us(), last_req = t_req, last_rx = t_req, last_done = t_req;
+    asm_t as[2];                  /* as[0] mais velho, as[1] mais novo */
+    as[0].idx = as[1].idx = -1;
+    uint32_t done = 0;            /* frames <= done: completos ou abandonados */
+    unsigned req_q[2];            /* horários dos pedidos ainda sem resposta */
+    int pending = 0;
+    unsigned now = now_us(), last_req = now, last_done = now, link_free = now;
 
-    if (send_req(PS_REQ_HELLO | PS_REQ_FRAME, NULL) < 0)
-        return -1;
+#define ASK(flags)                                                                                                    \
+    do {                                                                                                              \
+        if (pending < 2)                                                                                              \
+            req_q[pending++] = now_us();                                                                              \
+        last_req = now_us();                                                                                          \
+        if (send_req((flags), NULL) < 0)                                                                              \
+            return -1;                                                                                                \
+    } while (0)
+
+    ASK(PS_REQ_HELLO | PS_REQ_FRAME);
 
     while (*g_running && !stopping) {
-        unsigned now = now_us();
-        int timeout = complete ? (int)(REQ_RETRY_US - (now - last_req)) : (int)(CHUNK_GAP_US - (now - last_rx));
-        if (timeout <= 0) {
-            if (!complete && frame_nacks < MAX_NACKS) {
+        now = now_us();
+        int timeout = 100 * 1000; /* teto: reavalia pelo menos a cada 100 ms */
+        int acted = 0;
+
+        /* ---- frames incompletos sem pedaço novo: NACK ou desistência ---- */
+        for (int k = 0; k < 2; k++) {
+            asm_t *a = &as[k];
+            if (a->idx < 0)
+                continue;
+            int left = CHUNK_GAP_US - (int)(now - a->last_rx);
+            if (left > 0) {
+                if (left < timeout)
+                    timeout = left;
+                continue;
+            }
+            acted = 1;
+            if (a->nacks < MAX_NACKS) {
                 ps_nack_t nk;
                 memset(&nk, 0, sizeof(nk));
-                nk.frame_no = cur;
-                for (int i = 0; i < count; i++)
-                    if (!(have[i / 32] >> (i % 32) & 1))
+                nk.frame_no = a->frame_no;
+                for (int i = 0; i < a->count; i++)
+                    if (asm_missing(a, i))
                         nk.missing[i / 32] |= 1u << (i % 32);
-                frame_nacks++;
+                a->nacks++;
                 nacks++;
-                last_rx = now_us();
+                a->last_rx = now_us();
                 if (send_req(0, &nk) < 0)
                     return -1;
-            } else {
-                if (!complete) { /* desiste do frame */
-                    free_slot(idx);
-                    idx = -1;
-                    complete = 1;
-                    lost++;
-                    t_req = now_us();
-                }
+            } else { /* desiste do frame */
+                if (a->frame_no > done)
+                    done = a->frame_no;
+                asm_drop(a);
+                lost++;
+            }
+        }
+
+        /* ---- nada chegando ---- */
+        if (as[0].idx < 0 && as[1].idx < 0) {
+            if (pending == 0) { /* ninguém pediu o próximo (ex.: desistiu de um frame) */
+                ASK(PS_REQ_FRAME);
+                continue;
+            }
+            int left = REQ_RETRY_US - (int)(now_us() - last_req);
+            if (left <= 0) {
+                /* o pedido (ou a resposta) se perdeu, ou a tela está parada */
                 int stalled = now_us() - last_done > STALL_US;
                 last_req = now_us();
                 if (send_req(PS_REQ_FRAME | (stalled ? PS_REQ_HELLO : 0), NULL) < 0)
                     return -1;
+                continue;
             }
-            continue;
+            if (left < timeout)
+                timeout = left;
         }
+        if (acted)
+            continue;
 
         int r = net_wait_readable(g_sock, timeout);
         if (r < 0)
@@ -260,54 +326,86 @@ static int net_thread_udp(void)
             continue;
 
         /* Depois de STALL_US parado, aceita numeração menor: o servidor reiniciou. */
-        if (h.frame_no < cur && now_us() - last_done > STALL_US) {
-            if (!complete) {
-                free_slot(idx);
-                idx = -1;
-                complete = 1;
-            }
-            cur = 0;
+        if (h.frame_no <= done && now_us() - last_done > STALL_US) {
+            asm_drop(&as[0]);
+            asm_drop(&as[1]);
+            done = 0;
         }
-        if (h.frame_no < cur || (h.frame_no == cur && complete))
+        if (h.frame_no <= done)
             continue; /* atrasado ou duplicado */
-        if (h.frame_no > cur) {
-            if (!complete) { /* o servidor já mandou outro: abandona o incompleto */
-                free_slot(idx);
+
+        asm_t *a = NULL;
+        for (int k = 0; k < 2; k++)
+            if (as[k].idx >= 0 && as[k].frame_no == h.frame_no)
+                a = &as[k];
+        if (!a) { /* frame novo (o servidor manda em ordem crescente): sempre em as[1] */
+            if (as[0].idx >= 0 && as[1].idx >= 0) { /* dois em andamento: o mais velho sai */
+                if (as[0].frame_no > done)
+                    done = as[0].frame_no;
+                asm_drop(&as[0]);
                 lost++;
             }
-            idx = claim_slot();
-            cur = h.frame_no;
-            count = h.count;
-            got = 0;
-            frame_nacks = 0;
-            complete = 0;
-            memset(have, 0, sizeof(have));
-            slots[idx].size = h.size;
-            slots[idx].frame_no = h.frame_no;
-            slots[idx].send_ts = h.send_ts;
+            if (as[1].idx >= 0) {
+                as[0] = as[1];
+                as[1].idx = -1;
+            }
+            a = &as[1];
+            memset(a, 0, sizeof(*a));
+            a->idx = claim_slot();
+            a->frame_no = h.frame_no;
+            a->count = h.count;
+            a->last_rx = now_us();
+            if (pending > 0) { /* responde ao pedido mais antigo */
+                a->t_req = req_q[0];
+                req_q[0] = req_q[1];
+                pending--;
+            } else {
+                a->t_req = now_us();
+            }
+            slots[a->idx].size = h.size;
+            slots[a->idx].frame_no = h.frame_no;
+            slots[a->idx].send_ts = h.send_ts;
         }
-        if (!(have[h.chunk / 32] >> (h.chunk % 32) & 1)) {
-            have[h.chunk / 32] |= 1u << (h.chunk % 32);
-            memcpy(slots[idx].data + h.chunk * PS_CHUNK_PAYLOAD, pkt + sizeof(h), plen);
-            got++;
-        }
-        last_rx = now_us();
 
-        if (got == count) {
-            ps_frame_t *f = &slots[idx];
-            f->t_req = t_req;
-            f->t_recv = last_done = now_us();
-            publish_slot(idx);
-            idx = -1;
-            complete = 1;
-            if (!g_prefetch)
+        if (asm_missing(a, h.chunk)) {
+            a->have[h.chunk / 32] |= 1u << (h.chunk % 32);
+            memcpy(slots[a->idx].data + h.chunk * PS_CHUNK_PAYLOAD, pkt + sizeof(h), plen);
+            a->got++;
+        }
+        a->last_rx = now_us();
+
+        if (a->got == a->count) {
+            ps_frame_t *f = &slots[a->idx];
+            unsigned t = now_us();
+            /* "rede" conta a partir de quando o rádio ficou livre para este frame */
+            f->t_req = (int)(a->t_req - link_free) > 0 ? a->t_req : link_free;
+            f->t_recv = t;
+            link_free = last_done = t;
+            int asked = a->asked_next;
+            if (a->frame_no > done)
+                done = a->frame_no;
+            publish_slot(a->idx);
+            a->idx = -1;
+            /* um mais velho ainda incompleto perdeu a vez */
+            asm_t *other = (a == &as[1]) ? &as[0] : &as[1];
+            if (other->idx >= 0 && other->frame_no < f->frame_no) {
+                asm_drop(other);
+                lost++;
+            }
+            if (!g_prefetch) {
                 wait_want();
-            t_req = last_req = now_us();
-            if (send_req(PS_REQ_FRAME, NULL) < 0)
-                return -1;
+                ASK(PS_REQ_FRAME);
+            } else if (!asked && pending == 0) {
+                ASK(PS_REQ_FRAME);
+            }
+        } else if (g_prefetch && g_early > 0 && !a->asked_next && pending == 0 &&
+                   (int)slots[a->idx].size - a->got * PS_CHUNK_PAYLOAD <= g_early) {
+            a->asked_next = 1; /* pedido antecipado */
+            ASK(PS_REQ_FRAME);
         }
     }
     return 0;
+#undef ASK
 }
 
 static int net_thread(SceSize args, void *argp)
@@ -319,10 +417,12 @@ static int net_thread(SceSize args, void *argp)
     return 0;
 }
 
-int stream_start(int sock, int udp, const struct sockaddr_in *dest, int prefetch, volatile int *running)
+int stream_start(int sock, int udp, const struct sockaddr_in *dest, int prefetch, int early_bytes,
+                 volatile int *running)
 {
     g_sock = sock;
     g_udp = udp;
+    g_early = early_bytes;
     if (udp)
         g_dest = *dest;
     g_prefetch = prefetch;

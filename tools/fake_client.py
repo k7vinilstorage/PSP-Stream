@@ -86,11 +86,22 @@ class FakePSP:
             r.ack_frame, r.echo_ts = a[0], a[1]
             r.since_t = clamp_u16((time.monotonic() - a[2]) * 10000)
             r.net_t, r.local_t, r.decode_t = a[3], a[4], a[5]
+        data = r.pack() + nack
+        if self.args.rtt_ms and self.udp:
+            # simula o atraso fixo por pedido (subida no Wi-Fi + reação do servidor)
+            threading.Timer(self.args.rtt_ms / 1000, self._raw_send, args=(data,)).start()
+            return
+        self._raw_send(data)
+
+    def _raw_send(self, data):
         with self.send_lock:
-            if self.udp:
-                self.sock.sendto(r.pack() + nack, self.dest)
-            else:
-                self.sock.sendall(r.pack())
+            try:
+                if self.udp:
+                    self.sock.sendto(data, self.dest)
+                else:
+                    self.sock.sendall(data)
+            except OSError:
+                pass
 
     def publish(self, frame):
         with self.cond:
@@ -103,37 +114,57 @@ class FakePSP:
             self.want.clear()
 
     def net_loop_udp(self):
-        """Remonta os pedaços como o stream.c do PSP: NACK, desistência e reenvio de pedido."""
+        """Mesma lógica do stream.c do PSP: até dois frames em remontagem,
+        pedido antecipado, NACK, desistência e reenvio de pedido."""
         P = protocol.CHUNK_PAYLOAD
+        early = self.args.early_kb * 1024
         try:
-            t_req = last_req = time.monotonic()
-            self.send_req(REQ_FRAME | REQ_HELLO)
-            cur, buf, have, count, complete = 0, None, set(), 0, True
-            size = send_ts = 0
-            last_rx = last_done = time.monotonic()
-            nacks = 0
+            asm = []          # frames em remontagem, do mais velho ao mais novo
+            done = 0
+            req_q = []        # horários dos pedidos sem resposta (máx. 2)
+            last_req = last_done = link_free = time.monotonic()
+
+            def ask(flags):
+                nonlocal last_req
+                if len(req_q) < 2:
+                    req_q.append(time.monotonic())
+                last_req = time.monotonic()
+                self.send_req(flags)
+
+            ask(REQ_FRAME | REQ_HELLO)
             while self.running:
                 now = time.monotonic()
-                if not complete:
-                    timeout = CHUNK_GAP_S - (now - last_rx)
-                else:
-                    timeout = REQ_RETRY_S - (now - last_req)
-                if timeout <= 0:
-                    if not complete and nacks < MAX_NACKS:
-                        missing = [i for i in range(count) if i not in have]
-                        self.send_req(protocol.REQ_NACK, protocol.pack_nack(cur, missing))
-                        nacks += 1
+                timeout, acted = 0.1, False
+                for a in list(asm):
+                    left = CHUNK_GAP_S - (now - a["last_rx"])
+                    if left > 0:
+                        timeout = min(timeout, left)
+                        continue
+                    acted = True
+                    if a["nacks"] < MAX_NACKS:
+                        missing = [i for i in range(a["count"]) if i not in a["have"]]
+                        self.send_req(protocol.REQ_NACK, protocol.pack_nack(a["no"], missing))
+                        a["nacks"] += 1
                         self.nacks += 1
-                        last_rx = time.monotonic()
+                        a["last_rx"] = time.monotonic()
                     else:
-                        if not complete:  # desiste do frame
-                            self.lost += 1
-                            complete = True
-                            t_req = time.monotonic()
+                        done = max(done, a["no"])
+                        asm.remove(a)
+                        self.lost += 1
+                if not asm:
+                    if not req_q:
+                        ask(REQ_FRAME)
+                        continue
+                    left = REQ_RETRY_S - (time.monotonic() - last_req)
+                    if left <= 0:
                         stalled = time.monotonic() - last_done > STALL_S
-                        self.send_req(REQ_FRAME | (REQ_HELLO if stalled else 0))
                         last_req = time.monotonic()
+                        self.send_req(REQ_FRAME | (REQ_HELLO if stalled else 0))
+                        continue
+                    timeout = min(timeout, left)
+                if acted:
                     continue
+
                 r, _, _ = select.select([self.sock], [], [], timeout)
                 if not r:
                     continue
@@ -142,33 +173,48 @@ class FakePSP:
                     continue  # pacote "perdido no Wi-Fi"
                 self.throttle.consume(len(data))
                 try:
-                    frame_no, fsize, fts, idx, fcount, payload = protocol.unpack_chunk(data)
+                    no, fsize, fts, idx, fcount, payload = protocol.unpack_chunk(data)
                 except (ValueError, Exception):
                     continue
                 if fsize > protocol.MAX_JPEG or fcount != protocol.chunk_count(fsize) or idx >= fcount:
                     continue
                 if len(payload) != (fsize - idx * P if idx == fcount - 1 else P):
                     continue
-                stalled = time.monotonic() - last_done > STALL_S
-                if frame_no < cur and stalled:
-                    cur = 0  # servidor reiniciou a numeração
-                if frame_no < cur or (frame_no == cur and complete):
+                if no <= done and time.monotonic() - last_done > STALL_S:
+                    asm.clear()
+                    done = 0  # servidor reiniciou a numeração
+                if no <= done:
                     continue
-                if frame_no > cur:
-                    if not complete:
+                a = next((x for x in asm if x["no"] == no), None)
+                if a is None:
+                    if len(asm) == 2:  # dois em andamento: o mais velho sai
+                        done = max(done, asm[0]["no"])
+                        asm.pop(0)
                         self.lost += 1
-                    cur, size, send_ts, count = frame_no, fsize, fts, fcount
-                    buf, have, complete, nacks = bytearray(fsize), set(), False, 0
-                if idx not in have:
-                    have.add(idx)
-                    buf[idx * P: idx * P + len(payload)] = payload
-                last_rx = time.monotonic()
-                if len(have) == count:
-                    complete = True
-                    last_done = time.monotonic()
-                    self.publish((cur, send_ts, bytes(buf), t_req, last_done))
-                    t_req = last_req = time.monotonic()
-                    self.send_req(REQ_FRAME)
+                    a = {"no": no, "count": fcount, "have": set(), "nacks": 0, "asked": False,
+                         "last_rx": time.monotonic(), "buf": bytearray(fsize), "ts": fts,
+                         "t_req": req_q.pop(0) if req_q else time.monotonic()}
+                    asm.append(a)
+                if idx not in a["have"]:
+                    a["have"].add(idx)
+                    a["buf"][idx * P: idx * P + len(payload)] = payload
+                a["last_rx"] = time.monotonic()
+                if len(a["have"]) == a["count"]:
+                    t = time.monotonic()
+                    t_req = max(a["t_req"], link_free)
+                    link_free = last_done = t
+                    done = max(done, no)
+                    asm.remove(a)
+                    for older in [x for x in asm if x["no"] < no]:
+                        asm.remove(older)
+                        self.lost += 1
+                    self.publish((no, a["ts"], bytes(a["buf"]), t_req, t))
+                    if self.args.no_prefetch or (not a["asked"] and not req_q):
+                        ask(REQ_FRAME)
+                elif (not self.args.no_prefetch and early > 0 and not a["asked"] and not req_q
+                      and len(a["buf"]) - len(a["have"]) * P <= early):
+                    a["asked"] = True  # pedido antecipado
+                    ask(REQ_FRAME)
         except (OSError, ValueError) as exc:
             self.error = exc
             with self.cond:
@@ -260,6 +306,8 @@ def main(argv=None):
     p.add_argument("--seconds", type=float, default=0, help="ou rodar por N segundos")
     p.add_argument("--transport", choices=["tcp", "udp"], default="tcp")
     p.add_argument("--loss", type=float, default=0, help="UDP: fração de pacotes perdidos (ex.: 0.02)")
+    p.add_argument("--rtt-ms", type=float, default=0, help="UDP: atraso fixo por pedido (ex.: 21, medido no PSP)")
+    p.add_argument("--early-kb", type=float, default=10, help="UDP: pedido antecipado (0 = desligado), como no PSP")
     p.add_argument("--kbps", type=float, default=0, help="limitar a vazão (KB/s), ex.: 400")
     p.add_argument("--decode-ms", type=float, default=0, help="simular o tempo de decode do PSP")
     p.add_argument("--no-prefetch", action="store_true",

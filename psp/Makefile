@@ -6,7 +6,8 @@ TARGET = PSPStream
 OBJS = src/main.o src/config.o src/net.o src/display.o src/decode.o src/stream.o
 
 INCDIR =
-CFLAGS = -O2 -G0 -Wall -Wextra -Wno-unused-parameter -std=gnu11
+# -MMD -MP: recompila o .c quando um .h muda (o build.mak não rastreia isso)
+CFLAGS = -O2 -G0 -Wall -Wextra -Wno-unused-parameter -std=gnu11 -MMD -MP
 CXXFLAGS = $(CFLAGS) -fno-exceptions -fno-rtti
 ASFLAGS = $(CFLAGS)
 
@@ -25,6 +26,9 @@ PSP_EBOOT_TITLE = PSPStream
 
 PSPSDK = $(shell psp-config --pspsdk-path)
 include $(PSPSDK)/lib/build.mak
+
+-include $(OBJS:.o=.d)
+EXTRA_CLEAN = $(OBJS:.o=.d)
 
 DIST_DIR = dist/PSP/GAME/PSPStream
 

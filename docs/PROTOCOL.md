@@ -114,6 +114,16 @@ encerra a sessão na hora (no UDP não existe "fechar conexão").
 | 3 s sem completar nenhum frame | o pedido vai com HELLO (o servidor pode ter reiniciado) |
 | pedaço de frame mais antigo ou duplicado | ignorado |
 
+**Pedido antecipado** (`early_kb`, padrão 10): quando faltam `early_kb` KB do
+frame atual, o PSP já pede o próximo. Ele chega logo atrás do atual, e o
+rádio não fica parado durante a ida e volta do pedido (~21 ms medidos). Por
+isso podem existir **dois frames em remontagem**. Quando um mais novo
+completa, o mais velho incompleto é abandonado: mostrar o N depois do N+1 não
+serve para nada, e esperar o NACK atrasaria o N+1. Na prática, uma perda no fim
+de um frame vira um pulo de frame em vez de uma travada. A "rede" reportada
+conta a partir de quando o rádio ficou livre para aquele frame
+(`max(pedido, frame anterior completo)`).
+
 Do lado do servidor, há no máximo **um pedido pendente**: pedidos repetidos
 enquanto ele espera um frame novo não viram uma rajada de frames. Uma sessão
 UDP começa com um HELLO (ou com qualquer pedido, se não houver sessão ativa)

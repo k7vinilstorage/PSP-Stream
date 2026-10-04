@@ -313,7 +313,7 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
 {
     input_udp = ui->udp;
     ui->switch_transport = 0;
-    if (stream_start(sock, ui->udp, dest, ui->prefetch, &g_running) < 0) {
+    if (stream_start(sock, ui->udp, dest, ui->prefetch, cfg->early_kb * 1024, &g_running) < 0) {
         status("Erro ao iniciar a thread de rede");
         return -1;
     }
@@ -328,7 +328,8 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
     if (input_thid >= 0)
         sceKernelStartThread(input_thid, 0, NULL);
     int shown = 0, last_w = SCR_W, last_h = SCR_H;
-    int bench_pending = cfg->bench;
+    static int bench_done; /* uma vez por execução, não a cada reconexão */
+    int bench_pending = cfg->bench && !bench_done;
     unsigned t_start = now_us();
     int waiting_msg = 0;
     ui->clear = 3;
@@ -353,8 +354,13 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
 
         if (bench_pending) {
             bench_pending = 0;
+            bench_done = 1;
             decode_bench(f);
             ui->clear = 3;
+            /* Esse frame ficou ~6 s parado no benchmark: sem ack, para não
+             * contaminar as estatísticas do servidor. */
+            stream_release(f, NULL);
+            continue;
         }
 
         unsigned t0 = now_us();
