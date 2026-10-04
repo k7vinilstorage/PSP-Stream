@@ -153,7 +153,7 @@ janela. A escolha fica salva em `~/.config/pspstream/portal_token`; use
 | opção | o que faz |
 |---|---|
 | `--source portal` | tela no Wayland (padrão) |
-| `--source test` | padrão animado com relógio (testes, medir latência) |
+| `--source test` | padrão animado com relógio (testes sem captura de tela) |
 | `--source static --image arq.png` | uma imagem fixa (benchmark reproduzível) |
 | `--source x11` / `--source gst --gst-src "..."` | sessão X11 / pipeline GStreamer próprio |
 | `--window` | portal: capturar uma janela em vez do monitor |

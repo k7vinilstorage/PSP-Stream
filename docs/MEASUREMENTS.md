@@ -141,12 +141,17 @@ Abra o PSPStream no PSP e espere ~50 s. A tabela sai no console e em
 
 ### 5.3 Latência "vidro a vidro" (a única que inclui tudo)
 
-1. `python3 server/pspstream.py --source test` (relógio grande na tela).
-2. Abra uma janela que mostre o mesmo relógio no PC, ou use a captura da tela
-   inteira (`--source portal`) com um cronômetro em ms aberto no PC.
-3. Filme o monitor e o PSP juntos com o celular (câmera lenta, se tiver).
-4. Latência = relógio do PC - relógio no PSP, no mesmo quadro do vídeo.
-   Repita algumas vezes e anote a média.
+1. No PC, abra `tools/latency_clock.html` no navegador, em tela cheia (F11).
+2. `python3 server/pspstream.py --source portal` e escolha esse monitor.
+3. Filme o monitor e o PSP juntos com o celular. Câmera lenta (120/240 fps)
+   dá mais precisão.
+4. Pause o vídeo em vários quadros. Em cada um, latência = relógio do monitor
+   − relógio no PSP. Faça a média de umas 10 leituras. A precisão é de ±1
+   quadro do monitor (~17 ms a 60 Hz) por leitura; a média reduz isso.
+
+Esse número inclui tudo: compositor, captura, encode, Wi-Fi, decode, vsync e
+o LCD do PSP. A diferença para a "latência" do log do servidor é a parte que
+o servidor não enxerga (compositor e LCD).
 
 ### 5.4 Ajustes para comparar (atalhos SELECT + START + botão)
 

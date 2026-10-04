@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>PSPStream - relógio de latência</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #fff; font-family: monospace; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  #t { font-size: 18vw; font-weight: bold; letter-spacing: -0.02em; }
+  #bar { width: 90vw; height: 6vh; background: #222; position: relative; margin-top: 2vh; }
+  #fill { position: absolute; top: 0; bottom: 0; width: 4vw; background: #0f0; }
+  p { color: #888; font-size: 2vw; }
+</style>
+</head>
+<body>
+<!--
+  Latência vidro a vidro: abra esta página em tela cheia (F11) no PC, transmita
+  com --source portal e filme o monitor e o PSP juntos (câmera lenta ajuda).
+  Em cada quadro do vídeo: latência = relógio do monitor - relógio no PSP.
+-->
+<div id="t">00.000</div>
+<div id="bar"><div id="fill"></div></div>
+<p>latência = relógio do monitor − relógio no PSP</p>
+<script>
+  const t = document.getElementById("t"), fill = document.getElementById("fill");
+  function tick(now) {
+    const ms = Math.floor(performance.timeOrigin + now) % 100000;
+    t.textContent = (ms / 1000).toFixed(3).padStart(6, "0");
+    fill.style.left = ((ms % 1000) / 1000 * 86) + "vw";  // uma volta por segundo
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+</script>
+</body>
+</html>
