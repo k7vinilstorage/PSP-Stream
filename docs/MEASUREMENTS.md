@@ -662,7 +662,20 @@ if (time_since_last_frame_us < min_interval_us) {
   mínimo voltou a 0/1, e `max-framerate=0/1` desliga o limitador
   (`max_framerate.num > 0`).
 
-Teste seguinte: `--window`, escolhendo a janela do Minecraft.
+**`--window` (janela do Minecraft em tela cheia) [PSP]:** `max-framerate=60/1`, e
+a fonte entregou 36,5, 38,8 e 41,3 fps nos três relatórios (intervalo mediano
+21-26 ms, p10 16,8, p90 32-43), com janelas de 2 s chegando a 45-47 fps. Quase
+igual aos 38 da captura de tela: a reposição por timer ajuda pouco, porque o
+limitador continua pulando ~metade dos quadros. **No GNOME 50, o teto da
+captura é ~40 fps**, por qualquer caminho do portal.
+
+O PipeWire repassa o `max-framerate` pedido nas caps do GStreamer
+(`src/gst/gstpipewireformat.c`). Então, no GNOME 51, pedir `max-framerate=0/1`
+desliga o limitador. No GNOME 50, a faixa anunciada é de 1/1 até a taxa da
+tela, e não há valor que ajude.
+
+Na mesma rodada: cenas leves (1,4-3,7 KB) deram 25-38 fps com 29-46 ms; cenas
+pesadas (9-12 KB), 25-37 fps com 53-75 ms (rede 25-36 ms por frame).
 
 **Minecraft nesta rodada** (q90, sinal 50-100%): frames de 6-11 KB dão 29-39
 fps e 35-65 ms. Nas cenas de 13-15,6 KB, 24-28 fps e 70-84 ms (p95 88-133
