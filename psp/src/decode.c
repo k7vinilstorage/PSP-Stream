@@ -142,6 +142,7 @@ static struct {
     lli_t *lli;
     SceMpegAu au;
     int inited, rb_made, created, mods;
+    int held; /* frames P entraram sem Stop: o decoder ainda segura frames e referências */
 } avc;
 static int avc_ready;
 static unsigned avc_retry_at; /* init falhou: não tenta de novo a cada frame */
@@ -274,10 +275,28 @@ int decoder_h264_packet(const uint8_t *data, int size)
     return H264_P;
 }
 
+/* Esvazia o decoder (as imagens presas vão para dst e as referências são
+ * zeradas). Obrigatório antes de um IDR que chega com frames P lá dentro: no
+ * PSP-3000, um IDR no meio de uma sequência de P sem Stop DESLIGOU o PSP
+ * (psp/probe v4.1, passo 8). Stop + IDR é o que o modo intra faz a cada
+ * frame, e IDR + P com cópias é o começo de todo stream: os dois medidos. */
+static int avc_flush(uint32_t *dst)
+{
+    void *bufs[4] = {dst, dst, dst, dst};
+    SceInt32 n = 0;
+    int r = sceMpegAvcDecodeStop(&avc.mpeg, FB_STRIDE, bufs, &n);
+    if (r != 0) {
+        snprintf(last_error, sizeof(last_error), "h264 Stop antes do IDR: 0x%08X", r);
+        return -1;
+    }
+    avc.held = 0;
+    return 0;
+}
+
 /* Frames P: o pacote traz o frame e 2 cópias dele, cada um começando com um
  * AUD. O decoder do PSP só solta a imagem de 2 chamadas atrás, então a última
- * chamada (a 2ª cópia) solta o frame real. Sem Stop: ele zeraria as
- * referências que o próximo frame P usa. Como no teste v2 do psp/probe (o
+ * chamada (a 2ª cópia) solta o frame real. Sem Stop entre pacotes P: ele
+ * zeraria as referências que o próximo frame P usa (antes de um IDR, sim). Como no teste v2 do psp/probe (o
  * único caminho medido no PSP-3000), cada AU vai com o AUD e sai de um buffer
  * alinhado a 64 bytes: o 1º já está no início do slot; as cópias (~20-30
  * bytes) passam pelo `stage`. */
@@ -293,6 +312,7 @@ static int avc_decode_packet(const uint8_t *data, int size, uint32_t *dst)
             i += 4;
         }
     SceInt32 got = 0;
+    avc.held = 1;
     for (int k = 0; k < n; k++) {
         int b = starts[k], len = (k + 1 < n ? starts[k + 1] : size) - b;
         const uint8_t *au = data + b;
@@ -325,7 +345,12 @@ static int avc_decode(const uint8_t *data, int size, uint32_t *dst, int *w, int 
         return -1;
     *w = SCR_W;
     *h = SCR_H;
-    if (decoder_h264_packet(data, size))
+    int pk = decoder_h264_packet(data, size);
+    /* IDR (pacote P que começa com IDR, ou frame do modo intra) com frames P
+     * dentro do decoder: Stop antes, senão o PSP desliga */
+    if (avc.held && pk != H264_P && avc_flush(dst) < 0)
+        return -1;
+    if (pk)
         return avc_decode_packet(data, size, dst);
     SceInt32 got = 0;
     if (avc_feed(data, size, dst, &got) < 0)

@@ -815,12 +815,35 @@ desligou:
   3,5 ms, contra 4,0 ms das do x264.
 - Então a causa está no que a sonda não tinha: tempo (60 frames contra
   minutos), conteúdo e perdas de verdade, ou a rede rodando junto.
-- **Suspeito principal:** sem IDR periódico, `frame_num` (15 bits) e o POC
+- **Suspeito (descartado na v4.1):** sem IDR periódico, `frame_num` (15 bits) e o POC
   (16 bits, +2 por AU) do openh264 dão a volta no AU 32768. Com 3 AUs por
   frame mostrado, a ~60 fps, isso acontece em ~3 min. Vídeo de PSP nunca
   chega lá: cada IDR zera os dois. O servidor agora manda um IDR a cada 1800
   frames (30 s a 60 fps), e a v4.1 testa a volta (passo 7, 12000 frames)
   e a volta de uma perda pelo IDR sem Stop (passo 8).
+
+#### Teste v4.1 no PSP-3000: IDR no meio dos P desliga o PSP [PSP]
+
+O stream desligou o PSP de verdade (ao ligar, começou do zero), em 10-20 s,
+na bateria.
+
+| passo | resultado |
+|---|---|
+| 7: openh264 + 2 cópias, 12000 frames sem IDR (contadores dão a volta no AU 32768) | 36000/36000 chamadas ok, 10,60 ms por frame, atraso 0 |
+| 8: o mesmo com 60 frames, pula os frames 20-29 e entrega o IDR do frame 30 sem Stop | **o PSP desligou** |
+
+- A volta de `frame_num`/POC não é o problema.
+- O passo 8 imita o stream depois de uma perda: os P sem referência são
+  pulados e o IDR pedido entra **sem Stop**, com o decoder ainda segurando 2
+  frames. Nenhum teste anterior fazia isso: no modo intra todo IDR vem depois
+  de um Stop, e nos clipes P o único IDR era o primeiro. No stream, um IDR no
+  meio aparece em segundos: perda, troca de qualidade (o encoder é refeito)
+  ou o IDR periódico. Bate com os 10-20 s.
+- **Correção (v0.9):** `sceMpegAvcDecodeStop` antes de todo IDR que chega
+  com frames P dentro do decoder. Stop + IDR é o modo intra (passo 3), e IDR
+  + P com cópias é o começo de todo stream (passos 5-7): as duas metades já
+  foram medidas. A sonda v4.2 testa a combinação: IDR a cada 10 frames com
+  Stop antes (passo 9) e perda + Stop + IDR (passo 10).
 
 Outras causas possíveis que a sonda não cobre:
 - **Modo de espera automático:** o app não chamava `scePowerTick`, então o

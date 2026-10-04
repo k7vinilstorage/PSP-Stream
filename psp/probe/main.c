@@ -28,6 +28,11 @@
  * passo 7 roda 12000 frames sem IDR: frame_num e POC do openh264 dão a volta
  * no AU 32768 (frame ~10900), o que o stream faria em ~3 min. O progresso vai
  * para progresso_h264.txt a cada 500 frames.
+ *
+ * v4.2: na v4.1 o passo 7 passou (a volta dos contadores não importa) e o 8
+ * DESLIGOU o PSP: um IDR no meio de uma sequência de P, sem Stop. Os passos
+ * 1-8 não rodam mais. Os novos chamam sceMpegAvcDecodeStop antes de cada IDR
+ * (a correção do stream): IDR a cada 10 frames, e uma perda antes do IDR.
  */
 #include <pspctrl.h>
 #include <pspdebug.h>
@@ -268,7 +273,21 @@ typedef struct {
     int to_vram;
     int skip;   /* AU não entregue (simula perda); -1 = nenhum */
     int skip_to; /* com skip: pula de skip até antes deste AU (0 = só o skip) */
+    int stop_idr; /* Stop antes de cada IDR que não seja o primeiro */
+    const char *done; /* != NULL: já respondido numa versão anterior, não roda */
 } pass_t;
+
+/* O AU (Annex B) tem uma fatia IDR? */
+static int au_is_idr(const uint8_t *p, int n)
+{
+    for (int i = 0; i + 3 < n; i++)
+        if (p[i] == 0 && p[i + 1] == 0 && p[i + 2] == 1) {
+            if ((p[i + 3] & 0x1F) == 5)
+                return 1;
+            i += 2;
+        }
+    return 0;
+}
 
 static u32 *g_stop_bufs[4]; /* sceMpegAvcDecodeStop escreve até 4 imagens */
 
@@ -289,6 +308,8 @@ static int run(const clip_t *cl, const pass_t *ps, uint8_t *stage, u32 *ram_fb)
     int calls = 0, ok = 0, shown = 0, errors = 0, first_err = 0, first_err_at = -1, no_picture = 0;
     int delay_min = 99, delay_max = -99, unreadable = 0, readable = 0, held_first = -1, stop_imgs = 0;
     unsigned t_sum = 0, t_max = 0, t_min = ~0u, t_frame = 0, bytes = 0, extra_sum = 0, extra_n = 0;
+    int idr_stops = 0, idr_stop_imgs = 0;
+    unsigned idr_stop_t = 0;
     const uint8_t *src = cl->data;
     void *dest = ps->to_vram ? (void *)VRAM : (void *)ram_fb;
     const u32 *fb = ps->to_vram ? VRAM_UNCACHED : (const u32 *)((u32)ram_fb | 0x40000000);
@@ -301,10 +322,26 @@ static int run(const clip_t *cl, const pass_t *ps, uint8_t *stage, u32 *ram_fb)
         if (i == ps->skip || (ps->skip >= 0 && i > ps->skip && i < ps->skip_to))
             continue;
         bytes += size;
+        unsigned dt_stop = 0;
+        if (ps->stop_idr && i > 0 && au_is_idr(stage, size)) { /* a correção do stream */
+            static u32 *vbufs[4] = {VRAM, VRAM, VRAM, VRAM};
+            SceInt32 ns = 0;
+            unsigned ts = now_us();
+            int rs = sceMpegAvcDecodeStop(&a.mpeg, 512, ps->to_vram ? vbufs : g_stop_bufs, &ns);
+            dt_stop = now_us() - ts;
+            idr_stop_t += dt_stop;
+            idr_stops++;
+            if (rs != 0 && !errors++) {
+                first_err = rs;
+                first_err_at = i;
+            }
+            if (rs == 0 && ns > 0)
+                idr_stop_imgs += ns;
+        }
         SceInt32 status = 0;
         unsigned t0 = now_us();
         r = avc_decode(&a, stage, size, dest, &status);
-        unsigned dt = now_us() - t0;
+        unsigned dt = now_us() - t0 + dt_stop;
         calls++;
         if (r != 0) {
             if (!errors++) {
@@ -409,6 +446,9 @@ static int run(const clip_t *cl, const pass_t *ps, uint8_t *stage, u32 *ram_fb)
         say("  chamadas extras: %.2f ms cada (%d)", extra_sum / 1000.0f / extra_n, extra_n);
     if (ps->mode == MODE_STOP)
         say("  Stop soltou %d imagens", stop_imgs);
+    if (idr_stops)
+        say("  Stop antes do IDR: %d, %.2f ms cada, soltou %d imagens", idr_stops,
+            idr_stop_t / 1000.0f / idr_stops, idr_stop_imgs);
     if (readable)
         say("  frames de atraso: %d a %d (1o legivel no frame %d)", delay_min, delay_max, held_first);
     else
@@ -534,7 +574,7 @@ int main(int argc, char *argv[])
     pspDebugScreenInitEx(VRAM, PSP_DISPLAY_PIXEL_FORMAT_8888, 1);
 
     g_argv0 = argc > 0 ? argv[0] : "";
-    say("PSPStream - teste do decoder H.264 (v4.1)");
+    say("PSPStream - teste do decoder H.264 (v4.2)");
     load_crashed();
     /* Como os jogos fazem nos firmwares novos (0x300 = codecs do ME, 0x303 =
      * mpeg.prx); o sceUtilityLoadAvModule antigo fica de reserva. 0x80020139 =
@@ -549,8 +589,8 @@ int main(int argc, char *argv[])
     }
     write_report(g_argv0);
 
-    clip_t cl[8];
-    int n = load_clips(cl, 8);
+    clip_t cl[12];
+    int n = load_clips(cl, 12);
     uint8_t *stage = memalign(64, MAX_AU);
     u32 *ram_fb = memalign(64, FB_SIZE);
     if (!n || !stage || !ram_fb) {
@@ -563,23 +603,32 @@ int main(int argc, char *argv[])
          * (é o --codec h264). v4: o --codec h264p (openh264 + 2 cópias)
          * desligou o PSP; os passos separam as diferenças para o x264 da v2:
          * nível 4.1, e o stream do openh264 (POC tipo 0, frame_num de 15 bits). */
+#define OK41 "ok na v4.1"
         static const pass_t passes[] = {
-            {"1 x264 + 2 copias, nivel 3.0 (v2)", MODE_GROUP, 3, 0, -1, 0},
-            {"2 x264 + 2 copias, nivel 4.1", MODE_GROUP, 3, 0, -1, 0},
-            {"3 openh264 IDR + Stop (h264)", MODE_STOP, 1, 1, -1, 0},
-            {"4 openh264 P, 1 chamada, nivel 3.0", MODE_PLAIN, 1, 1, -1, 0},
-            {"5 openh264 P + 2 copias, nivel 3.0", MODE_GROUP, 3, 1, -1, 0},
-            {"6 openh264 P + 2 copias, nivel 4.1", MODE_GROUP, 3, 1, -1, 0},
-            {"7 openh264 + 2 copias, 12000 frames", MODE_GROUP, 3, 1, -1, 0},
+            {"1 x264 + 2 copias, nivel 3.0 (v2)", MODE_GROUP, 3, 0, -1, 0, 0, OK41},
+            {"2 x264 + 2 copias, nivel 4.1", MODE_GROUP, 3, 0, -1, 0, 0, OK41},
+            {"3 openh264 IDR + Stop (h264)", MODE_STOP, 1, 1, -1, 0, 0, OK41},
+            {"4 openh264 P, 1 chamada, nivel 3.0", MODE_PLAIN, 1, 1, -1, 0, 0, OK41},
+            {"5 openh264 P + 2 copias, nivel 3.0", MODE_GROUP, 3, 1, -1, 0, 0, OK41},
+            {"6 openh264 P + 2 copias, nivel 4.1", MODE_GROUP, 3, 1, -1, 0, 0, OK41},
+            {"7 openh264 + 2 copias, 12000 frames", MODE_GROUP, 3, 1, -1, 0, 0, OK41},
             /* frames 20-29 (AUs 60-89) não entram; o IDR do frame 30 entra sem Stop */
-            {"8 openh264 + 2 copias, perde 10, IDR", MODE_GROUP, 3, 1, 60, 90},
+            {"8 openh264 + 2 copias, perde 10, IDR", MODE_GROUP, 3, 1, 60, 90, 0, "DESLIGOU o PSP na v4.1"},
+            /* oh_idr10: IDR nos frames 0, 10, 20... (AUs 0, 30, 60...) */
+            {"9 IDR a cada 10, Stop antes", MODE_GROUP, 3, 1, -1, 0, 1, NULL},
+            /* frames 15-19 (AUs 45-59) não entram; Stop e o IDR do frame 20 */
+            {"10 perde 5, Stop, IDR", MODE_GROUP, 3, 1, 45, 60, 1, NULL},
         };
-        static const int clip_of[] = {0, 1, 2, 3, 4, 5, 6, 7};
+        static const int clip_of[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 8};
         for (int k = 0; k < 4; k++)
             g_stop_bufs[k] = memalign(64, FB_SIZE);
         _Static_assert(sizeof(passes) / sizeof(passes[0]) == sizeof(clip_of) / sizeof(clip_of[0]), "um clipe por passo");
         _Static_assert(sizeof(passes) / sizeof(passes[0]) <= MAX_PASSES, "MAX_PASSES");
         for (unsigned p = 0; p < sizeof(passes) / sizeof(passes[0]); p++) {
+            if (passes[p].done) {
+                say("%s: %s (nao roda)", passes[p].label, passes[p].done);
+                continue;
+            }
             if (crashed[p]) {
                 say("%s: DESLIGOU O PSP antes (pulado)", passes[p].label);
                 write_report(g_argv0);

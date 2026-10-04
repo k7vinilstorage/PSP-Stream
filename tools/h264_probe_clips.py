@@ -59,6 +59,11 @@ COMMON = "ref=1:bframes=0:threads=1:sliced-threads=0:rc-lookahead=0:sync-lookahe
 #   - oh_idr30: openh264 + 2 cópias com IDR nos frames 0 e 30. A sonda pula os
 #     frames 20-29, como o stream depois de uma perda (pula os P até o IDR
 #     pedido chegar), e o IDR entra sem Stop.
+# Na v4.1 o passo 7 passou (a volta dos contadores não é o problema) e o 8
+# DESLIGOU o PSP: IDR no meio de uma sequência de P, sem Stop. v4.2:
+#   - oh_idr10: openh264 + 2 cópias, 120 frames, IDR a cada 10. A sonda chama
+#     Stop antes de cada IDR (é a correção do stream) e, num passo, pula os
+#     frames 15-19 antes do IDR do 20.
 # Além do nível, o openh264 usa frame_num de 15 bits e POC tipo 0 (16 bits);
 # o x264 sem B-frames usa 4 bits e POC tipo 2. E as cópias do openh264 têm
 # ~20 bytes, contra ~300 no clipe do x264.
@@ -75,9 +80,9 @@ def x264(repeat, level, args) -> bytes:
     return subprocess.run(cmd, check=True, capture_output=True).stdout
 
 
-def raw_frames() -> list[bytes]:
+def raw_frames(count=FRAMES) -> list[bytes]:
     cmd = ["ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i", f"testsrc2=size={W}x{H}:rate=30",
-           "-vf", MARKER, "-frames:v", str(FRAMES), "-pix_fmt", "yuv420p", "-f", "rawvideo", "-"]
+           "-vf", MARKER, "-frames:v", str(count), "-pix_fmt", "yuv420p", "-f", "rawvideo", "-"]
     data = subprocess.run(cmd, check=True, capture_output=True).stdout
     size = W * H * 3 // 2
     return [data[i:i + size] for i in range(0, len(data), size)]
@@ -148,9 +153,10 @@ def main() -> int:
     ]
     clips.append(("oh_long", 3, split_aus(openh264(raw_long(), copies=2), AUD)))
     clips.append(("oh_idr30", 3, split_aus(openh264(frames, copies=2, idr_every=30), AUD)))
+    clips.append(("oh_idr10", 3, split_aus(openh264(raw_frames(2 * FRAMES), copies=2, idr_every=10), AUD)))
     out = bytearray(b"H264PRB1" + struct.pack("<I", len(clips)))
     for name, group, aus in clips:
-        frames_in = LONG_FRAMES if name == "oh_long" else FRAMES
+        frames_in = {"oh_long": LONG_FRAMES, "oh_idr10": 2 * FRAMES}.get(name, FRAMES)
         if len(aus) != frames_in * group:
             raise ValueError(f"{name}: {len(aus)} AUs, esperava {frames_in * group}")
         if group > 1:
