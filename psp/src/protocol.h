@@ -9,7 +9,7 @@
 
 #define PS_DEFAULT_PORT 5123
 
-#define PS_MAGIC_REQ   0x31435350u /* "PSC1" */
+#define PS_MAGIC_REQ   0x32435350u /* "PSC2" (v2: campos de diagnóstico no fim) */
 #define PS_MAGIC_FRAME 0x31465350u /* "PSF1" */
 #define PS_MAGIC_CHUNK 0x31555350u /* "PSU1" */
 
@@ -26,7 +26,7 @@
 #define PS_CHUNK_PAYLOAD 1400
 #define PS_MAX_CHUNKS 256
 
-/* PSP -> PC (28 bytes). Toda mensagem leva o estado dos controles. */
+/* PSP -> PC (36 bytes). Toda mensagem leva o estado dos controles. */
 typedef struct __attribute__((packed)) {
     uint32_t magic;     /* PS_MAGIC_REQ */
     uint32_t buttons;   /* máscara PSP_CTRL_* */
@@ -38,7 +38,15 @@ typedef struct __attribute__((packed)) {
     uint16_t local_t;   /* 0,1 ms: frame recebido -> exibido (fila + decode + flip) */
     uint16_t since_t;   /* 0,1 ms: frame exibido -> envio desta mensagem */
     uint16_t decode_t;  /* 0,1 ms: só o decode */
+    /* v2: onde está o tempo de rede */
+    uint16_t first_t;   /* 0,1 ms: pedido -> primeiro pedaço/byte do frame (ida e volta) */
+    uint16_t burst_t;   /* 0,1 ms: primeiro -> último pedaço (vazão real do enlace) */
+    uint8_t signal;     /* sinal do Wi-Fi, % */
+    uint8_t wflags;     /* PS_WIFI_* */
+    uint16_t lost;      /* UDP: frames abandonados incompletos desde o início do stream */
 } ps_req_t;
+
+#define PS_WIFI_POWER_SAVE 0x01 /* "Economia de energia WLAN" ligada no XMB */
 
 /* PC -> PSP (16 bytes), seguido de `size` bytes de JPEG. */
 typedef struct __attribute__((packed)) {
@@ -65,7 +73,7 @@ typedef struct __attribute__((packed)) {
     uint32_t missing[PS_MAX_CHUNKS / 32]; /* bit i = pedaço i faltando */
 } ps_nack_t;
 
-_Static_assert(sizeof(ps_req_t) == 28, "ps_req_t deve ter 28 bytes");
+_Static_assert(sizeof(ps_req_t) == 36, "ps_req_t deve ter 36 bytes");
 _Static_assert(sizeof(ps_chunk_hdr_t) == 20, "ps_chunk_hdr_t deve ter 20 bytes");
 _Static_assert(sizeof(ps_nack_t) == 36, "ps_nack_t deve ter 36 bytes");
 _Static_assert(sizeof(ps_frame_hdr_t) == 16, "ps_frame_hdr_t deve ter 16 bytes");

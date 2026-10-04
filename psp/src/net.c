@@ -216,7 +216,7 @@ int net_recv_dgram(int sock, void *buf, int len)
      * com NULL (e não custa nada no PSP). */
     struct sockaddr_in from;
     socklen_t fromlen = sizeof(from);
-    int n = recvfrom(sock, buf, len, 0, (struct sockaddr *)&from, &fromlen);
+    int n = recvfrom(sock, buf, len, MSG_DONTWAIT, (struct sockaddr *)&from, &fromlen);
     if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
         return 0;
     return n;

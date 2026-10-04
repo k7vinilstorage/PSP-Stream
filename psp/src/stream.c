@@ -36,7 +36,8 @@
  * chegam dados, o recv() roda na hora. */
 #define NET_THREAD_PRIO 0x24
 
-#define CHUNK_GAP_US (20 * 1000)   /* frame incompleto sem pedaço novo: NACK */
+#define CHUNK_GAP_MAX_US (20 * 1000) /* frame incompleto sem pedaço novo: NACK (limite) */
+#define CHUNK_GAP_MIN_US (6 * 1000)  /* ... adaptado a 4x o intervalo médio entre pedaços */
 #define MAX_NACKS 3
 #define REQ_RETRY_US (200 * 1000)  /* pedido sem resposta: reenvia */
 #define STALL_US (3000 * 1000)     /* nada completo por 3 s: recomeça (HELLO); > keepalive de 1 s do servidor */
@@ -59,6 +60,9 @@ static int g_early; /* bytes que faltam no frame atual para pedir o próximo (0 
 static volatile int *g_running;
 static volatile int net_error;
 static volatile int stopping;
+
+static volatile int wifi_signal, wifi_flags;
+static unsigned gap_ewma_us = 3000; /* intervalo médio entre pedaços de um frame */
 
 static volatile uint32_t in_buttons;
 static volatile uint8_t in_lx = 128, in_ly = 128;
@@ -107,7 +111,12 @@ static int send_req(uint16_t flags, const ps_nack_t *nack)
         r->local_t = a.local_t;
         r->decode_t = a.decode_t;
         r->since_t = clamp_u16((now_us() - a.t_shown) / 100);
+        r->first_t = a.first_t;
+        r->burst_t = a.burst_t;
     }
+    r->signal = wifi_signal;
+    r->wflags = wifi_flags;
+    r->lost = lost > 0xFFFF ? 0xFFFF : lost;
     int len = sizeof(ps_req_t);
     if (nack) {
         msg.n = *nack;
@@ -180,6 +189,7 @@ static int net_thread_tcp(void)
         ps_frame_hdr_t hdr;
         if (net_recv_all(g_sock, &hdr, sizeof(hdr)) < 0)
             return -1;
+        unsigned t_first = now_us();
         if (hdr.magic != PS_MAGIC_FRAME || hdr.size == 0 || hdr.size > PS_MAX_JPEG)
             return -2;
         ps_frame_t *f = &slots[idx];
@@ -189,6 +199,7 @@ static int net_thread_tcp(void)
         f->frame_no = hdr.frame_no;
         f->send_ts = hdr.send_ts;
         f->t_req = t_req;
+        f->t_first = t_first;
         f->t_recv = now_us();
         publish_slot(idx);
 
@@ -209,6 +220,7 @@ typedef struct {
     int asked_next;    /* já pediu o próximo antecipado */
     unsigned last_rx;
     unsigned t_req;    /* quando saiu o pedido que gerou este frame */
+    unsigned t_first;  /* primeiro pedaço */
     uint32_t have[PS_MAX_CHUNKS / 32];
 } asm_t;
 
@@ -223,6 +235,27 @@ static void asm_drop(asm_t *a)
 static int asm_missing(const asm_t *a, int i)
 {
     return !(a->have[i / 32] >> (i % 32) & 1);
+}
+
+static int send_nack(asm_t *a)
+{
+    ps_nack_t nk;
+    memset(&nk, 0, sizeof(nk));
+    nk.frame_no = a->frame_no;
+    for (int i = 0; i < a->count; i++)
+        if (asm_missing(a, i))
+            nk.missing[i / 32] |= 1u << (i % 32);
+    a->nacks++;
+    nacks++;
+    a->last_rx = now_us();
+    return send_req(0, &nk);
+}
+
+/* Sem pedaço novo por isso, o resto do frame se perdeu: 4x o intervalo médio. */
+static int chunk_gap_us(void)
+{
+    unsigned g = gap_ewma_us * 4;
+    return g < CHUNK_GAP_MIN_US ? CHUNK_GAP_MIN_US : g > CHUNK_GAP_MAX_US ? CHUNK_GAP_MAX_US : (int)g;
 }
 
 static int net_thread_udp(void)
@@ -256,7 +289,7 @@ static int net_thread_udp(void)
             asm_t *a = &as[k];
             if (a->idx < 0)
                 continue;
-            int left = CHUNK_GAP_US - (int)(now - a->last_rx);
+            int left = chunk_gap_us() - (int)(now - a->last_rx);
             if (left > 0) {
                 if (left < timeout)
                     timeout = left;
@@ -264,16 +297,7 @@ static int net_thread_udp(void)
             }
             acted = 1;
             if (a->nacks < MAX_NACKS) {
-                ps_nack_t nk;
-                memset(&nk, 0, sizeof(nk));
-                nk.frame_no = a->frame_no;
-                for (int i = 0; i < a->count; i++)
-                    if (asm_missing(a, i))
-                        nk.missing[i / 32] |= 1u << (i % 32);
-                a->nacks++;
-                nacks++;
-                a->last_rx = now_us();
-                if (send_req(0, &nk) < 0)
+                if (send_nack(a) < 0)
                     return -1;
             } else { /* desiste do frame */
                 if (a->frame_no > done)
@@ -304,14 +328,15 @@ static int net_thread_udp(void)
         if (acted)
             continue;
 
-        int r = net_wait_readable(g_sock, timeout);
-        if (r < 0)
-            return -1;
-        if (r == 0)
-            continue;
+        /* Lê o que já chegou sem esperar; select() só com a fila vazia. */
         int n = net_recv_dgram(g_sock, pkt, sizeof(pkt));
         if (n < 0)
             return -1;
+        if (n == 0) {
+            if (net_wait_readable(g_sock, timeout) < 0)
+                return -1;
+            continue;
+        }
         if (n < (int)sizeof(ps_chunk_hdr_t))
             continue;
 
@@ -354,7 +379,7 @@ static int net_thread_udp(void)
             a->idx = claim_slot();
             a->frame_no = h.frame_no;
             a->count = h.count;
-            a->last_rx = now_us();
+            a->last_rx = a->t_first = now_us();
             if (pending > 0) { /* responde ao pedido mais antigo */
                 a->t_req = req_q[0];
                 req_q[0] = req_q[1];
@@ -367,18 +392,25 @@ static int net_thread_udp(void)
             slots[a->idx].send_ts = h.send_ts;
         }
 
+        unsigned t_rx = now_us();
         if (asm_missing(a, h.chunk)) {
+            if (a->got > 0 && a->nacks == 0) { /* intervalo entre pedaços seguidos do mesmo frame */
+                unsigned dt = t_rx - a->last_rx;
+                if (dt < 50 * 1000)
+                    gap_ewma_us = (gap_ewma_us * 7 + dt) / 8;
+            }
             a->have[h.chunk / 32] |= 1u << (h.chunk % 32);
             memcpy(slots[a->idx].data + h.chunk * PS_CHUNK_PAYLOAD, pkt + sizeof(h), plen);
             a->got++;
         }
-        a->last_rx = now_us();
+        a->last_rx = t_rx;
 
         if (a->got == a->count) {
             ps_frame_t *f = &slots[a->idx];
             unsigned t = now_us();
             /* "rede" conta a partir de quando o rádio ficou livre para este frame */
             f->t_req = (int)(a->t_req - link_free) > 0 ? a->t_req : link_free;
+            f->t_first = a->t_first;
             f->t_recv = t;
             link_free = last_done = t;
             int asked = a->asked_next;
@@ -398,8 +430,15 @@ static int net_thread_udp(void)
             } else if (!asked && pending == 0) {
                 ASK(PS_REQ_FRAME);
             }
-        } else if (g_prefetch && g_early > 0 && !a->asked_next && pending == 0 &&
-                   (int)slots[a->idx].size - a->got * PS_CHUNK_PAYLOAD <= g_early) {
+        } else if (h.chunk == a->count - 1 && a->nacks == 0) {
+            /* NACK rápido: o último pedaço chegou e faltam outros. Os pedaços vêm
+             * em ordem, então os que faltam se perderam: pede já, sem esperar o
+             * intervalo. */
+            if (send_nack(a) < 0)
+                return -1;
+        }
+        if (a->idx >= 0 && a->got < a->count && g_prefetch && g_early > 0 && !a->asked_next && pending == 0 &&
+            (int)slots[a->idx].size - a->got * PS_CHUNK_PAYLOAD <= g_early) {
             a->asked_next = 1; /* pedido antecipado */
             ASK(PS_REQ_FRAME);
         }
@@ -470,6 +509,12 @@ void stream_release(ps_frame_t *frame, const ps_ack_t *ack)
     unlock();
     if (!g_prefetch)
         sceKernelSignalSema(want_sema, 1);
+}
+
+void stream_set_wifi(int signal, int flags)
+{
+    wifi_signal = signal < 0 ? 0 : signal > 100 ? 100 : signal;
+    wifi_flags = flags;
 }
 
 void stream_set_input(uint32_t buttons, uint8_t lx, uint8_t ly)

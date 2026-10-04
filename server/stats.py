@@ -42,6 +42,11 @@ class Window:
         self.rate = []     # KB/s estimados por frame (tamanho / transferência)
         self.local = []    # recebido -> exibido, no PSP (ms)
         self.decode = []   # só decode (ms)
+        self.first = []    # pedido -> primeiro pedaço, no PSP (ms): ida e volta
+        self.burst = []    # primeiro -> último pedaço (ms)
+        self.burst_rate = []  # KB/s dentro da rajada: vazão real do enlace
+        self.lost0 = None  # contador de frames perdidos do PSP no início da janela
+        self.lost1 = 0
 
     def summary(self, quality=None) -> dict:
         elapsed = max(1e-6, time.monotonic() - self.t0)
@@ -69,6 +74,10 @@ class Window:
             "transfer_ms": _avg(self.transfer),
             "local_ms": _avg(self.local),
             "decode_ms": _avg(self.decode),
+            "first_ms": _avg(self.first),
+            "burst_ms": _avg(self.burst),
+            "burst_kbps": statistics.median(self.burst_rate) if self.burst_rate else 0.0,
+            "lost": (self.lost1 - self.lost0) if self.lost0 is not None else 0,
             "quality": quality,
             "frames": self.frames,
         }
@@ -82,6 +91,7 @@ def format_summary(s: dict) -> str:
         f"latência {s['latency_ms']:5.1f} ms (p95 {s['latency_p95_ms']:5.1f}) ~ "
         f"captura {s['capture_ms']:4.1f} + idade {s['age_ms']:4.1f} + "
         f"rede {s['transfer_ms']:5.1f} + psp {s['local_ms']:5.1f} "
+        f"| rede = 1º pedaço {s['first_ms']:4.1f} + rajada {s['burst_ms']:4.1f} ms ({s['burst_kbps']:4.0f} KB/s) "
         f"| decode {s['decode_ms']:4.1f} ms | espera por frame novo {s['wait_ms']:4.1f} ms"
     )
     if s["quality"] is not None:
@@ -90,6 +100,8 @@ def format_summary(s: dict) -> str:
         line += f" | {s['keepalive']} reenvios (tela parada)"
     if s["resent_pct"]:
         line += f" | {s['resent_pct']:.1f}% pedaços UDP reenviados"
+    if s["lost"]:
+        line += f" | {s['lost']} frames perdidos"
     return line
 
 
@@ -120,6 +132,10 @@ class SessionStats:
         self.total_bytes += size
 
     def on_ack(self, req, recv_ms: int) -> None:
+        for w in (self.window, self.phase):
+            if w.lost0 is None:
+                w.lost0 = req.lost
+            w.lost1 = req.lost
         meta = self.sent.pop(req.ack_frame, None)
         if meta is None:
             return
@@ -144,6 +160,13 @@ class SessionStats:
                 w.rate.append(size / 1024 / (transfer / 1000))
             w.local.append(req.local_t / 10)
             w.decode.append(decode)
+            if req.burst_t:
+                w.first.append(req.first_t / 10)
+                w.burst.append(req.burst_t / 10)
+                # o 1º pedaço já tinha chegado quando a rajada começou a contar
+                payload = size - min(size, 1400)
+                if payload and req.burst_t > 5:
+                    w.burst_rate.append(payload / 1024 / (req.burst_t / 10000))
         if self.adaptive:
             self.adaptive.on_ack(size, transfer, decode)
 

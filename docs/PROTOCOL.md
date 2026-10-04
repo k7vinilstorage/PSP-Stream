@@ -29,11 +29,11 @@ PSP                                   PC
 - Pedir antes de decodificar ("prefetch") sobrepõe rede e decode. Nesse modo,
   quem limita o FPS é o mais lento dos dois, não a soma.
 
-## PSP -> PC: pedido (28 bytes)
+## PSP -> PC: pedido (36 bytes)
 
 | offset | tipo | campo | descrição |
 |---|---|---|---|
-| 0 | char[4] | magic | `"PSC1"` |
+| 0 | char[4] | magic | `"PSC2"` (v2; um EBOOT antigo, `"PSC1"`, é recusado com aviso no log) |
 | 4 | u32 | buttons | máscara `PSP_CTRL_*` (Marco 4) |
 | 8 | u8 | lx | analógico X, 0..255 (128 = centro) |
 | 9 | u8 | ly | analógico Y |
@@ -44,6 +44,15 @@ PSP                                   PC
 | 22 | u16 | local_t | 0,1 ms: frame recebido -> exibido (espera + decode + flip) |
 | 24 | u16 | since_t | 0,1 ms: frame exibido -> envio desta mensagem |
 | 26 | u16 | decode_t | 0,1 ms: só o decode |
+| 28 | u16 | first_t | 0,1 ms: pedido -> primeiro pedaço/byte do frame (ida e volta + reação do servidor) |
+| 30 | u16 | burst_t | 0,1 ms: primeiro -> último pedaço (dá a vazão real do enlace) |
+| 32 | u8 | signal | sinal do Wi-Fi do PSP, % |
+| 33 | u8 | wflags | `0x1` = "Economia de energia WLAN" ligada no XMB |
+| 34 | u16 | lost | UDP: frames abandonados incompletos desde o início do stream |
+
+`first_t` e `burst_t` separam o tempo de rede em ida e volta (fixo por frame)
+e transferência (proporcional ao tamanho). Cada parte tem um remédio
+diferente.
 
 Uma mensagem sem a flag FRAME só atualiza controles e estatísticas. No Marco 4
 ela permite mandar botões com mais frequência que os frames.
@@ -92,13 +101,13 @@ datagrama (20 + 1400 + 28 de IP/UDP = 1448 bytes, cabe nos 1500 do Wi-Fi):
 | 16 | u16 | chunk | índice deste pedaço (bytes `chunk*1400 ...`) |
 | 18 | u16 | count | total de pedaços (`ceil(size/1400)`, máx. 256) |
 
-**PSP -> PC:** o mesmo pedido de 28 bytes, um por datagrama. Com a flag
+**PSP -> PC:** o mesmo pedido de 36 bytes, um por datagrama. Com a flag
 `NACK` (0x4), vem logo depois:
 
 | offset | tipo | campo | descrição |
 |---|---|---|---|
-| 28 | u32 | frame_no | frame incompleto |
-| 32 | u32[8] | missing | bit `i` = pedaço `i` faltando |
+| 36 | u32 | frame_no | frame incompleto |
+| 40 | u32[8] | missing | bit `i` = pedaço `i` faltando |
 
 O servidor reenvia só esses pedaços. Ele guarda os últimos 4 frames enviados.
 `BYE` (0x8) avisa que o app do PSP está saindo: o servidor solta as teclas e
@@ -108,7 +117,8 @@ encerra a sessão na hora (no UDP não existe "fechar conexão").
 
 | situação | ação |
 |---|---|
-| frame incompleto e 20 ms sem pedaço novo | NACK com os que faltam (até 3 vezes) |
+| chegou o último pedaço e faltam outros | NACK na hora (os pedaços vêm em ordem: os que faltam se perderam) |
+| frame incompleto sem pedaço novo por 4x o intervalo médio entre pedaços (6-20 ms) | NACK com os que faltam (até 3 vezes no total) |
 | 3 NACKs sem completar | desiste do frame (conta em "perdidos") e pede outro |
 | pedido sem nenhuma resposta por 200 ms | reenvia o pedido |
 | 3 s sem completar nenhum frame | o pedido vai com HELLO (o servidor pode ter reiniciado) |

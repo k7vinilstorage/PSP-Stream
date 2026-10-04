@@ -8,7 +8,8 @@ typedef struct {
     int size;
     uint32_t frame_no;
     uint32_t send_ts;
-    unsigned t_req;    /* us: pedido enviado */
+    unsigned t_req;    /* us: pedido enviado (ou rádio livre para este frame) */
+    unsigned t_first;  /* us: primeiro pedaço/byte chegou */
     unsigned t_recv;   /* us: frame recebido por inteiro */
 } ps_frame_t;
 
@@ -18,6 +19,7 @@ typedef struct {
     uint32_t send_ts;
     unsigned t_shown;
     uint16_t net_t, local_t, decode_t; /* 0,1 ms */
+    uint16_t first_t, burst_t;         /* 0,1 ms: ida e volta, rajada */
 } ps_ack_t;
 
 struct sockaddr_in;
@@ -34,6 +36,9 @@ ps_frame_t *stream_take(unsigned timeout_us);
 
 /* Devolve o slot depois de exibir o frame. */
 void stream_release(ps_frame_t *frame, const ps_ack_t *ack);
+
+/* Estado do Wi-Fi (sinal %, PS_WIFI_*), enviado em todo pedido para o log do servidor. */
+void stream_set_wifi(int signal, int flags);
 
 /* Estado dos controles, enviado em todo pedido. */
 void stream_set_input(uint32_t buttons, uint8_t lx, uint8_t ly);

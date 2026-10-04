@@ -23,10 +23,11 @@ from jpeginfo import jpeg_info  # noqa: E402
 class ProtocolTest(unittest.TestCase):
     def test_request_roundtrip(self):
         req = protocol.Request(buttons=0x4010, lx=12, ly=250, flags=protocol.REQ_FRAME, ack_frame=7,
-                               echo_ts=0xFFFFFFF0, net_t=123, local_t=45, since_t=6, decode_t=108)
+                               echo_ts=0xFFFFFFF0, net_t=123, local_t=45, since_t=6, decode_t=108,
+                               first_t=210, burst_t=260, signal=87, wflags=protocol.WIFI_POWER_SAVE, lost=3)
         data = req.pack()
-        self.assertEqual(len(data), 28)
-        self.assertEqual(data[:4], b"PSC1")
+        self.assertEqual(len(data), 36)
+        self.assertEqual(data[:4], b"PSC2")
         self.assertEqual(protocol.Request.unpack(data), req)
 
     def test_frame_header(self):
@@ -36,15 +37,21 @@ class ProtocolTest(unittest.TestCase):
 
     def test_bad_magic(self):
         with self.assertRaises(ValueError):
-            protocol.Request.unpack(b"XXXX" + bytes(24))
+            protocol.Request.unpack(b"XXXX" + bytes(32))
+
+    def test_old_eboot_rejected_clearly(self):
+        with self.assertRaisesRegex(ValueError, "versão antiga"):
+            protocol.Request.unpack(b"PSC1" + bytes(32))
 
     def test_matches_c_header(self):
         header = (ROOT / "psp/src/protocol.h").read_text()
         self.assertIn(f"#define PS_DEFAULT_PORT {protocol.DEFAULT_PORT}", header)
         self.assertIn("#define PS_MAX_JPEG (256 * 1024)", header)
         self.assertEqual(protocol.MAX_JPEG, 256 * 1024)
-        self.assertIn('0x31435350u /* "PSC1" */', header)
-        self.assertEqual(int.from_bytes(protocol.MAGIC_REQ, "little"), 0x31435350)
+        self.assertIn('0x32435350u /* "PSC2"', header)
+        self.assertEqual(int.from_bytes(protocol.MAGIC_REQ, "little"), 0x32435350)
+        self.assertIn('_Static_assert(sizeof(ps_req_t) == 36', header)
+        self.assertIn(f"#define PS_WIFI_POWER_SAVE 0x{protocol.WIFI_POWER_SAVE:02x}", header)
         self.assertEqual(int.from_bytes(protocol.MAGIC_FRAME, "little"), 0x31465350)
 
 

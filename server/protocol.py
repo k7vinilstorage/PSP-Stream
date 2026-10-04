@@ -7,7 +7,8 @@ from dataclasses import dataclass
 
 DEFAULT_PORT = 5123
 
-MAGIC_REQ = b"PSC1"
+MAGIC_REQ = b"PSC2"       # v2: campos de diagnóstico no fim do pedido
+MAGIC_REQ_V1 = b"PSC1"    # EBOOT antigo: recusado com mensagem clara
 MAGIC_FRAME = b"PSF1"
 MAGIC_CHUNK = b"PSU1"
 
@@ -23,11 +24,11 @@ REQ_BYE = 0x0008   # UDP: o PSP está saindo
 CHUNK_PAYLOAD = 1400
 MAX_CHUNKS = 256
 
-REQ_STRUCT = struct.Struct("<4sIBBHIIHHHH")
+REQ_STRUCT = struct.Struct("<4sIBBHIIHHHHHHBBH")
 FRAME_HDR_STRUCT = struct.Struct("<4sIII")
 CHUNK_HDR_STRUCT = struct.Struct("<4sIIIHH")  # magic, frame_no, size, send_ts, chunk, count
 NACK_STRUCT = struct.Struct("<I8I")            # frame_no, máscara de 256 bits
-assert REQ_STRUCT.size == 28
+assert REQ_STRUCT.size == 36
 assert FRAME_HDR_STRUCT.size == 16
 assert CHUNK_HDR_STRUCT.size == 20
 assert NACK_STRUCT.size == 36
@@ -46,20 +47,31 @@ class Request:
     local_t: int = 0
     since_t: int = 0
     decode_t: int = 0
+    first_t: int = 0   # 0,1 ms: pedido -> primeiro pedaço (ida e volta)
+    burst_t: int = 0   # 0,1 ms: primeiro -> último pedaço
+    signal: int = 0    # sinal do Wi-Fi do PSP, %
+    wflags: int = 0    # WIFI_*
+    lost: int = 0      # UDP: frames abandonados desde o início do stream
 
     def pack(self) -> bytes:
         return REQ_STRUCT.pack(
             MAGIC_REQ, self.buttons, self.lx, self.ly, self.flags,
             self.ack_frame, self.echo_ts,
             self.net_t, self.local_t, self.since_t, self.decode_t,
+            self.first_t, self.burst_t, self.signal, self.wflags, self.lost,
         )
 
     @classmethod
     def unpack(cls, data: bytes) -> "Request":
+        if data[:4] == MAGIC_REQ_V1:
+            raise ValueError("o EBOOT do PSP é de uma versão antiga do protocolo: atualize-o")
         magic, *fields = REQ_STRUCT.unpack(data)
         if magic != MAGIC_REQ:
             raise ValueError(f"magic inválido no pedido: {magic!r}")
         return cls(*fields)
+
+
+WIFI_POWER_SAVE = 0x01
 
 
 def pack_frame_header(frame_no: int, size: int, send_ts: int) -> bytes:

@@ -170,7 +170,7 @@ janela. A escolha fica salva em `~/.config/pspstream/portal_token`; use
 | `--profile jogo` | mapa de controles: `jogo`, `desktop`, `setas` (ver `server/keymap.json`) |
 | `--input-dry-run` | só mostrar no log as teclas que seriam injetadas |
 | `--input-timeout 0.5` | solta tudo se o PSP sumir por 0,5 s com tecla segurada (evita tecla presa) |
-| `--udp-pace KB/s` | UDP: limitar a taxa de envio dos pedaços (padrão: sem limite) |
+| `--udp-pace KB/s` | UDP: limitar a taxa de envio dos pedaços (padrão: sem limite; teste 450 se a perda crescer com frames grandes) |
 | `--bench 30,50,70,90` | varre qualidades com o PSP conectado e salva uma tabela |
 
 A cada 2 s, o servidor mostra uma linha de estatística:

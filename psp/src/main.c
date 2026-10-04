@@ -331,6 +331,7 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
     static int bench_done; /* uma vez por execução, não a cada reconexão */
     int bench_pending = cfg->bench && !bench_done;
     unsigned t_start = now_us();
+    unsigned t_wifi = 0;
     int waiting_msg = 0;
     ui->clear = 3;
 
@@ -338,6 +339,12 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
         apply_menu(ui, seen);
         if (ui->switch_transport)
             break;
+        if (now_us() - t_wifi > 2 * 1000 * 1000) { /* sinal e economia de energia vão no log do servidor */
+            net_ap_info_t ap;
+            net_ap_info(&ap);
+            stream_set_wifi(ap.strength, ap.power_save == 1 ? PS_WIFI_POWER_SAVE : 0);
+            t_wifi = now_us();
+        }
 
         ps_frame_t *f = stream_take(100 * 1000);
         if (!f) {
@@ -387,7 +394,9 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
         unsigned t2 = now_us();
 
         ps_ack_t ack = {f->frame_no, f->send_ts, t2, tenth_ms(f->t_recv - f->t_req), tenth_ms(t2 - f->t_recv),
-                        tenth_ms(t1 - t0)};
+                        tenth_ms(t1 - t0),
+                        (int)(f->t_first - f->t_req) > 0 ? tenth_ms(f->t_first - f->t_req) : 0,
+                        tenth_ms(f->t_recv - f->t_first)};
         stats_add(&st, f, t1 - t0, t2 - f->t_recv);
         stream_release(f, &ack);
 

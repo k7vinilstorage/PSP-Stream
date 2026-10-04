@@ -109,6 +109,38 @@ Outras observações destas rodadas:
   antigo `--target-fps 30` era inalcançável e jogava a qualidade para o
   mínimo. O padrão agora é **20 fps**, que leva a ~q55: ~20 fps e ~48 ms.
 
+### Plano de otimização: onde está o tempo e o que cada ideia rende
+
+Modelo tirado das medições no PSP (UDP): **cada frame custa ~21-25 ms fixos
++ tamanho / (360-470 KB/s)**. Na q50 (~10 KB), metade do tempo é a parte
+fixa. Isso decide o que vale a pena:
+
+| ideia | ataca | medido aqui [PC] | ganho estimado na q50 |
+|---|---|---|---|
+| enviar o cabeçalho JPEG (623 bytes) só uma vez | parte proporcional | 3-8% do frame | ~2-4% de FPS |
+| tabelas Huffman otimizadas | parte proporcional | 4-6% do frame | ~2-3% de FPS |
+| 400x228 + ampliação no PSP (sceGu) | parte proporcional | 67% dos bytes | ~+20% de FPS, imagem mais macia |
+| 360x204 + ampliação | parte proporcional | 59% dos bytes | ~+25% de FPS |
+| redução multithread no PC (feito) | captura no PC | 4,0 -> 2,5 ms/frame em 2240x1400 | -1,5 ms de latência |
+| NACK rápido + intervalo adaptativo (feito) | perdas | espera de 20 ms -> ~1 ida e volta | p95 menor com perda |
+| pedido antecipado | parte fixa | **piorou no PSP** | desligado |
+| **descobrir os ~25 ms fixos** | parte fixa | **medir com `first_t`** | até ~2x de FPS se for algo corrigível |
+
+Por que a parte fixa vem primeiro: num Wi-Fi normal, a ida e volta leva 2-5
+ms, não 25. Suspeitos, cada um com um remédio:
+
+1. **Economia de energia do Wi-Fi do PSP** (o roteador segura os pacotes até
+   o PSP acordar). O servidor agora loga o estado que o PSP reporta.
+2. **PC no Wi-Fi**, sobretudo com o power save da placa ligado (padrão do
+   NetworkManager em muitos notebooks). O servidor agora avisa na partida.
+3. **Pilha de rede do PSP** entregando com atraso: aparece como `first_t`
+   alto mesmo com os dois acima descartados.
+4. Enlace a 5,5/2 Mbps (sinal ruim, interferência): aparece como "vazão na
+   rajada" baixa (< 300 KB/s) e não como `first_t` alto.
+
+O próximo `--bench` traz as colunas "1º pedaço" e "vazão na rajada". Com
+elas se sabe qual caso é antes de mexer em mais código.
+
 ## 1. Tamanho de frame [PC]
 
 Mesmo pipeline do servidor (`videoscale` -> I420 -> `jpegenc`), saída 480x272

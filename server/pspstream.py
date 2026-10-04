@@ -57,6 +57,7 @@ class Session:
         self.alive = True
         self.frame_no = 0
         self.hello_seen = False
+        self.wifi = None  # (sinal %, flags) informados pelo PSP
 
     def run(self) -> None:
         log.info("PSP conectado via %s: %s:%d", self.transport.name.upper(), *self.transport.addr)
@@ -96,6 +97,8 @@ class Session:
             self.hello_seen = True
         if self.injector:
             self.injector.update(req.buttons, req.lx, req.ly)
+        if req.signal:
+            self._wifi(req.signal, req.wflags)
         if req.ack_frame:
             self.stats.on_ack(req, now_ms())
         if req.flags & REQ_FRAME:
@@ -106,6 +109,17 @@ class Session:
                     self.pending = True
                     self.arrived = time.monotonic()
                 self.cond.notify_all()
+
+    def _wifi(self, signal: int, flags: int) -> None:
+        old = self.wifi
+        self.wifi = (signal, flags)
+        power_save = flags & protocol.WIFI_POWER_SAVE
+        if old is None or (old[1] & protocol.WIFI_POWER_SAVE) != power_save or abs(old[0] - signal) >= 15:
+            log.info("Wi-Fi do PSP: sinal %d%%, economia de energia WLAN %s", signal,
+                     "LIGADA" if power_save else "desligada")
+            if power_save:
+                log.warning("a economia de energia WLAN do PSP segura os pacotes no roteador e aumenta "
+                            "muito a latência: desligue em Ajustes > Ajustes de economia de energia")
 
     def _next_frame(self, last_seq: int):
         """Frame mais novo que last_seq; após KEEPALIVE_S reenvia o último.
@@ -172,16 +186,23 @@ class Session:
             rows.append(summary)
         table = [
             "| q | KB/frame | FPS | fonte (fps) | Wi-Fi (KB/s) | latência média (ms) | p95 (ms) | rede (ms) "
-            "| espera por frame novo (ms) | decode (ms) | PSP recebido->exibido (ms) | reenvios 1 s | pedaços reenviados |",
-            "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+            "| 1º pedaço (ms) | rajada (ms) | vazão na rajada (KB/s) "
+            "| espera por frame novo (ms) | decode (ms) | PSP recebido->exibido (ms) | reenvios 1 s "
+            "| pedaços reenviados | frames perdidos |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
         ] + [
             f"| {r['quality']} | {r['kb_per_frame']:.1f} | {r['fps']:.1f} | "
             f"{'-' if r['source_fps'] is None else format(r['source_fps'], '.1f')} | "
             f"{r['wifi_kbps']:.0f} | {r['latency_ms']:.1f} | {r['latency_p95_ms']:.1f} | {r['transfer_ms']:.1f} | "
+            f"{r['first_ms']:.1f} | {r['burst_ms']:.1f} | {r['burst_kbps']:.0f} | "
             f"{r['wait_ms']:.1f} | {r['decode_ms']:.1f} | {r['local_ms']:.1f} | {r['keepalive']} | "
-            f"{r['resent_pct']:.1f}% |"
+            f"{r['resent_pct']:.1f}% | {r['lost']} |"
             for r in rows
         ]
+        wifi = self.wifi or (0, 0)
+        table.append("")
+        table.append(f"Wi-Fi do PSP: sinal {wifi[0]}%, economia de energia WLAN "
+                     f"{'LIGADA' if wifi[1] & protocol.WIFI_POWER_SAVE else 'desligada'}")
         out = Path(f"bench_{time.strftime('%Y%m%d_%H%M%S')}.md")
         out.write_text(f"Fonte: {self.args.source} {self.args.size[0]}x{self.args.size[1]}, "
                        f"transporte: {self.transport.name.upper()}\n\n" + "\n".join(table) + "\n")
@@ -346,6 +367,8 @@ def parse_args(argv=None):
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+    # A thread de envio acorda mais rápido quando outra thread Python tem o GIL.
+    sys.setswitchinterval(0.001)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     try:
@@ -374,6 +397,8 @@ def main(argv=None) -> int:
     server = Server(source, args, injector)
     threading.Thread(target=server.serve_udp, args=(udp,), name="udp", daemon=True).start()
     log.info("aguardando o PSP em %s:%d, TCP e UDP (coloque este IP no server.txt)", local_ip(), args.port)
+    from netcheck import check_pc_wifi
+    check_pc_wifi(local_ip())
     srv.settimeout(0.5)
     try:
         while True:

@@ -86,6 +86,7 @@ class FakePSP:
             r.ack_frame, r.echo_ts = a[0], a[1]
             r.since_t = clamp_u16((time.monotonic() - a[2]) * 10000)
             r.net_t, r.local_t, r.decode_t = a[3], a[4], a[5]
+            r.first_t, r.burst_t = a[6], a[7]
         data = r.pack() + nack
         if self.args.rtt_ms and self.udp:
             # simula o atraso fixo por pedido (subida no Wi-Fi + reação do servidor)
@@ -192,7 +193,7 @@ class FakePSP:
                         asm.pop(0)
                         self.lost += 1
                     a = {"no": no, "count": fcount, "have": set(), "nacks": 0, "asked": False,
-                         "last_rx": time.monotonic(), "buf": bytearray(fsize), "ts": fts,
+                         "last_rx": time.monotonic(), "t_first": time.monotonic(), "buf": bytearray(fsize), "ts": fts,
                          "t_req": req_q.pop(0) if req_q else time.monotonic()}
                     asm.append(a)
                 if idx not in a["have"]:
@@ -208,7 +209,7 @@ class FakePSP:
                     for older in [x for x in asm if x["no"] < no]:
                         asm.remove(older)
                         self.lost += 1
-                    self.publish((no, a["ts"], bytes(a["buf"]), t_req, t))
+                    self.publish((no, a["ts"], bytes(a["buf"]), t_req, t, a["t_first"]))
                     if self.args.no_prefetch or (not a["asked"] and not req_q):
                         ask(REQ_FRAME)
                 elif (not self.args.no_prefetch and early > 0 and not a["asked"] and not req_q
@@ -226,8 +227,9 @@ class FakePSP:
             self.send_req(REQ_FRAME | REQ_HELLO)
             while self.running:
                 frame_no, size, send_ts = protocol.unpack_frame_header(recv_exact(self.sock, 16, self.throttle))
+                t_first = time.monotonic()
                 jpeg = recv_exact(self.sock, size, self.throttle)
-                self.publish((frame_no, send_ts, jpeg, t_req, time.monotonic()))
+                self.publish((frame_no, send_ts, jpeg, t_req, time.monotonic(), t_first))
                 t_req = time.monotonic()
                 self.send_req(REQ_FRAME)
         except (OSError, ConnectionError, ValueError) as exc:
@@ -268,7 +270,7 @@ class FakePSP:
                     break
                 if self.ready is None:
                     continue
-                frame_no, send_ts, jpeg, t_req, t_recv = self.ready
+                frame_no, send_ts, jpeg, t_req, t_recv, t_first = self.ready
                 self.ready = None
             if self.args.decode_ms:
                 time.sleep(self.args.decode_ms / 1000)
@@ -279,7 +281,8 @@ class FakePSP:
             locals_.append((shown - t_recv) * 1000)
             with self.cond:
                 self.last_ack = (frame_no, send_ts, shown, clamp_u16((t_recv - t_req) * 10000),
-                                 clamp_u16((shown - t_recv) * 10000), clamp_u16(self.args.decode_ms * 10))
+                                 clamp_u16((shown - t_recv) * 10000), clamp_u16(self.args.decode_ms * 10),
+                                 clamp_u16((t_first - t_req) * 10000), clamp_u16((t_recv - t_first) * 10000))
             self.want.set()
         elapsed = time.monotonic() - start
         self.running = False
