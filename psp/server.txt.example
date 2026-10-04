@@ -39,7 +39,7 @@ rxwait=auto
 h264=1
 
 # 1 = aceita H.264 com frames P (servidor com --codec h264p): ~10x menos bytes
-# por frame, decode de ~12 ms em vez de ~4 ms. 0 = o servidor manda todo frame IDR.
+# por frame, decode de ~10,6 ms em vez de ~3,7 ms. 0 = o servidor manda todo frame IDR.
 h264p=1
 
 # Buffer de recepção do socket em KB. Para experimentar: 32, 64, 128

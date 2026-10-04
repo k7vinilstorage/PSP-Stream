@@ -108,6 +108,12 @@ IDR_MIN_INTERVAL_S = 0.15  # pedidos de IDR repetidos enquanto o anterior ainda 
 # qualidade nova (adaptativo) só entra junto de um IDR que já ia sair, ou no
 # máximo a cada QP_CHANGE_MIN_S.
 QP_CHANGE_MIN_S = 3.0
+# IDR a cada tantos pacotes mesmo sem pedido. O openh264 conta frame_num em 15
+# bits e o POC em 16 (as cópias também contam): sem IDR, os dois dão a volta
+# em ~3 min a 60 fps, coisa que vídeo de PSP nunca faz (cada IDR zera os
+# contadores). 1800 pacotes = 30 s a 60 fps = 5400 AUs, longe da volta; o IDR
+# a mais custa ~10 KB a cada 30 s. Também limpa qualquer erro acumulado.
+IDR_EVERY = 1800
 
 
 class H264PEncoder:
@@ -124,9 +130,11 @@ class H264PEncoder:
     Um frame perdido quebra a corrente, e o PSP pede um IDR (PS_REQ_IDR)."""
 
     def __init__(self, width: int, height: int, quality: int, qp_change_min_s: float = QP_CHANGE_MIN_S,
-                 copies: int = COPIES):
+                 copies: int = COPIES, idr_every: int = IDR_EVERY):
         self.width, self.height = width, height
         self.copies = copies
+        self.idr_every = idr_every   # 0 = só quando pedido (teste da volta dos contadores no psp/probe)
+        self._since_idr = 0
         self.quality = quality       # pedida (adaptativo)
         self.qp_change_min_s = qp_change_min_s
         self._qp = None              # em uso
@@ -190,6 +198,9 @@ class H264PEncoder:
     def encode(self, i420: bytes) -> bytes:
         """Pacote: AUD + frame + COPIES x (AUD + cópia)."""
         with self._lock:
+            self._since_idr += 1  # pacotes desde o último IDR, contando este
+            if self.idr_every and self._since_idr >= self.idr_every:
+                self._idr = True
             qp = qp_for_quality(self.quality)
             now = time.monotonic()
             if self._pipe is None or (qp != self._qp and (self._idr or now - self._qp_t >= self.qp_change_min_s)):
@@ -204,6 +215,7 @@ class H264PEncoder:
             first = self._encode_one(i420)
             if is_idr(first):
                 self._last_idr = time.monotonic()
+                self._since_idr = 0
             parts = [AUD, first]
             for _ in range(self.copies):
                 parts += [AUD, self._encode_one(i420)]

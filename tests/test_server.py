@@ -592,6 +592,16 @@ class H264PEncoderTest(unittest.TestCase):
         finally:
             enc.close()
 
+    def test_periodic_idr(self):
+        # sem IDR, frame_num (15 bits) e POC (16 bits) dariam a volta em ~3 min
+        h264 = self.h264
+        enc = h264.H264PEncoder(480, 272, 70, idr_every=5)
+        try:
+            kinds = [h264.is_idr(self.aus(enc.encode(self.raw))[0]) for _ in range(12)]
+        finally:
+            enc.close()
+        self.assertEqual([i for i, k in enumerate(kinds) if k], [0, 5, 10])
+
 
 class UdpRetryResendTest(unittest.TestCase):
     """Pedido repetido com NACK (frames P): reenvia o frame que se perdeu inteiro."""

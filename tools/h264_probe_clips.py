@@ -50,6 +50,15 @@ COMMON = "ref=1:bframes=0:threads=1:sliced-threads=0:rc-lookahead=0:sync-lookahe
 #   - oh_p1_l30: openh264 IPPP, uma chamada por frame, nível 3.0;
 #   - oh_p3_l30: openh264 + 2 cópias, nível 3.0;
 #   - oh_p3_l41: openh264 + 2 cópias, nível 4.1: o que o stream mandou.
+# Os 6 passaram no PSP-3000 (60 frames cada). v4.1, passo 7:
+#   - oh_long: openh264 + 2 cópias, 12000 frames sem IDR (36000 AUs). O
+#     frame_num (15 bits) dá a volta em 32768 AUs e o POC (16 bits, +2 por
+#     AU) também: no stream, ~3 min a 60 fps. Vídeo de PSP nunca chega lá,
+#     porque cada IDR zera os dois. Conteúdo quase parado (fundo cinza, o
+#     número e um quadrado andando) para caber no EBOOT.
+#   - oh_idr30: openh264 + 2 cópias com IDR nos frames 0 e 30. A sonda pula os
+#     frames 20-29, como o stream depois de uma perda (pula os P até o IDR
+#     pedido chegar), e o IDR entra sem Stop.
 # Além do nível, o openh264 usa frame_num de 15 bits e POC tipo 0 (16 bits);
 # o x264 sem B-frames usa 4 bits e POC tipo 2. E as cópias do openh264 têm
 # ~20 bytes, contra ~300 no clipe do x264.
@@ -74,13 +83,34 @@ def raw_frames() -> list[bytes]:
     return [data[i:i + size] for i in range(0, len(data), size)]
 
 
-def openh264(frames, copies=None, level=None) -> bytes:
-    """copies=None: todo frame IDR (H264Encoder); senão H264PEncoder com tantas cópias."""
+LONG_FRAMES = 12000
+
+
+def raw_long():
+    """Frames crus do clipe longo, um por vez (12000 de uma vez não cabem na memória)."""
+    cmd = ["ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i", f"color=c=0x404040:size={W}x{H}:rate=30",
+           "-vf", f"{MARKER},drawbox=x='mod(t*120\\,400)':y=120:w=48:h=48:color=red:t=fill",
+           "-frames:v", str(LONG_FRAMES), "-pix_fmt", "yuv420p", "-f", "rawvideo", "-"]
+    size = W * H * 3 // 2
+    with subprocess.Popen(cmd, stdout=subprocess.PIPE) as proc:
+        while True:
+            frame = proc.stdout.read(size)
+            if len(frame) < size:
+                break
+            yield frame
+    if proc.returncode:
+        raise RuntimeError(f"ffmpeg saiu com {proc.returncode}")
+
+
+def openh264(frames, copies=None, level=None, idr_every=0) -> bytes:
+    """copies=None: todo frame IDR (H264Encoder); senão H264PEncoder com tantas cópias
+    (por padrão sem o IDR periódico do stream, para os contadores darem a volta
+    no clipe longo)."""
     import h264
     if copies is None:
         enc = h264.H264Encoder(W, H, QUALITY)
     else:
-        enc = h264.H264PEncoder(W, H, QUALITY, copies=copies)
+        enc = h264.H264PEncoder(W, H, QUALITY, copies=copies, idr_every=idr_every)
     try:
         out = b"".join(enc.encode(f) for f in frames)
     finally:
@@ -116,10 +146,13 @@ def main() -> int:
         ("oh_p3_l30", 3, split_aus(openh264(frames, copies=2, level=30), AUD)),
         ("oh_p3_l41", 3, split_aus(openh264(frames, copies=2), AUD)),
     ]
+    clips.append(("oh_long", 3, split_aus(openh264(raw_long(), copies=2), AUD)))
+    clips.append(("oh_idr30", 3, split_aus(openh264(frames, copies=2, idr_every=30), AUD)))
     out = bytearray(b"H264PRB1" + struct.pack("<I", len(clips)))
     for name, group, aus in clips:
-        if len(aus) != FRAMES * group:
-            raise ValueError(f"{name}: {len(aus)} AUs, esperava {FRAMES * group}")
+        frames_in = LONG_FRAMES if name == "oh_long" else FRAMES
+        if len(aus) != frames_in * group:
+            raise ValueError(f"{name}: {len(aus)} AUs, esperava {frames_in * group}")
         if group > 1:
             dups = [len(a) for i, a in enumerate(aus) if i % group]
             print(f"  cópias: {sum(dups) / len(dups):.0f} bytes em média, mín. {min(dups)}, máx. {max(dups)}")
@@ -128,7 +161,7 @@ def main() -> int:
         out += struct.pack(f"<II{len(aus)}I", len(aus), len(data), *(len(a) for a in aus))
         out += data
         out += bytes(-len(out) % 4)  # o próximo clipe começa alinhado
-        print(f"{name}: {len(aus)} AUs, {len(data) / FRAMES / 1024:.1f} KB por frame mostrado, "
+        print(f"{name}: {len(aus)} AUs, {len(data) / frames_in / 1024:.1f} KB por frame mostrado, "
               f"1º (IDR) {len(aus[0]) / 1024:.1f} KB")
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_bytes(out)

@@ -748,8 +748,8 @@ Encode no PC: ~1,2 ms o P e ~0,5 ms as 2 cópias (pacote em ~1,5-1,8 ms).
 
 - O decoder do PSP só solta o frame N depois do N+2 (teste v2 acima), e o
   `Stop` zera as referências. Então cada pacote leva o frame e 2 cópias (P
-  sem mudança), e o PSP faz 3 chamadas: **~12 ms de decode** no PSP-3000,
-  contra ~4 ms do IDR + Stop. É o preço medido no teste v2.
+  sem mudança), e o PSP faz 3 chamadas: **10,6 ms de decode** no PSP-3000
+  com o openh264 (teste v4 abaixo), contra 3,7 ms do IDR + Stop.
 - O servidor codifica só o frame que vai mandar. O PSP decodifica todos, em
   ordem, e pula os P sem referência até chegar um IDR (pedido com a flag
   `IDR`).
@@ -794,8 +794,33 @@ AUD, de um buffer alinhado), mas o stream é outro: o openh264 escreve
 `level_idc` 41 (o x264 da v2: 30), POC tipo 0 com 16 bits e `frame_num` de
 15 bits (x264: POC tipo 2, 4 bits). No modo intra isso nunca pesou, porque
 cada frame é IDR + Stop. A sonda v4 (`psp/probe`) separa cada diferença num
-passo e grava antes de cada um, então um desligamento aponta o passo; no
-emulador os 6 passos rodam sem erro, o que não diz nada sobre o hardware.
+passo e grava antes de cada um, então um desligamento aponta o passo.
+
+#### Teste v4 no PSP-3000: o formato não é o problema [PSP]
+
+60 frames por passo (testsrc2 com o número do frame; openh264 em q90). Nada
+desligou:
+
+| passo | chamadas ok | por frame mostrado | cada cópia | atraso |
+|---|---|---|---|---|
+| x264 + 2 cópias, nível 3.0 (v2) | 180/180 | 12,11 ms | 4,02 ms | 0 |
+| x264 + 2 cópias, nível 4.1 | 180/180 | 12,12 ms | 4,02 ms | 0 |
+| openh264 IDR + Stop na VRAM (`--codec h264`) | 60/60 | 3,73 ms (Stop 0,62) | | 0 |
+| openh264 P, 1 chamada, nível 3.0 | 60/60 | 3,55 ms | | 2 |
+| openh264 + 2 cópias, nível 3.0 | 180/180 | **10,63 ms** | 3,53 ms | 0 |
+| openh264 + 2 cópias, nível 4.1 (o stream) | 180/180 | **10,63 ms** | 3,53 ms | 0 |
+
+- O nível declarado não muda nada, e o stream do openh264 com 2 cópias
+  decodifica certo e sem atraso. As cópias do openh264 (~20-80 bytes) custam
+  3,5 ms, contra 4,0 ms das do x264.
+- Então a causa está no que a sonda não tinha: tempo (60 frames contra
+  minutos), conteúdo e perdas de verdade, ou a rede rodando junto.
+- **Suspeito principal:** sem IDR periódico, `frame_num` (15 bits) e o POC
+  (16 bits, +2 por AU) do openh264 dão a volta no AU 32768. Com 3 AUs por
+  frame mostrado, a ~60 fps, isso acontece em ~3 min. Vídeo de PSP nunca
+  chega lá: cada IDR zera os dois. O servidor agora manda um IDR a cada 1800
+  frames (30 s a 60 fps), e a v4.1 testa a volta (passo 7, 12000 frames)
+  e a volta de uma perda pelo IDR sem Stop (passo 8).
 
 Outras causas possíveis que a sonda não cobre:
 - **Modo de espera automático:** o app não chamava `scePowerTick`, então o
@@ -804,7 +829,7 @@ Outras causas possíveis que a sonda não cobre:
   2 s.
 - **Bateria fraca:** 3 decodes por frame gastam mais.
 
-**No PSP (a medir, depois da v4):** `dec` no overlay (esperado ~12 ms, com
+**No PSP (a medir, depois da v4.1):** `dec` no overlay (esperado ~10,6 ms, com
 `h264p`), FPS e latência no log do servidor contra o `--codec h264` na mesma
 cena, o contador `idr` (IDRs pedidos) e `repet` (pedidos repetidos).
 

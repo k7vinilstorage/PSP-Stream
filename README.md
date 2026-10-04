@@ -183,8 +183,9 @@ Para o PSP recusar H.264, use `h264=0` no `server.txt`.
 ### H.264 com frames P (experimental, v0.9)
 
 > **No primeiro teste no PSP-3000, o PSP desligou com `--codec h264p`.** A
-> causa ainda não foi achada. Não use até o teste do decoder v4 (abaixo, em
-> "Teste do decoder H.264 de hardware") apontar o que foi. O `--codec h264`
+> sonda v4 mostrou que o formato em si decodifica bem no PSP (60 frames); a
+> causa ainda não foi achada. Não use até a sonda v4.1 (abaixo, em "Teste do
+> decoder H.264 de hardware") rodar os passos longos. O `--codec h264`
 > (padrão) não usa esse caminho.
 
 ```sh
@@ -201,10 +202,10 @@ verdade, desligou (acima).
 
 O preço:
 
-- **Decode mais caro: ~12 ms em vez de ~4 ms.** O decoder do PSP só solta o
-  frame N depois de receber o N+2. Então cada pacote leva o frame e 2 cópias
-  dele (P sem mudança, ~20 bytes cada), e o PSP faz 3 chamadas de ~4 ms
-  (medido no PSP-3000 com o `psp/probe`).
+- **Decode mais caro: ~10,6 ms em vez de ~3,7 ms.** O decoder do PSP só
+  solta o frame N depois de receber o N+2. Então cada pacote leva o frame e
+  2 cópias dele (P sem mudança, ~20-80 bytes cada), e o PSP faz 3 chamadas
+  (cada cópia 3,5 ms; medido no PSP-3000 com o `psp/probe` v4).
 - **Nenhum frame pode ser pulado.** Cada P depende do anterior: o servidor só
   codifica o frame que vai mandar, e o PSP decodifica todos, em ordem. O
   próximo é pedido quando o decode pega o atual, para não formar fila.
@@ -215,6 +216,9 @@ O preço:
 - **Qualidade adaptativa mais lenta.** O openh264 não troca o QP com o
   encoder rodando: a qualidade nova entra junto de um IDR que o PSP pediu, ou
   no máximo a cada 3 s (cada troca é um IDR).
+- **Um IDR a cada 30 s** (1800 frames), mesmo sem perda: sem ele, os
+  contadores do H.264 (`frame_num`, POC) dão a volta em ~3 min, coisa que
+  vídeo de PSP nunca faz. Custa ~10 KB a cada 30 s.
 
 O overlay mostra `h264p`. Com um EBOOT anterior à v0.9 (ou `h264p=0`), o
 servidor avisa e manda todo frame IDR, como no `--codec h264`.
@@ -352,11 +356,10 @@ Leva alguns segundos. O resultado aparece na tela e fica em
 travar, o arquivo mostra até onde foi). Os clipes vêm de
 `tools/h264_probe_clips.py` (ffmpeg com libx264 e o openh264enc do servidor).
 
-**v4: por que o `--codec h264p` desligou o PSP.** A v2 tinha decodificado
-"frame + 2 cópias" sem problema, com clipes do x264. O stream usa o
-openh264, que difere em três pontos: nível 4.1 em vez de 3.0, POC tipo 0 e
-`frame_num` de 15 bits. A v4 roda 6 passos, do mais seguro para o mais
-arriscado:
+**v4/v4.1: por que o `--codec h264p` desligou o PSP.** A v2 tinha
+decodificado "frame + 2 cópias" sem problema, com clipes do x264. O stream
+usa o openh264, que difere em três pontos: nível 4.1 em vez de 3.0, POC tipo
+0 e `frame_num` de 15 bits. Passos, do mais seguro para o mais arriscado:
 
 1. x264 + 2 cópias, nível 3.0 (o da v2, controle)
 2. x264 + 2 cópias, nível 4.1
@@ -364,11 +367,17 @@ arriscado:
 4. openh264 com frames P, 1 chamada por frame, nível 3.0
 5. openh264 + 2 cópias, nível 3.0
 6. openh264 + 2 cópias, nível 4.1 (o que o stream mandou)
+7. o mesmo, 12000 frames sem IDR: `frame_num` e POC dão a volta no frame
+   ~10900, como no stream depois de ~3 min (~2 min de teste)
+8. openh264 + 2 cópias, perde 10 frames e volta num IDR sem Stop (como o
+   stream depois de uma perda)
 
-Antes de cada passo, o relatório é gravado com "iniciando". Se o PSP
-desligar, ligue e rode a sonda de novo: o passo que desligou é pulado
-(fica em `travou_h264.txt`) e os outros rodam. Mande o `resultado_h264.txt`
-e o `travou_h264.txt`.
+Os passos 1-6 rodaram no PSP-3000 sem desligar (v4). Antes de cada passo, o
+relatório é gravado com "iniciando", e no passo 7 o progresso vai para
+`progresso_h264.txt` a cada 500 frames. Se o PSP desligar, ligue e rode a
+sonda de novo: o passo que desligou é pulado (fica em `travou_h264.txt`) e
+os outros rodam. Mande `resultado_h264.txt`, `travou_h264.txt` e
+`progresso_h264.txt`.
 
 ## 5. Testar sem o PSP
 
