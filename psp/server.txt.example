@@ -20,7 +20,11 @@ overlay=1
 # 1 = os botões e o analógico do PSP viram teclado/mouse no PC
 input=1
 
-# Buffer de recepção TCP em KB (janela TCP). Para experimentar: 32, 64, 128
+# tcp | udp. Com o stream rodando, SELECT+START+L troca e reconecta.
+# (libere as duas portas no firewall do PC: 5123/tcp e 5123/udp)
+transport=tcp
+
+# Buffer de recepção do socket em KB. Para experimentar: 32, 64, 128
 rcvbuf=64
 
 # 1 = ao conectar, mede o decode hw x sw no próprio PSP e mostra na tela

@@ -7,6 +7,11 @@ escrita a /dev/uinput (ver README).
 Os botões viram teclas assim que o pedido chega. O analógico vira movimento
 de mouse numa thread a 125 Hz: o PSP só manda a posição quando ela muda, e o
 servidor integra a velocidade.
+
+Tecla presa: enquanto algo está segurado, o PSP reafirma o estado a cada
+~100 ms. Se passar `timeout` sem nenhuma mensagem (Wi-Fi travou, TCP
+retransmitindo, PSP congelou), o servidor solta tudo em vez de manter a
+última tecla apertada até a rede voltar.
 """
 import json
 import logging
@@ -82,7 +87,7 @@ class _UInput:
 
 
 class Injector:
-    def __init__(self, profile: dict, dry_run: bool = False, speed_scale: float = 1.0):
+    def __init__(self, profile: dict, dry_run: bool = False, speed_scale: float = 1.0, timeout: float = 0.5):
         self.buttons = {}  # máscara PSP -> lista de códigos evdev
         for name, action in profile.get("buttons", {}).items():
             if name not in PSP_BUTTONS:
@@ -105,9 +110,11 @@ class Injector:
         self.ax = self.ay = 0.0
         self.analog_dirs = set()
         self.frac = [0.0, 0.0]
+        self.timeout = timeout
+        self.last_update = time.monotonic()
+        self.timed_out = False
         self.running = True
-        if self.mode == "mouse":
-            threading.Thread(target=self._mouse_loop, name="mouse", daemon=True).start()
+        threading.Thread(target=self._loop, name="input", daemon=True).start()
 
     @staticmethod
     def _validate(codes):
@@ -140,6 +147,8 @@ class Injector:
 
     def update(self, buttons: int, lx: int, ly: int) -> None:
         with self.lock:
+            self.last_update = time.monotonic()
+            self.timed_out = False
             changed = buttons ^ self.prev
             for mask, combo in self.buttons.items():
                 if changed & mask:
@@ -166,10 +175,21 @@ class Injector:
                         self._press(self.analog_keys[d], True)
                 self.analog_dirs = dirs
 
-    def _mouse_loop(self):
+    def _active(self) -> bool:
+        return bool(self.prev or self.ax or self.ay or any(n > 0 for n in self.held.values()))
+
+    def _loop(self):
         period = 1.0 / MOUSE_HZ
         while self.running:
             time.sleep(period)
+            if self.timeout and not self.timed_out and self._active() and \
+                    time.monotonic() - self.last_update > self.timeout:
+                log.warning("controles: PSP sem mandar nada há %.0f ms, soltando tudo",
+                            (time.monotonic() - self.last_update) * 1000)
+                self.release_all()
+                self.timed_out = True
+            if self.mode != "mouse":
+                continue
             with self.lock:
                 if not (self.ax or self.ay):
                     self.frac = [0.0, 0.0]

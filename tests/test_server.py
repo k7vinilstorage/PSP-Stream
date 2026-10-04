@@ -2,12 +2,17 @@
 
   python3 -m unittest discover tests
 """
+import argparse
+import socket
 import sys
+import threading
+import time
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "server"))
+sys.path.insert(0, str(ROOT / "tools"))
 
 import protocol  # noqa: E402
 from adaptive import AdaptiveQuality  # noqa: E402
@@ -41,6 +46,66 @@ class ProtocolTest(unittest.TestCase):
         self.assertIn('0x31435350u /* "PSC1" */', header)
         self.assertEqual(int.from_bytes(protocol.MAGIC_REQ, "little"), 0x31435350)
         self.assertEqual(int.from_bytes(protocol.MAGIC_FRAME, "little"), 0x31465350)
+
+
+class UdpChunkTest(unittest.TestCase):
+    def test_chunk_roundtrip(self):
+        jpeg = bytes(range(256)) * 23  # 5888 bytes -> 5 pedaços, o último com 288
+        count = protocol.chunk_count(len(jpeg))
+        self.assertEqual(count, 5)
+        rebuilt = bytearray(len(jpeg))
+        for i in reversed(range(count)):  # fora de ordem de propósito
+            frame_no, size, ts, idx, n, payload = protocol.unpack_chunk(protocol.pack_chunk(9, jpeg, 77, i))
+            self.assertEqual((frame_no, size, ts, idx, n), (9, len(jpeg), 77, i, count))
+            rebuilt[idx * protocol.CHUNK_PAYLOAD: idx * protocol.CHUNK_PAYLOAD + len(payload)] = payload
+        self.assertEqual(bytes(rebuilt), jpeg)
+        self.assertEqual(len(protocol.pack_chunk(9, jpeg, 77, 4)), 20 + 288)
+
+    def test_datagram_fits_802_11(self):
+        jpeg = bytes(protocol.MAX_JPEG)
+        self.assertLessEqual(len(protocol.pack_chunk(1, jpeg, 0, 0)) + 28, 1500)  # + IP/UDP
+        self.assertLessEqual(protocol.chunk_count(len(jpeg)), protocol.MAX_CHUNKS)
+
+    def test_nack_roundtrip(self):
+        self.assertEqual(protocol.unpack_nack(protocol.pack_nack(3, [0, 5, 31, 32, 200, 255])),
+                         (3, [0, 5, 31, 32, 200, 255]))
+
+    def test_matches_c_header(self):
+        header = (ROOT / "psp/src/protocol.h").read_text()
+        self.assertIn('0x31555350u /* "PSU1" */', header)
+        self.assertEqual(int.from_bytes(protocol.MAGIC_CHUNK, "little"), 0x31555350)
+        self.assertIn(f"#define PS_CHUNK_PAYLOAD {protocol.CHUNK_PAYLOAD}", header)
+        self.assertIn(f"#define PS_MAX_CHUNKS {protocol.MAX_CHUNKS}", header)
+        self.assertIn(f"#define PS_REQ_BYE 0x{protocol.REQ_BYE:04x}", header)
+
+
+class UdpEndToEndTest(unittest.TestCase):
+    """Servidor UDP de verdade + cliente falso (mesma lógica do PSP) com perda."""
+
+    def test_stream_with_loss(self):
+        import pspstream
+        from sources import StaticSource
+        import fake_client
+
+        card = (ROOT / "assets/testcard.jpg").read_bytes()
+        args = argparse.Namespace(adaptive=False, bench=None, stats_interval=60, target_fps=30, q_min=25,
+                                  q_max=90, udp_pace=0, source="static", size=(480, 272))
+        server = pspstream.Server(StaticSource(card), args, None)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        threading.Thread(target=server.serve_udp, args=(sock,), daemon=True).start()
+        try:
+            client_args = argparse.Namespace(host="127.0.0.1", port=port, transport="udp", loss=0.05, kbps=0,
+                                             decode_ms=5, no_prefetch=False, frames=0, seconds=2.0,
+                                             input_demo=False)
+            summary, jpeg = fake_client.FakePSP(client_args).run()
+        finally:
+            server.close()
+            sock.close()
+        self.assertGreater(summary["frames"], 20)
+        self.assertGreater(summary["nacks"], 0)        # perdas aconteceram e foram pedidas de novo
+        self.assertEqual(jpeg, card)                   # e o frame chegou inteiro
 
 
 class JpegInfoTest(unittest.TestCase):
@@ -94,6 +159,16 @@ class InjectorTest(unittest.TestCase):
         self.assertAlmostEqual(inj._axis(255), 1.0)
         self.assertAlmostEqual(inj._axis(1), -1.0)
         self.assertLess(inj._axis(192), 0.5)  # curva: meio curso < metade da velocidade
+        inj.close()
+
+    def test_watchdog_releases_stuck_keys(self):
+        inj = Injector(load_profile(str(ROOT / "server/keymap.json"), "jogo"), dry_run=True, timeout=0.1)
+        inj.update(PSP_BUTTONS["CROSS"], 255, 128)  # tecla + analógico segurados
+        time.sleep(0.35)                             # PSP "sumiu"
+        self.assertIn(("KEY_SPACE", False), self.keys(inj))
+        self.assertEqual((inj.ax, inj.ay), (0.0, 0.0))
+        inj.update(PSP_BUTTONS["CROSS"], 128, 128)  # voltou ainda segurando: aperta de novo
+        self.assertEqual(self.keys(inj)[-1], ("KEY_SPACE", True))
         inj.close()
 
     def test_analog_keys_mode(self):

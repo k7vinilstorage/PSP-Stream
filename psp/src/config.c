@@ -11,6 +11,7 @@
  *   rcvbuf=64        (KB)
  *   bench=0          (1 = mede decode hw x sw no primeiro frame)
  *   input=1          (1 = controles do PSP viram teclado/mouse no PC)
+ *   transport=tcp    (tcp | udp)
  */
 #include "config.h"
 #include "decode.h"
@@ -54,6 +55,8 @@ static void set_key(ps_config_t *cfg, const char *key, const char *value)
         cfg->bench = v;
     else if (!strcmp(key, "input"))
         cfg->input = v;
+    else if (!strcmp(key, "transport"))
+        cfg->udp = !strcmp(value, "udp");
     else if (!strcmp(key, "exit_after"))
         cfg->exit_after = v;
 }

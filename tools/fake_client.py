@@ -8,6 +8,8 @@ ele produz são SIMULADOS. Os reais vêm do PSP (overlay e log do servidor).
 """
 import argparse
 import json
+import random
+import select
 import socket
 import sys
 import threading
@@ -46,12 +48,26 @@ def recv_exact(sock, size, throttle):
     return bytes(buf)
 
 
+# Mesmos tempos do cliente PSP (stream.c)
+CHUNK_GAP_S = 0.020    # sem pedaço novo por 20 ms com frame incompleto: NACK
+MAX_NACKS = 3          # depois disso desiste do frame e pede outro
+REQ_RETRY_S = 0.200    # pedido sem resposta: reenvia
+STALL_S = 3.0          # nada completo por 3 s: recomeça (HELLO)
+
+
 class FakePSP:
     def __init__(self, args):
         self.args = args
-        self.sock = socket.create_connection((args.host, args.port), timeout=10)
-        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        self.udp = args.transport == "udp"
+        if self.udp:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.dest = (socket.gethostbyname(args.host), args.port)
+        else:
+            self.sock = socket.create_connection((args.host, args.port), timeout=10)
+            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.throttle = Throttle(args.kbps)
+        self.lost = 0      # frames incompletos abandonados (UDP)
+        self.nacks = 0
         self.cond = threading.Condition()
         self.ready = None          # frame mais novo ainda não decodificado
         self.last_ack = None       # (frame_no, send_ts, shown_at, net_t, local_t, decode_t)
@@ -62,7 +78,7 @@ class FakePSP:
         self.running = True
         self.buttons, self.lx, self.ly = 0, 128, 128
 
-    def send_req(self, flags):
+    def send_req(self, flags, nack=b""):
         r = Request(flags=flags, buttons=self.buttons, lx=self.lx, ly=self.ly)
         with self.cond:
             a = self.last_ack
@@ -71,7 +87,92 @@ class FakePSP:
             r.since_t = clamp_u16((time.monotonic() - a[2]) * 10000)
             r.net_t, r.local_t, r.decode_t = a[3], a[4], a[5]
         with self.send_lock:
-            self.sock.sendall(r.pack())
+            if self.udp:
+                self.sock.sendto(r.pack() + nack, self.dest)
+            else:
+                self.sock.sendall(r.pack())
+
+    def publish(self, frame):
+        with self.cond:
+            if self.ready is not None:
+                self.dropped += 1
+            self.ready = frame
+            self.cond.notify_all()
+        if self.args.no_prefetch:
+            self.want.wait()
+            self.want.clear()
+
+    def net_loop_udp(self):
+        """Remonta os pedaços como o stream.c do PSP: NACK, desistência e reenvio de pedido."""
+        P = protocol.CHUNK_PAYLOAD
+        try:
+            t_req = last_req = time.monotonic()
+            self.send_req(REQ_FRAME | REQ_HELLO)
+            cur, buf, have, count, complete = 0, None, set(), 0, True
+            size = send_ts = 0
+            last_rx = last_done = time.monotonic()
+            nacks = 0
+            while self.running:
+                now = time.monotonic()
+                if not complete:
+                    timeout = CHUNK_GAP_S - (now - last_rx)
+                else:
+                    timeout = REQ_RETRY_S - (now - last_req)
+                if timeout <= 0:
+                    if not complete and nacks < MAX_NACKS:
+                        missing = [i for i in range(count) if i not in have]
+                        self.send_req(protocol.REQ_NACK, protocol.pack_nack(cur, missing))
+                        nacks += 1
+                        self.nacks += 1
+                        last_rx = time.monotonic()
+                    else:
+                        if not complete:  # desiste do frame
+                            self.lost += 1
+                            complete = True
+                            t_req = time.monotonic()
+                        stalled = time.monotonic() - last_done > STALL_S
+                        self.send_req(REQ_FRAME | (REQ_HELLO if stalled else 0))
+                        last_req = time.monotonic()
+                    continue
+                r, _, _ = select.select([self.sock], [], [], timeout)
+                if not r:
+                    continue
+                data, _ = self.sock.recvfrom(2048)
+                if self.args.loss and random.random() < self.args.loss:
+                    continue  # pacote "perdido no Wi-Fi"
+                self.throttle.consume(len(data))
+                try:
+                    frame_no, fsize, fts, idx, fcount, payload = protocol.unpack_chunk(data)
+                except (ValueError, Exception):
+                    continue
+                if fsize > protocol.MAX_JPEG or fcount != protocol.chunk_count(fsize) or idx >= fcount:
+                    continue
+                if len(payload) != (fsize - idx * P if idx == fcount - 1 else P):
+                    continue
+                stalled = time.monotonic() - last_done > STALL_S
+                if frame_no < cur and stalled:
+                    cur = 0  # servidor reiniciou a numeração
+                if frame_no < cur or (frame_no == cur and complete):
+                    continue
+                if frame_no > cur:
+                    if not complete:
+                        self.lost += 1
+                    cur, size, send_ts, count = frame_no, fsize, fts, fcount
+                    buf, have, complete, nacks = bytearray(fsize), set(), False, 0
+                if idx not in have:
+                    have.add(idx)
+                    buf[idx * P: idx * P + len(payload)] = payload
+                last_rx = time.monotonic()
+                if len(have) == count:
+                    complete = True
+                    last_done = time.monotonic()
+                    self.publish((cur, send_ts, bytes(buf), t_req, last_done))
+                    t_req = last_req = time.monotonic()
+                    self.send_req(REQ_FRAME)
+        except (OSError, ValueError) as exc:
+            self.error = exc
+            with self.cond:
+                self.cond.notify_all()
 
     def net_loop(self):
         try:
@@ -80,15 +181,7 @@ class FakePSP:
             while self.running:
                 frame_no, size, send_ts = protocol.unpack_frame_header(recv_exact(self.sock, 16, self.throttle))
                 jpeg = recv_exact(self.sock, size, self.throttle)
-                frame = (frame_no, send_ts, jpeg, t_req, time.monotonic())
-                with self.cond:
-                    if self.ready is not None:
-                        self.dropped += 1
-                    self.ready = frame
-                    self.cond.notify_all()
-                if self.args.no_prefetch:
-                    self.want.wait()
-                    self.want.clear()
+                self.publish((frame_no, send_ts, jpeg, t_req, time.monotonic()))
                 t_req = time.monotonic()
                 self.send_req(REQ_FRAME)
         except (OSError, ConnectionError, ValueError) as exc:
@@ -111,7 +204,7 @@ class FakePSP:
                 return
 
     def run(self):
-        threading.Thread(target=self.net_loop, daemon=True).start()
+        threading.Thread(target=self.net_loop_udp if self.udp else self.net_loop, daemon=True).start()
         if self.args.input_demo:
             threading.Thread(target=self.input_demo, daemon=True).start()
         sizes, nets, locals_ = [], [], []
@@ -154,6 +247,8 @@ class FakePSP:
             "net_ms": round(sum(nets) / len(nets), 1) if nets else 0,
             "local_ms": round(sum(locals_) / len(locals_), 1) if locals_ else 0,
             "dropped": self.dropped,
+            "lost": self.lost,
+            "nacks": self.nacks,
         }, jpeg
 
 
@@ -163,6 +258,8 @@ def main(argv=None):
     p.add_argument("--port", type=int, default=protocol.DEFAULT_PORT)
     p.add_argument("--frames", type=int, default=100, help="quantos frames exibir")
     p.add_argument("--seconds", type=float, default=0, help="ou rodar por N segundos")
+    p.add_argument("--transport", choices=["tcp", "udp"], default="tcp")
+    p.add_argument("--loss", type=float, default=0, help="UDP: fração de pacotes perdidos (ex.: 0.02)")
     p.add_argument("--kbps", type=float, default=0, help="limitar a vazão (KB/s), ex.: 400")
     p.add_argument("--decode-ms", type=float, default=0, help="simular o tempo de decode do PSP")
     p.add_argument("--no-prefetch", action="store_true",
@@ -180,7 +277,8 @@ def main(argv=None):
         print(json.dumps(summary))
     else:
         print("{frames} frames em {seconds} s: {fps} fps, {kb_per_frame} KB/frame, {kbps} KB/s, "
-              "rede {net_ms} ms, local {local_ms} ms, descartados {dropped}".format(**summary))
+              "rede {net_ms} ms, local {local_ms} ms, descartados {dropped}, perdidos {lost}, "
+              "NACKs {nacks}".format(**summary))
     return 0
 
 

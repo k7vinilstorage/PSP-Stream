@@ -7,7 +7,44 @@ Cada número aqui tem uma origem, e elas não se misturam:
 | **[PC]** | medido de verdade no PC de desenvolvimento (CPU x86, 4 núcleos) | sim, para a parte do PC (tamanho de frame, custo de captura/encode) |
 | **[SIM]** | `tools/fake_client.py` com Wi-Fi e decode simulados | não: é um modelo do pipeline |
 | **[EMU]** | PPSSPPHeadless | não: o tempo emulado não é o tempo do hardware |
-| **[PSP]** | PSP-3000 real | **falta medir** (seção "Como medir no hardware") |
+| **[PSP]** | PSP-3000 real (ARK-4) + Fedora 44, medido pelo usuário | sim |
+
+## 0. Números reais do PSP [PSP]
+
+### Decode (`bench=1`, frame 480x272)
+
+| decoder | q20 | q70 | q90 |
+|---|---|---|---|
+| hw (sceJpeg) | ~7,9 ms | 7,91 ms | ~7,9 ms |
+| sw (libjpeg-turbo) | ~34 ms | 34 ms | ~34 ms |
+
+O hardware é ~4,3x mais rápido, e o tempo quase não depende da qualidade.
+Com o hw, o decode limitaria o stream só acima de ~120 fps, então o gargalo
+fica todo na rede. O `decoder=auto` já usa o hw.
+
+### Primeiro `--bench` (TCP, `--source portal`, tela real)
+
+| q | KB/frame | FPS | Wi-Fi (KB/s) | latência média (ms) | p95 (ms) | rede (ms) | decode (ms) | PSP recebido->exibido (ms) |
+|---|---|---|---|---|---|---|---|---|
+| 30 | 11.1 | 3.5 | 235 | 129.9 | 775.4 | 83.2 | 7.6 | 18.5 |
+| 50 | 15.2 | 6.7 | 315 | 90.7 | 106.0 | 58.5 | 7.6 | 9.4 |
+| 70 | 20.7 | 6.2 | 356 | 110.5 | 163.7 | 81.3 | 7.7 | 8.9 |
+| 90 | 36.4 | 3.0 | 316 | 214.2 | 960.1 | 173.4 | 8.7 | 10.0 |
+
+Leitura:
+
+- **Vazão real do Wi-Fi: ~235-356 KB/s** (mediana por frame). Ficou dentro da
+  faixa esperada para 802.11b com TCP.
+- **O FPS (3-7) não é limite da rede.** Em q50, 58 ms de rede + 8 ms de decode
+  dariam ~15 fps. Os ~80 ms que faltam por frame são o servidor **esperando
+  frame novo do portal**: o GNOME só manda frame quando a tela muda. Essa
+  versão da tabela ainda não mostrava essa espera; as colunas "fonte (fps)" e
+  "espera por frame novo" foram adicionadas depois deste teste.
+- **O p95 de 775/960 ms é artefato**: com a tela parada, o servidor reenvia o
+  último frame a cada 1 s, e esse reenvio entrava na média com "idade" de
+  ~1 s. Agora ele fica de fora e é contado em "reenvios 1 s".
+- A rede é a maior parte da latência que sobra (58-81 ms em q50-q70). Por
+  isso vale comparar com o transporte UDP.
 
 ## 1. Tamanho de frame [PC]
 
@@ -153,13 +190,25 @@ Esse número inclui tudo: compositor, captura, encode, Wi-Fi, decode, vsync e
 o LCD do PSP. A diferença para a "latência" do log do servidor é a parte que
 o servidor não enxerga (compositor e LCD).
 
-### 5.4 Ajustes para comparar (atalhos SELECT + START + botão)
+### 5.4 TCP x UDP
+
+Rode o mesmo `--bench` duas vezes, uma com `transport=tcp` e outra com
+`transport=udp` no `server.txt` (ou troque com SELECT+START+L e reinicie o
+benchmark). O transporte sai no cabeçalho da tabela. Compare as colunas
+"Wi-Fi (KB/s)", "rede (ms)" e "p95". A coluna "pedaços reenviados" mostra
+quanto o Wi-Fi está perdendo. Para o conteúdo não variar entre as rodadas,
+use `--source static --image captura.png`.
+
+Libere as duas portas no firewall: `sudo firewall-cmd --add-port=5123/tcp --add-port=5123/udp`.
+
+### 5.5 Ajustes para comparar (atalhos SELECT + START + botão)
 
 | atalho | o quê | o que observar |
 |---|---|---|
 | quadrado | decoder hw <-> sw | decode (ms) no overlay |
 | círculo | vsync on/off | rasgo na imagem x ~8 ms de latência média |
 | X | prefetch on/off | FPS (sem prefetch: rede + decode em série) |
+| L | transporte TCP <-> UDP (reconecta) | rede, FPS, p95 |
 | triângulo | overlay | — |
 
 Também vale testar a **"Economia de energia WLAN"** do XMB ligada e
@@ -169,9 +218,10 @@ desligada. O PSPStream avisa na tela quando ela está ligada.
 
 | teste | resultado |
 |---|---|
-| decode sw, q70 (ms/frame) | |
-| decode hw, q70 (ms/frame) | |
-| vazão Wi-Fi medida (KB/s, coluna "Wi-Fi" do bench) | |
+| decode sw, q70 (ms/frame) | 34 |
+| decode hw, q70 (ms/frame) | 7,91 |
+| vazão Wi-Fi medida, TCP (KB/s, coluna "Wi-Fi" do bench) | 235-356 |
+| vazão Wi-Fi medida, UDP (KB/s) | |
 | FPS em q50 / q70 (bench) | |
 | latência servidor (captura -> exibido), q adaptativo | |
 | latência vidro a vidro (câmera) | |

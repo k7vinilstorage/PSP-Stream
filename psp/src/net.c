@@ -11,6 +11,7 @@
 #include <psputility.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -168,6 +169,57 @@ int net_recv_all(int sock, void *buf, int len)
         len -= n;
     }
     return 0;
+}
+
+int net_open_udp(const char *host, int port, int rcvbuf_kb, struct sockaddr_in *dest)
+{
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0)
+        return sock;
+    /* Um frame inteiro (até ~40 pedaços) pode chegar numa rajada. */
+    int rcvbuf = rcvbuf_kb * 1024;
+    setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+
+    memset(dest, 0, sizeof(*dest));
+    dest->sin_len = sizeof(*dest);
+    dest->sin_family = AF_INET;
+    dest->sin_port = htons(port);
+    dest->sin_addr.s_addr = inet_addr(host);
+    return sock;
+}
+
+int net_sendto(int sock, const struct sockaddr_in *dest, const void *buf, int len)
+{
+    for (;;) {
+        int n = sendto(sock, buf, len, 0, (const struct sockaddr *)dest, sizeof(*dest));
+        if (n < 0 && retry_later())
+            continue;
+        return n == len ? 0 : -1;
+    }
+}
+
+int net_wait_readable(int sock, unsigned timeout_us)
+{
+    fd_set rd;
+    FD_ZERO(&rd);
+    FD_SET(sock, &rd);
+    struct timeval tv = {timeout_us / 1000000, timeout_us % 1000000};
+    int r = select(sock + 1, &rd, NULL, NULL, &tv);
+    if (r < 0 && (errno == EAGAIN || errno == EINTR))
+        return 0;
+    return r < 0 ? r : (r > 0 && FD_ISSET(sock, &rd));
+}
+
+int net_recv_dgram(int sock, void *buf, int len)
+{
+    /* Endereço de origem de verdade em vez de NULL: o PPSSPP devolve EFAULT
+     * com NULL (e não custa nada no PSP). */
+    struct sockaddr_in from;
+    socklen_t fromlen = sizeof(from);
+    int n = recvfrom(sock, buf, len, 0, (struct sockaddr *)&from, &fromlen);
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+        return 0;
+    return n;
 }
 
 void net_abort(int sock)

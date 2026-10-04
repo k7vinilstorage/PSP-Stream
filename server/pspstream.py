@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """PSPStream - servidor.
 
-Envia a tela do PC ao PSP como MJPEG usando o modelo "pull" sobre TCP: o PSP
-pede um frame, o servidor responde com o mais recente e descarta os antigos.
-Assim nunca se forma fila na rede, e a latência fica perto de um frame.
+Envia a tela do PC ao PSP como MJPEG no modelo "pull": o PSP pede um frame, o
+servidor responde com o mais recente e descarta os antigos. Assim nunca se
+forma fila na rede, e a latência fica perto de um frame. O transporte pode ser
+TCP ou UDP (o PSP escolhe no server.txt); o servidor atende os dois na mesma
+porta.
 """
 import argparse
 import logging
@@ -11,30 +13,18 @@ import socket
 import sys
 import threading
 import time
-from collections import deque
 from pathlib import Path
 
 import protocol
 from protocol import REQ_FRAME, REQ_HELLO, Request
 from stats import SessionStats, format_summary, now_ms
+from transports import TcpTransport, UdpTransport, parse_datagram
 
 log = logging.getLogger("pspstream")
 
 # Sem frame novo por este tempo, reenvia o último para a conexão não morrer
 # (no Wayland o compositor só manda frames quando a tela muda).
 KEEPALIVE_S = 1.0
-# Sem nenhuma mensagem do PSP por este tempo, a conexão é dada como morta.
-IDLE_TIMEOUT_S = 10.0
-
-
-def recv_exact(conn: socket.socket, size: int) -> bytes:
-    buf = bytearray()
-    while len(buf) < size:
-        chunk = conn.recv(size - len(buf))
-        if not chunk:
-            raise ConnectionError("PSP fechou a conexão")
-        buf += chunk
-    return bytes(buf)
 
 
 def local_ip() -> str:
@@ -48,9 +38,11 @@ def local_ip() -> str:
 
 
 class Session:
-    def __init__(self, conn, addr, source, args, injector=None):
-        self.conn = conn
-        self.addr = addr
+    """Um PSP conectado. O transporte (TCP/UDP) entrega pedidos e envia frames."""
+
+    def __init__(self, transport, source, args, injector=None):
+        self.transport = transport
+        transport.session = self  # antes de qualquer pedido chegar (UDP entrega na hora)
         self.source = source
         self.args = args
         self.injector = injector
@@ -58,19 +50,17 @@ class Session:
         if args.adaptive and not args.bench and source.quality is not None:
             from adaptive import AdaptiveQuality
             adaptive = AdaptiveQuality(source, args.target_fps, args.q_min, args.q_max)
-        self.stats = SessionStats(args.stats_interval, adaptive)
+        self.stats = SessionStats(args.stats_interval, adaptive, source, transport)
         self.cond = threading.Condition()
-        self.pending = 0
-        self.arrivals = deque()  # quando cada pedido de frame chegou
+        self.pending = False   # há um pedido de frame esperando resposta
+        self.arrived = 0.0     # quando esse pedido chegou
         self.alive = True
         self.frame_no = 0
-        conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        conn.settimeout(IDLE_TIMEOUT_S)
+        self.hello_seen = False
 
     def run(self) -> None:
-        log.info("PSP conectado: %s:%d", *self.addr)
-        reader = threading.Thread(target=self._reader, name="reader", daemon=True)
-        reader.start()
+        log.info("PSP conectado via %s: %s:%d", self.transport.name.upper(), *self.transport.addr)
+        self.transport.start(self)
         if self.args.bench:
             threading.Thread(target=self._bench, name="bench", daemon=True).start()
         try:
@@ -91,89 +81,80 @@ class Session:
                 return
             self.alive = False
             self.cond.notify_all()
-        try:
-            self.conn.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
-        self.conn.close()
+        self.transport.close()
 
-    def _reader(self) -> None:
-        try:
-            while self.alive:
-                req = Request.unpack(recv_exact(self.conn, protocol.REQ_STRUCT.size))
-                self._on_request(req)
-        except socket.timeout:
-            log.info("PSP ficou %.0f s sem responder", IDLE_TIMEOUT_S)
-        except (OSError, ConnectionError, ValueError) as exc:
-            if self.alive:
-                log.info("leitura terminou: %s", exc)
-        finally:
+    def on_request(self, req: Request) -> None:
+        if req.flags & protocol.REQ_BYE:
+            log.info("PSP saiu")
             self.close()
-
-    def _on_request(self, req: Request) -> None:
+            return
         if req.flags & REQ_HELLO:
-            log.info("PSP iniciou o stream")
+            if not self.hello_seen:
+                log.info("PSP iniciou o stream")
+            else:
+                log.debug("HELLO repetido (PSP achou que o stream parou)")
+            self.hello_seen = True
         if self.injector:
             self.injector.update(req.buttons, req.lx, req.ly)
         if req.ack_frame:
             self.stats.on_ack(req, now_ms())
         if req.flags & REQ_FRAME:
             with self.cond:
-                self.pending += 1
-                self.arrivals.append(time.monotonic())
+                # No máximo um pedido pendente: pedidos repetidos (o PSP reenvia
+                # no UDP se a resposta demora) não viram uma rajada de frames.
+                if not self.pending:
+                    self.pending = True
+                    self.arrived = time.monotonic()
                 self.cond.notify_all()
 
     def _next_frame(self, last_seq: int):
-        """Frame mais novo que last_seq; após KEEPALIVE_S reenvia o último."""
+        """Frame mais novo que last_seq; após KEEPALIVE_S reenvia o último.
+        Devolve (seq, jpeg, ready_t, reenvio) ou None."""
         if self.source.repeat:
-            return self.source.latest()
+            return (*self.source.latest(), False)
         deadline = time.monotonic() + KEEPALIVE_S
         while self.alive:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                return self.source.latest()
+                return (*self.source.latest(), True)
             got = self.source.wait_newer(last_seq, min(remaining, 0.1))
             if got:
-                return got
+                return (*got, False)
         return None
 
     def _sender(self) -> None:
         last_seq = 0
         while True:
             with self.cond:
-                self.cond.wait_for(lambda: self.pending > 0 or not self.alive)
+                self.cond.wait_for(lambda: self.pending or not self.alive)
                 if not self.alive:
                     return
-                self.pending -= 1
-                arrived = self.arrivals.popleft() if self.arrivals else time.monotonic()
+                arrived = self.arrived
             got = self._next_frame(last_seq)
             if got is None:
                 return
-            seq, jpeg, ready_t = got
+            seq, jpeg, ready_t, resend = got
             if jpeg is None:  # fonte ainda não produziu nada
-                with self.cond:
-                    self.pending += 1
-                    self.arrivals.appendleft(arrived)
                 time.sleep(0.01)
                 continue
-            last_seq = seq
             if len(jpeg) > protocol.MAX_JPEG:
                 log.warning("frame de %d KB excede o limite de %d KB; descartado",
                             len(jpeg) // 1024, protocol.MAX_JPEG // 1024)
-                with self.cond:
-                    self.pending += 1
-                    self.arrivals.appendleft(arrived)
+                last_seq = seq
                 continue
+            with self.cond:
+                self.pending = False
+            last_seq = seq
             self.frame_no += 1
             send_ms = now_ms()
             age_ms = (time.monotonic() - ready_t) * 1000 if not self.source.repeat else 0.0
             wait_ms = (time.monotonic() - arrived) * 1000
-            self.conn.sendall(protocol.pack_frame_header(self.frame_no, len(jpeg), send_ms) + jpeg)
-            self.stats.on_send(self.frame_no, send_ms, age_ms, len(jpeg), wait_ms, self.source.capture_ms)
+            self.transport.send_frame(self.frame_no, jpeg, send_ms)
+            self.stats.on_send(self.frame_no, send_ms, age_ms, len(jpeg), wait_ms, self.source.capture_ms, resend)
             self.stats.maybe_report(self.source.quality)
 
     def _bench(self) -> None:
-        """Varre qualidades fixas e imprime uma tabela (Marco 3, números do hardware)."""
+        """Varre qualidades fixas e imprime uma tabela (números do hardware)."""
         qualities = [int(q) for q in self.args.bench.split(",")]
         rows = []
         for q in qualities:
@@ -190,17 +171,81 @@ class Session:
             log.info("benchmark q%s: %s", q, format_summary(summary))
             rows.append(summary)
         table = [
-            "| q | KB/frame | FPS | Wi-Fi (KB/s) | latência média (ms) | p95 (ms) | rede (ms) | decode (ms) | PSP recebido->exibido (ms) |",
-            "|---|---|---|---|---|---|---|---|---|",
+            "| q | KB/frame | FPS | fonte (fps) | Wi-Fi (KB/s) | latência média (ms) | p95 (ms) | rede (ms) "
+            "| espera por frame novo (ms) | decode (ms) | PSP recebido->exibido (ms) | reenvios 1 s | pedaços reenviados |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
         ] + [
-            f"| {r['quality']} | {r['kb_per_frame']:.1f} | {r['fps']:.1f} | {r['wifi_kbps']:.0f} | "
-            f"{r['latency_ms']:.1f} | {r['latency_p95_ms']:.1f} | {r['transfer_ms']:.1f} | "
-            f"{r['decode_ms']:.1f} | {r['local_ms']:.1f} |"
+            f"| {r['quality']} | {r['kb_per_frame']:.1f} | {r['fps']:.1f} | "
+            f"{'-' if r['source_fps'] is None else format(r['source_fps'], '.1f')} | "
+            f"{r['wifi_kbps']:.0f} | {r['latency_ms']:.1f} | {r['latency_p95_ms']:.1f} | {r['transfer_ms']:.1f} | "
+            f"{r['wait_ms']:.1f} | {r['decode_ms']:.1f} | {r['local_ms']:.1f} | {r['keepalive']} | "
+            f"{r['resent_pct']:.1f}% |"
             for r in rows
         ]
         out = Path(f"bench_{time.strftime('%Y%m%d_%H%M%S')}.md")
-        out.write_text(f"Fonte: {self.args.source} {self.args.size[0]}x{self.args.size[1]}\n\n" + "\n".join(table) + "\n")
+        out.write_text(f"Fonte: {self.args.source} {self.args.size[0]}x{self.args.size[1]}, "
+                       f"transporte: {self.transport.name.upper()}\n\n" + "\n".join(table) + "\n")
         log.info("benchmark concluído, tabela salva em %s:\n%s", out, "\n".join(table))
+
+
+class Server:
+    """Um PSP por vez. Uma conexão nova (TCP ou HELLO por UDP) derruba a
+    anterior: o PSP pode ter reiniciado o app e deixado a sessão velha pendurada."""
+
+    def __init__(self, source, args, injector):
+        self.source = source
+        self.args = args
+        self.injector = injector
+        self.lock = threading.Lock()
+        self.current = None  # (Session, Thread)
+        self.running = True
+
+    def replace(self, transport):
+        with self.lock:
+            old = self.current
+            if old is not None:
+                old[0].close()
+            session = Session(transport, self.source, self.args, self.injector)
+            thread = threading.Thread(target=session.run, name="session", daemon=True)
+            self.current = (session, thread)
+        if old is not None:
+            old[1].join(timeout=2)
+        thread.start()
+        return session
+
+    def serve_udp(self, sock: socket.socket) -> None:
+        sock.settimeout(0.5)
+        while self.running:
+            try:
+                data, addr = sock.recvfrom(2048)
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            try:
+                req, nack = parse_datagram(data)
+            except (ValueError, Exception):  # lixo na porta: ignora
+                continue
+            with self.lock:
+                cur = self.current[0] if self.current else None
+            same = cur is not None and cur.alive and isinstance(cur.transport, UdpTransport) \
+                and cur.transport.addr == addr
+            if not same:
+                # Só um HELLO (ou um PSP sem sessão nenhuma ativa) abre sessão:
+                # datagramas atrasados de um cliente antigo são ignorados.
+                if req.flags & protocol.REQ_BYE or not (req.flags & REQ_HELLO or cur is None or not cur.alive):
+                    continue
+                cur = self.replace(UdpTransport(sock, addr, self.args.udp_pace))
+            try:
+                cur.transport.feed(req, nack)
+            except Exception:  # um datagrama ruim não pode derrubar a thread do UDP
+                log.exception("erro tratando pedido UDP")
+
+    def close(self):
+        self.running = False
+        with self.lock:
+            if self.current is not None:
+                self.current[0].close()
 
 
 def parse_size(text: str):
@@ -248,7 +293,10 @@ def build_source(args):
 def parse_args(argv=None):
     here = Path(__file__).resolve().parent
     p = argparse.ArgumentParser(description="PSPStream: transmite a tela do PC para o PSP (MJPEG).")
-    p.add_argument("--port", type=int, default=protocol.DEFAULT_PORT, help="porta TCP (padrão %(default)s)")
+    p.add_argument("--port", type=int, default=protocol.DEFAULT_PORT,
+                   help="porta TCP e UDP (padrão %(default)s)")
+    p.add_argument("--udp-pace", type=float, default=0, metavar="KB/s",
+                   help="UDP: limitar a taxa de envio dos pedaços (0 = sem limite, padrão)")
     p.add_argument("--bind", default="0.0.0.0", help="endereço local (padrão %(default)s)")
     p.add_argument("--source", choices=["portal", "test", "x11", "gst", "static"], default="portal",
                    help="portal = tela no Wayland (padrão); test = padrão animado com relógio; "
@@ -283,6 +331,9 @@ def parse_args(argv=None):
     p.add_argument("--keymap", default=str(here / "keymap.json"), help="arquivo de mapeamento (padrão keymap.json)")
     p.add_argument("--profile", default="jogo", help="perfil do keymap: jogo, desktop, setas... (padrão %(default)s)")
     p.add_argument("--mouse-speed", type=float, default=1.0, help="multiplica a velocidade do mouse do perfil")
+    p.add_argument("--input-timeout", type=float, default=0.5, metavar="S",
+                   help="solta todas as teclas se o PSP ficar S segundos sem mandar nada enquanto algo está "
+                        "segurado (padrão %(default)s; o PSP reafirma o estado a cada ~100 ms)")
     p.add_argument("--stats-interval", type=float, default=2.0, help="segundos entre linhas de estatística")
     p.add_argument("--bench", metavar="Q1,Q2,...", nargs="?", const="30,50,70,90",
                    help="benchmark: quando o PSP conectar, roda cada qualidade por --bench-seconds e salva "
@@ -309,15 +360,20 @@ def main(argv=None) -> int:
     if not args.no_input:
         from inject import Injector, load_profile
         try:
-            injector = Injector(load_profile(args.keymap, args.profile), args.input_dry_run, args.mouse_speed)
+            injector = Injector(load_profile(args.keymap, args.profile), args.input_dry_run, args.mouse_speed,
+                                args.input_timeout)
             log.info("controles: perfil '%s'%s", args.profile, " (dry-run)" if args.input_dry_run else "")
         except RuntimeError as exc:
             log.warning("controles desativados: %s", exc)
 
     srv = socket.create_server((args.bind, args.port))
-    log.info("aguardando o PSP em %s:%d (coloque este IP no server.txt)", local_ip(), args.port)
+    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1 << 20)
+    udp.bind((args.bind, args.port))
+    server = Server(source, args, injector)
+    threading.Thread(target=server.serve_udp, args=(udp,), name="udp", daemon=True).start()
+    log.info("aguardando o PSP em %s:%d, TCP e UDP (coloque este IP no server.txt)", local_ip(), args.port)
     srv.settimeout(0.5)
-    current = None
     try:
         while True:
             if getattr(source, "failed", None):
@@ -328,24 +384,16 @@ def main(argv=None) -> int:
             except socket.timeout:
                 continue
             conn.settimeout(None)
-            # Um PSP por vez. Se ele reconectar (app reiniciado), a sessão
-            # antiga, provavelmente meio-aberta, é derrubada.
-            if current is not None:
-                current[0].close()
-                current[1].join(timeout=2)
-            session = Session(conn, addr, source, args, injector)
-            thread = threading.Thread(target=session.run, name="session", daemon=True)
-            thread.start()
-            current = (session, thread)
+            server.replace(TcpTransport(conn, addr))
     except KeyboardInterrupt:
         log.info("encerrando")
     finally:
-        if current is not None:
-            current[0].close()
+        server.close()
         if injector:
             injector.close()
         source.stop()
         srv.close()
+        udp.close()
     return 0
 
 

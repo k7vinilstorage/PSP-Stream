@@ -28,6 +28,15 @@ int net_connect_server(const char *host, int port, int rcvbuf_kb);
 int net_send_all(int sock, const void *buf, int len);
 int net_recv_all(int sock, void *buf, int len);
 
+/* UDP: socket sem conexão; *dest recebe o endereço do servidor. */
+struct sockaddr_in;
+int net_open_udp(const char *host, int port, int rcvbuf_kb, struct sockaddr_in *dest);
+int net_sendto(int sock, const struct sockaddr_in *dest, const void *buf, int len);
+/* Espera dados por até timeout_us: 1 = há dados, 0 = tempo esgotado, < 0 = erro. */
+int net_wait_readable(int sock, unsigned timeout_us);
+/* Um datagrama: devolve o tamanho, 0 se não havia nada, < 0 se erro. */
+int net_recv_dgram(int sock, void *buf, int len);
+
 /* Desbloqueia um recv() parado em outra thread. */
 void net_abort(int sock);
 

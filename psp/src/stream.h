@@ -20,8 +20,11 @@ typedef struct {
     uint16_t net_t, local_t, decode_t; /* 0,1 ms */
 } ps_ack_t;
 
-/* Inicia a thread de rede, que pede e recebe frames sem parar. */
-int stream_start(int sock, int prefetch, volatile int *running);
+struct sockaddr_in;
+
+/* Inicia a thread de rede, que pede e recebe frames sem parar.
+ * udp = 1: sock é UDP e dest é o servidor; udp = 0: sock é TCP conectado. */
+int stream_start(int sock, int udp, const struct sockaddr_in *dest, int prefetch, volatile int *running);
 
 /* Pega o frame pronto mais novo, esperando até timeout_us. NULL se não há. */
 ps_frame_t *stream_take(unsigned timeout_us);
@@ -42,6 +45,13 @@ int stream_error(void);
 
 /* Frames recebidos e descartados por ficarem velhos antes do decode. */
 unsigned stream_dropped(void);
+
+/* UDP: frames abandonados incompletos e NACKs enviados. */
+unsigned stream_lost(void);
+unsigned stream_nacks(void);
+
+/* Frames completos recebidos nesta conexão. */
+unsigned stream_completed(void);
 
 void stream_stop(void);
 

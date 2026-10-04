@@ -17,7 +17,7 @@ Nintendo DSi.
                                                       └─────────────────────────────┘
 ```
 
-**Modelo "pull" sobre TCP** (a ideia central do RNDS-Stream). O PSP pede um
+**Modelo "pull"** (a ideia central do RNDS-Stream), sobre TCP ou UDP. O PSP pede um
 frame e o servidor responde com o mais recente. Só existe um frame em
 trânsito, então nunca se forma fila na rede: o frameskip é automático e a
 latência fica perto de um frame. Detalhes em [docs/PROTOCOL.md](docs/PROTOCOL.md).
@@ -32,7 +32,9 @@ Tudo foi desenvolvido sem acesso a um PSP. Testes feitos:
 | Wi-Fi (apctl), TCP, protocolo | PPSSPPHeadless | ok |
 | decode libjpeg-turbo e sceJpeg, cores e stride | PPSSPPHeadless (screenshots comparados) | ok |
 | stream contínuo, overlay, reconexão | PPSSPPHeadless | ok |
-| controles PSP -> PC (X, direcional, analógico -> mouse) | PPSSPPHeadless + depurador WebSocket, injetor em modo dry-run | ok |
+| controles PSP -> PC (X, direcional, analógico -> mouse) | PPSSPPHeadless + depurador WebSocket, injetor em modo dry-run | ok (TCP e UDP) |
+| transporte UDP (pedaços, NACK, BYE) | PPSSPPHeadless + teste com 5% de perda simulada | ok |
+| PSPStream no PSP-3000 + Fedora 44 (TCP) | **seu hardware** | funciona; decode hw 7,9 ms, sw 34 ms |
 | captura GStreamer, escala, jpegenc, qualidade adaptativa | PC + cliente falso | ok |
 | `pipewiresrc` com fd + nó (o que o portal entrega) | PipeWire de teste no container | ok, 59 fps em 1080p |
 | diálogo do portal ScreenCast | sway headless + xdg-desktop-portal-wlr | **parcial**: as chamadas D-Bus chegam ao portal, mas o backend wlr não captura sem GPU |
@@ -68,8 +70,8 @@ O xdg-desktop-portal já vem no GNOME e no KDE.
 **Firewall.** O Fedora bloqueia conexões de entrada por padrão:
 
 ```sh
-sudo firewall-cmd --add-port=5123/tcp                      # até reiniciar
-sudo firewall-cmd --permanent --add-port=5123/tcp && sudo firewall-cmd --reload   # permanente
+sudo firewall-cmd --add-port=5123/tcp --add-port=5123/udp          # até reiniciar
+sudo firewall-cmd --permanent --add-port=5123/tcp --add-port=5123/udp && sudo firewall-cmd --reload   # permanente
 ```
 
 **Controles (uinput).** O servidor cria um teclado e um mouse virtuais.
@@ -136,7 +138,8 @@ vsync=1              # 1 = sem rasgo na imagem (+0 a 16 ms); 0 = troca imediata
 prefetch=1           # 1 = rede e decode em paralelo
 overlay=1            # FPS, KB/frame, KB/s, decode, rede, descartes
 input=1              # controles do PSP -> PC
-rcvbuf=64            # buffer de recepção TCP (KB)
+transport=tcp        # tcp | udp (SELECT+START+L troca com o stream rodando)
+rcvbuf=64            # buffer de recepção do socket (KB)
 bench=0              # 1 = mede o decode hw x sw no próprio PSP ao conectar
 ```
 
@@ -165,6 +168,8 @@ janela. A escolha fica salva em `~/.config/pspstream/portal_token`; use
 | `--fps 60` | taxa de captura (acima do FPS do PSP, reduz a idade do frame) |
 | `--profile jogo` | mapa de controles: `jogo`, `desktop`, `setas` (ver `server/keymap.json`) |
 | `--input-dry-run` | só mostrar no log as teclas que seriam injetadas |
+| `--input-timeout 0.5` | solta tudo se o PSP sumir por 0,5 s com tecla segurada (evita tecla presa) |
+| `--udp-pace KB/s` | UDP: limitar a taxa de envio dos pedaços (padrão: sem limite) |
 | `--bench 30,50,70,90` | varre qualidades com o PSP conectado e salva uma tabela |
 
 A cada 2 s, o servidor mostra uma linha de estatística:
@@ -208,7 +213,8 @@ Perfil `setas`: para emuladores e jogos antigos. Para criar o seu, edite
 `server/keymap.json`.
 
 **Atalhos no PSP** (segure **SELECT + START** e aperte): triângulo =
-overlay, quadrado = decoder hw/sw, círculo = vsync, X = prefetch. Enquanto o
+overlay, quadrado = decoder hw/sw, círculo = vsync, X = prefetch, L =
+transporte TCP/UDP (reconecta). Enquanto o
 atalho estiver segurado, nada é enviado ao PC. O SELECT apertado sozinho
 antes do START chega ao PC.
 
@@ -296,11 +302,12 @@ tests/                 testes do servidor
   janelas Wayland, e o `kmsgrab` exige root. Rodando dentro do processo
   (PyGObject), o `appsink` entrega um JPEG por vez, sem procurar marcadores,
   e a qualidade do `jpegenc` muda em tempo real.
-- **TCP pull em vez de UDP.** No UDP, um frame de 15 KB ocupa ~11 datagramas,
-  e perder qualquer um perde o frame inteiro. O PSP também tem buffers
-  pequenos, o que exigiria controlar o ritmo de envio. O modelo pull resolve
-  a fila, que é o principal problema do TCP em vídeo. UDP fica como
-  experimento futuro, a comparar com medições no hardware.
+- **TCP e UDP, os dois no modelo pull.** O pull resolve a fila, que é o
+  principal problema do TCP em vídeo. O UDP tira o que sobra: os ACKs do TCP
+  ocupando o rádio do 802.11b e a espera por retransmissão quando um pacote
+  se perde (o vídeo e os controles travam juntos). Perder um pedaço não
+  perde o frame: o PSP pede de volta só os que faltam (NACK). Qual é melhor
+  no seu Wi-Fi se decide com `--bench` nos dois (a tabela diz o transporte).
 - **Escrita direta no framebuffer em vez de sceGu.** Os dois decoders
   escrevem direto na VRAM (stride 512), sem cópias. O sceGu só valeria a pena
   para ampliar um stream menor (240x136, por exemplo) com filtro, o que ainda
@@ -316,6 +323,8 @@ tests/                 testes do servidor
 ## Limitações conhecidas
 
 - Um PSP por vez. Nenhuma segurança: use só na rede local, como o RNDS-Stream.
+- UDP ainda não foi medido no PSP real (só no emulador e em simulação com
+  perda de pacotes).
 - O PSP entrando em modo de espera durante o stream não foi tratado.
 - Sem áudio.
 - Resoluções menores que 480x272 aparecem centralizadas, sem ampliação.

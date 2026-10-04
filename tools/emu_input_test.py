@@ -5,7 +5,7 @@ Sobe o servidor com --input-dry-run, roda o EBOOT com o depurador WebSocket
 do PPSSPP, "aperta" X e move o analógico pelo depurador, e confere se as
 teclas/movimentos certos chegam ao injetor do PC.
 
-  PPSSPP_HEADLESS=/caminho/PPSSPPHeadless python3 tools/emu_input_test.py
+  PPSSPP_HEADLESS=/caminho/PPSSPPHeadless [TRANSPORT=udp] python3 tools/emu_input_test.py
 
 Requer: pip install websocket-client. Servidor: PYTHON=python3 (com gi).
 """
@@ -38,7 +38,8 @@ def main():
     game = work / "ms/PSP/GAME/PSPStream"
     game.mkdir(parents=True)
     shutil.copy(ROOT / "psp/EBOOT.PBP", game)
-    (game / "server.txt").write_text(f"127.0.0.1:{port}\nexit_after=400\noverlay=0\n")
+    transport = os.environ.get("TRANSPORT", "tcp")
+    (game / "server.txt").write_text(f"127.0.0.1:{port}\nexit_after=400\noverlay=0\ntransport={transport}\n")
 
     log_path = work / "server.log"
     server = subprocess.Popen([python, str(ROOT / "server/pspstream.py"), "--source", "test", "--port", str(port),

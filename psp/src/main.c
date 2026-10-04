@@ -9,7 +9,9 @@
  * Atalhos locais (segure SELECT + START e aperte):
  *   triângulo = overlay    quadrado = decoder hw/sw
  *   círculo   = vsync      X        = prefetch
+ *   L         = transporte TCP/UDP (reconecta)
  */
+#include <netinet/in.h>
 #include <pspctrl.h>
 #include <pspdisplay.h>
 #include <pspiofilemgr.h>
@@ -28,7 +30,7 @@
 #include "protocol.h"
 #include "stream.h"
 
-PSP_MODULE_INFO("PSPStream", PSP_MODULE_USER, 0, 2);
+PSP_MODULE_INFO("PSPStream", PSP_MODULE_USER, 0, 3);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
 /* Heap fixo: os módulos de rede/avcodec carregados depois precisam de RAM livre. */
 PSP_HEAP_SIZE_KB(8 * 1024);
@@ -148,12 +150,14 @@ static void stats_add(stats_t *s, const ps_frame_t *f, unsigned dec_us, unsigned
 #define INPUT_PRIO 0x28
 #define STICK_DEADZONE 20 /* analógicos gastos repousam longe de 128 */
 
-enum { ACT_OVERLAY, ACT_DECODER, ACT_VSYNC, ACT_PREFETCH, ACT_COUNT };
-static const uint32_t act_button[ACT_COUNT] = {PSP_CTRL_TRIANGLE, PSP_CTRL_SQUARE, PSP_CTRL_CIRCLE, PSP_CTRL_CROSS};
+enum { ACT_OVERLAY, ACT_DECODER, ACT_VSYNC, ACT_PREFETCH, ACT_TRANSPORT, ACT_COUNT };
+static const uint32_t act_button[ACT_COUNT] = {PSP_CTRL_TRIANGLE, PSP_CTRL_SQUARE, PSP_CTRL_CIRCLE, PSP_CTRL_CROSS,
+                                               PSP_CTRL_LTRIGGER};
 /* Só a thread de controles escreve; a principal só lê: sem lock. */
 static volatile unsigned act_count[ACT_COUNT];
 static volatile int input_run;
 static int input_enabled = 1;
+static int input_udp; /* UDP pode perder um pacote: mandamos redundante */
 
 static int stick(int v)
 {
@@ -164,6 +168,7 @@ static int input_thread(SceSize args, void *argp)
 {
     uint32_t prev_raw = 0, sent = 0;
     int sent_lx = 128, sent_ly = 128;
+    int repeat = 0, tick = 0;
     while (input_run) {
         SceCtrlData pad;
         if (sceCtrlReadBufferPositive(&pad, 1) < 0) { /* espera a próxima amostra (vblank) */
@@ -190,13 +195,25 @@ static int input_thread(SceSize args, void *argp)
             sent = b;
             sent_lx = lx;
             sent_ly = ly;
+            repeat = input_udp; /* no UDP, repete a mudança na próxima amostra */
+            tick = 0;
+        } else if (repeat) {
+            stream_send_input();
+            repeat = 0;
+        } else if ((sent || sent_lx != 128 || sent_ly != 128) && ++tick >= 6) {
+            /* Algo segurado: reafirma o estado a cada ~100 ms. O servidor solta
+             * tudo se ficar 500 ms sem notícia, então tecla presa dura no
+             * máximo isso mesmo se a rede travar. */
+            stream_send_input();
+            tick = 0;
         }
     }
     return 0;
 }
 
 typedef struct {
-    int overlay, vsync, prefetch;
+    int overlay, vsync, prefetch, udp;
+    int switch_transport; /* atalho L: reconectar com o outro transporte */
     char toast[48];
     unsigned toast_until;
     int clear; /* buffers a limpar (texto antigo do overlay) */
@@ -238,6 +255,9 @@ static void apply_menu(ui_t *ui, unsigned seen[ACT_COUNT])
                 snprintf(msg, sizeof(msg), "prefetch: %s", ui->prefetch ? "on" : "off");
                 toast(ui, msg);
                 break;
+            case ACT_TRANSPORT:
+                ui->switch_transport = 1;
+                break;
             }
         }
     }
@@ -247,8 +267,10 @@ static void draw_overlay(const ui_t *ui, const stats_t *s)
 {
     if (ui->overlay) {
         display_text(0, 0, 0xFF00FF00, "%4.1f fps %5.1f KB %4.0f KB/s", s->fps, s->kb, s->kbps);
-        display_text(0, 1, 0xFF00FF00, "dec %4.1f ms (%s) rede %4.1f ms drop %u", s->dec_ms, decoder_name(), s->net_ms,
-                     stream_dropped());
+        display_text(0, 1, 0xFF00FF00, "dec %4.1f ms (%s) rede %4.1f ms %s drop %u", s->dec_ms, decoder_name(),
+                     s->net_ms, ui->udp ? "udp" : "tcp", stream_dropped());
+        if (ui->udp)
+            display_text(0, 2, 0xFF00FF00, "perdidos %u  nack %u", stream_lost(), stream_nacks());
     }
     if (ui->toast_until && (int)(ui->toast_until - now_us()) > 0)
         display_text(0, 33, 0xFF00FFFF, "%s", ui->toast);
@@ -285,10 +307,13 @@ static void decode_bench(const ps_frame_t *f)
     sceKernelDelayThread(5 * 1000 * 1000);
 }
 
-/* Um stream completo, até a conexão cair ou o usuário sair. */
-static int run_stream(int sock, const ps_config_t *cfg, ui_t *ui)
+/* Um stream completo, até a conexão cair, o usuário sair ou trocar de
+ * transporte (devolve 1). */
+static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_t *cfg, ui_t *ui)
 {
-    if (stream_start(sock, ui->prefetch, &g_running) < 0) {
+    input_udp = ui->udp;
+    ui->switch_transport = 0;
+    if (stream_start(sock, ui->udp, dest, ui->prefetch, &g_running) < 0) {
         status("Erro ao iniciar a thread de rede");
         return -1;
     }
@@ -304,15 +329,25 @@ static int run_stream(int sock, const ps_config_t *cfg, ui_t *ui)
         sceKernelStartThread(input_thid, 0, NULL);
     int shown = 0, last_w = SCR_W, last_h = SCR_H;
     int bench_pending = cfg->bench;
+    unsigned t_start = now_us();
+    int waiting_msg = 0;
     ui->clear = 3;
 
     while (g_running) {
         apply_menu(ui, seen);
+        if (ui->switch_transport)
+            break;
 
         ps_frame_t *f = stream_take(100 * 1000);
         if (!f) {
             if (stream_error())
                 break;
+            /* No UDP não há "conexão": avisa se o PC não responde. */
+            if (ui->udp && !stream_completed() && now_us() - t_start > 3 * 1000 * 1000 && !waiting_msg) {
+                status("Sem resposta do PC via UDP. Servidor rodando?");
+                status("Firewall liberado para UDP? (firewall-cmd --add-port=5123/udp)");
+                waiting_msg = 1;
+            }
             continue;
         }
 
@@ -357,7 +392,7 @@ static int run_stream(int sock, const ps_config_t *cfg, ui_t *ui)
             g_running = 0;
         }
     }
-    int err = stream_error();
+    int err = ui->switch_transport ? 1 : stream_error();
     input_run = 0;
     if (input_thid >= 0) {
         SceUInt timeout = 500 * 1000;
@@ -376,7 +411,7 @@ int main(int argc, char *argv[])
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
     display_init();
-    status("PSPStream v0.2");
+    status("PSPStream v0.3");
 
     char dir[192], err[128];
     app_dir(argc > 0 ? argv[0] : NULL, dir, sizeof(dir));
@@ -423,6 +458,7 @@ int main(int argc, char *argv[])
     ui.overlay = cfg.overlay;
     ui.vsync = cfg.vsync;
     ui.prefetch = cfg.prefetch;
+    ui.udp = cfg.udp;
     input_enabled = cfg.input;
 
     while (g_running) {
@@ -436,8 +472,15 @@ int main(int argc, char *argv[])
             }
             display_console("IP do PSP: %s", ip);
         }
-        display_console("Conectando ao PC %s:%d...", cfg.host, cfg.port);
-        int sock = net_connect_server(cfg.host, cfg.port, cfg.rcvbuf_kb);
+        struct sockaddr_in dest;
+        int sock;
+        if (ui.udp) {
+            display_console("Conectando ao PC %s:%d via UDP...", cfg.host, cfg.port);
+            sock = net_open_udp(cfg.host, cfg.port, cfg.rcvbuf_kb, &dest);
+        } else {
+            display_console("Conectando ao PC %s:%d via TCP...", cfg.host, cfg.port);
+            sock = net_connect_server(cfg.host, cfg.port, cfg.rcvbuf_kb);
+        }
         if (sock < 0) {
             status("Sem conexao. Servidor rodando? Firewall liberado?");
             for (int i = 0; i < 20 && g_running; i++) /* tenta de novo em 2 s */
@@ -445,11 +488,15 @@ int main(int argc, char *argv[])
             continue;
         }
         g_sock = sock;
-        int e = run_stream(sock, &cfg, &ui);
+        int e = run_stream(sock, &dest, &cfg, &ui);
         g_sock = -1;
         close(sock);
-        if (g_running)
+        if (e == 1) {
+            ui.udp = !ui.udp;
+            display_console("Trocando para %s...", ui.udp ? "UDP" : "TCP");
+        } else if (g_running) {
             display_console("Conexao perdida (%d). Reconectando...", e);
+        }
     }
 
     decoder_term();

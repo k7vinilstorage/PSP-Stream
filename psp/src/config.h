@@ -12,6 +12,7 @@ typedef struct {
     int rcvbuf_kb;    /* buffer de recepção TCP em KB */
     int bench;        /* 1 = mede decode hw x sw com o primeiro frame */
     int input;        /* 1 = envia os controles para o PC (Marco 4) */
+    int udp;          /* transporte: 0 = TCP, 1 = UDP */
     int exit_after;   /* testes: sai depois de exibir N frames (0 = nunca) */
 } ps_config_t;
 
