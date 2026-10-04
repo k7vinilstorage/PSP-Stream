@@ -89,7 +89,7 @@ class UdpChunkTest(unittest.TestCase):
 class UdpEndToEndTest(unittest.TestCase):
     """Servidor UDP de verdade + cliente falso (mesma lógica do PSP) com perda."""
 
-    def run_stream(self, early_kb, loss=0.05, seconds=2.0):
+    def run_stream(self, early_kb, loss=0.05, seconds=2.0, rtt_ms=0):
         import pspstream
         from sources import StaticSource
         import fake_client
@@ -105,7 +105,7 @@ class UdpEndToEndTest(unittest.TestCase):
         try:
             client_args = argparse.Namespace(host="127.0.0.1", port=port, transport="udp", loss=loss, kbps=2000,
                                              decode_ms=5, no_prefetch=False, frames=0, seconds=seconds,
-                                             input_demo=False, rtt_ms=0, early_kb=early_kb)
+                                             input_demo=False, rtt_ms=rtt_ms, early_kb=early_kb)
             summary, jpeg = fake_client.FakePSP(client_args).run()
         finally:
             server.close()
@@ -117,6 +117,17 @@ class UdpEndToEndTest(unittest.TestCase):
         self.assertGreater(summary["frames"], 20)
         self.assertGreater(summary["nacks"], 0)  # perdas aconteceram e foram pedidas de novo
         self.assertEqual(jpeg, card)             # e o frame chegou inteiro
+
+    def test_nack_waits_for_round_trip(self):
+        # Ida e volta de 30 ms, como no PSP real. Um NACK repetido antes de o
+        # reenvio voltar pede os mesmos pedaços de novo: chegam repetidos e
+        # ocupam o ar (regressão vista no PSP-3000 com espera de 6 ms).
+        summary, jpeg, card = self.run_stream(early_kb=0, loss=0.05, seconds=3.0, rtt_ms=30)
+        self.assertGreater(summary["frames"], 20)
+        self.assertGreater(summary["nacks"], 0)
+        self.assertLessEqual(summary["dup_chunks"], max(3, summary["lost_chunks"] // 5), summary)
+        self.assertLessEqual(summary["lost"], 2, summary)
+        self.assertEqual(jpeg, card)
 
     def test_early_request_keeps_streaming(self):
         # Com pedido antecipado, uma perda no fim do frame N vira pulo para o

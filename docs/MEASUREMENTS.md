@@ -122,7 +122,7 @@ fixa. Isso decide o que vale a pena:
 | 400x228 + ampliação no PSP (sceGu) | parte proporcional | 67% dos bytes | ~+20% de FPS, imagem mais macia |
 | 360x204 + ampliação | parte proporcional | 59% dos bytes | ~+25% de FPS |
 | redução multithread no PC (feito) | captura no PC | 4,0 -> 2,5 ms/frame em 2240x1400 | -1,5 ms de latência |
-| NACK rápido + intervalo adaptativo (feito) | perdas | espera de 20 ms -> ~1 ida e volta | p95 menor com perda |
+| NACK rápido + espera de uma ida e volta (feito) | perdas | piso de 6 ms **piorou no PSP**; corrigido (abaixo) | p95 menor com perda |
 | pedido antecipado | parte fixa | **piorou no PSP** | desligado |
 | **descobrir os ~25 ms fixos** | parte fixa | **medir com `first_t`** | até ~2x de FPS se for algo corrigível |
 
@@ -140,6 +140,59 @@ ms, não 25. Suspeitos, cada um com um remédio:
 
 O próximo `--bench` traz as colunas "1º pedaço" e "vazão na rajada". Com
 elas se sabe qual caso é antes de mexer em mais código.
+
+### Primeiro `--bench` com `first_t` (protocolo v2): uma regressão minha [PSP]
+
+UDP, `--source static`, mesma imagem. Na partida, o servidor avisou: **PC no
+Wi-Fi (`wlp0s20f3`) com power save LIGADO**. O PSP informou sinal de 100% e
+economia de energia WLAN desligada.
+
+| q | KB/frame | FPS | latência / p95 (ms) | rede (ms) | 1º pedaço (ms) | rajada (ms) | vazão na rajada (KB/s) | pedaços reenviados | frames perdidos |
+|---|---|---|---|---|---|---|---|---|---|
+| 30 | 7.4 | 19.4 | 41.8 / 99.2 | 52.1 | 36.6 | 15.7 | 448 | 19.3% | 2 |
+| 50 | 9.9 | 13.5 | 60.3 / 127.4 | 75.6 | 51.0 | 24.8 | 394 | 42.9% | 12 |
+| 70 | 13.1 | 10.1 | 89.4 / 184.5 | 95.4 | 57.5 | 38.0 | 356 | 56.5% | 14 |
+| 90 | 24.2 | 7.5 | 170.7 / 362.1 | 131.1 | 66.8 | 64.4 | 364 | 66.1% | 13 |
+
+Na rodada anterior, com o mesmo `early_kb=0`, eram q50 = 19,7 fps e 1-8%
+reenviados. **A culpa é da versão 8ab5795**, que trouxe o "NACK rápido +
+intervalo adaptativo":
+
+- Depois de um NACK, o PSP esperava só o intervalo entre pedaços (piso de
+  6 ms) antes do próximo. A resposta leva uma ida e volta inteira (20-40 ms).
+  Resultado: 3 NACKs pelos mesmos pedaços em ~18 ms, frame abandonado antes
+  de o primeiro reenvio chegar ("frames perdidos" 12-14), e o servidor
+  mandando cada pedaço faltante até 3 vezes ("reenviados" 19-66%).
+- Esses reenvios repetidos ocupam o ar e a fila do roteador **na frente do
+  frame seguinte**. Por isso o "1º pedaço" cresce com a qualidade (36 -> 67
+  ms) junto com os reenvios. Neste teste, ele não mede a ida e volta limpa.
+- O intervalo médio entre pedaços também era mal medido: o PSP lê em
+  sequência os pedaços já enfileirados, com intervalo ~0. A média caía, e 4x
+  a média batia no piso de 6 ms. Qualquer pausa normal do Wi-Fi virava "perda".
+
+O simulador não pegou o problema porque ainda usava a espera fixa de 20 ms do
+PSP antigo.
+
+**Correção (v0.3.1):**
+
+- Depois de um NACK, o PSP espera média + 4 desvios da ida e volta medida
+  (pedido -> 1º pedaço, como o RTO do TCP; 30-200 ms).
+- O silêncio que indica "fim do frame perdido" é média + 4 desvios do
+  intervalo entre pedaços, de 20 a 50 ms. O desvio cobre as leituras em
+  rajada.
+- O `fake_client` agora segue a mesma lógica, e um teste com 30 ms de ida e
+  volta e 5% de perda exige zero pedaços repetidos. Com a espera antiga, o
+  mesmo teste dá 34-35 repetidos em 3 s [SIM].
+
+O que estes números já dizem, mesmo com a regressão:
+
+- **Vazão na rajada de 356-448 KB/s**: o enlace está bom (suspeito 4
+  descartado). A parte proporcional ao tamanho é o 802.11b fazendo o que dá.
+- **PSP sem economia de energia e com sinal de 100%** (suspeito 1 descartado).
+- **Falta medir a parte fixa sem os reenvios repetidos e sem o power save do
+  PC.** Nas rodadas anteriores o power save do PC provavelmente já estava
+  ligado. Então ele não explica tudo, mas é o suspeito que sobra (2), e o
+  teste é barato.
 
 ## 1. Tamanho de frame [PC]
 

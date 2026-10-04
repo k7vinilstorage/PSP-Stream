@@ -49,10 +49,27 @@ def recv_exact(sock, size, throttle):
 
 
 # Mesmos tempos do cliente PSP (stream.c)
-CHUNK_GAP_S = 0.020    # sem pedaço novo por 20 ms com frame incompleto: NACK
+GAP_MIN_S, GAP_MAX_S = 0.020, 0.050  # fim do frame perdido: silêncio > média + 4 desvios entre pedaços
+RTO_MIN_S, RTO_MAX_S = 0.030, 0.200  # depois de um NACK: média + 4 desvios da ida e volta
+RTT_SAMPLE_MAX_S = 0.150             # acima disso o servidor esperou frame novo
 MAX_NACKS = 3          # depois disso desiste do frame e pede outro
 REQ_RETRY_S = 0.200    # pedido sem resposta: reenvia
 STALL_S = 3.0          # nada completo por 3 s: recomeça (HELLO)
+
+
+class Estimator:
+    """Média móvel + desvio médio, como o RTO do TCP (est_update no stream.c)."""
+
+    def __init__(self, avg, dev):
+        self.avg, self.dev = avg, dev
+
+    def update(self, sample):
+        err = sample - self.avg
+        self.avg += err / 8
+        self.dev += (abs(err) - self.dev) / 4
+
+    def timeout(self, lo, hi):
+        return min(hi, max(lo, self.avg + 4 * self.dev))
 
 
 class FakePSP:
@@ -68,6 +85,8 @@ class FakePSP:
         self.throttle = Throttle(args.kbps)
         self.lost = 0      # frames incompletos abandonados (UDP)
         self.nacks = 0
+        self.lost_chunks = 0  # descartados pela perda simulada (--loss)
+        self.dup_chunks = 0   # chegaram repetidos ou atrasados: ar desperdiçado
         self.cond = threading.Condition()
         self.ready = None          # frame mais novo ainda não decodificado
         self.last_ack = None       # (frame_no, send_ts, shown_at, net_t, local_t, decode_t)
@@ -132,22 +151,30 @@ class FakePSP:
                 last_req = time.monotonic()
                 self.send_req(flags)
 
+            gap = Estimator(0.003, 0.003)   # entre pedaços seguidos de um frame
+            rtt = Estimator(0.030, 0.010)   # pedido -> primeiro pedaço
+
+            def send_nack(a):
+                missing = [i for i in range(a["count"]) if i not in a["have"]]
+                a["nack_last"] = missing[-1]
+                a["nacks"] += 1
+                self.nacks += 1
+                a["t_nack"] = time.monotonic()
+                a["deadline"] = a["t_nack"] + rtt.timeout(RTO_MIN_S, RTO_MAX_S)
+                self.send_req(protocol.REQ_NACK, protocol.pack_nack(a["no"], missing))
+
             ask(REQ_FRAME | REQ_HELLO)
             while self.running:
                 now = time.monotonic()
                 timeout, acted = 0.1, False
                 for a in list(asm):
-                    left = CHUNK_GAP_S - (now - a["last_rx"])
+                    left = a["deadline"] - now
                     if left > 0:
                         timeout = min(timeout, left)
                         continue
                     acted = True
                     if a["nacks"] < MAX_NACKS:
-                        missing = [i for i in range(a["count"]) if i not in a["have"]]
-                        self.send_req(protocol.REQ_NACK, protocol.pack_nack(a["no"], missing))
-                        a["nacks"] += 1
-                        self.nacks += 1
-                        a["last_rx"] = time.monotonic()
+                        send_nack(a)
                     else:
                         done = max(done, a["no"])
                         asm.remove(a)
@@ -171,6 +198,7 @@ class FakePSP:
                     continue
                 data, _ = self.sock.recvfrom(2048)
                 if self.args.loss and random.random() < self.args.loss:
+                    self.lost_chunks += 1
                     continue  # pacote "perdido no Wi-Fi"
                 self.throttle.consume(len(data))
                 try:
@@ -185,6 +213,7 @@ class FakePSP:
                     asm.clear()
                     done = 0  # servidor reiniciou a numeração
                 if no <= done:
+                    self.dup_chunks += 1
                     continue
                 a = next((x for x in asm if x["no"] == no), None)
                 if a is None:
@@ -192,14 +221,24 @@ class FakePSP:
                         done = max(done, asm[0]["no"])
                         asm.pop(0)
                         self.lost += 1
+                    t_first = time.monotonic()
                     a = {"no": no, "count": fcount, "have": set(), "nacks": 0, "asked": False,
-                         "last_rx": time.monotonic(), "t_first": time.monotonic(), "buf": bytearray(fsize), "ts": fts,
-                         "t_req": req_q.pop(0) if req_q else time.monotonic()}
+                         "last_rx": t_first, "t_first": t_first, "buf": bytearray(fsize), "ts": fts,
+                         "t_req": t_first, "deadline": 0.0}
+                    if req_q:
+                        a["t_req"] = req_q.pop(0)
+                        if t_first - a["t_req"] < RTT_SAMPLE_MAX_S:
+                            rtt.update(t_first - a["t_req"])
                     asm.append(a)
+                t_rx = time.monotonic()
                 if idx not in a["have"]:
+                    if a["have"] and not a["nacks"] and t_rx - a["last_rx"] < 0.1:
+                        gap.update(t_rx - a["last_rx"])
                     a["have"].add(idx)
                     a["buf"][idx * P: idx * P + len(payload)] = payload
-                a["last_rx"] = time.monotonic()
+                else:
+                    self.dup_chunks += 1
+                a["last_rx"] = t_rx
                 if len(a["have"]) == a["count"]:
                     t = time.monotonic()
                     t_req = max(a["t_req"], link_free)
@@ -212,7 +251,15 @@ class FakePSP:
                     self.publish((no, a["ts"], bytes(a["buf"]), t_req, t, a["t_first"]))
                     if self.args.no_prefetch or (not a["asked"] and not req_q):
                         ask(REQ_FRAME)
-                elif (not self.args.no_prefetch and early > 0 and not a["asked"] and not req_q
+                    continue
+                if (idx == a["count"] - 1 if not a["nacks"]
+                        else idx >= a["nack_last"] and t_rx - a["t_nack"] > rtt.avg / 2):
+                    a["deadline"] = t_rx  # último do envio/reenvio chegou e há buracos: age já
+                else:
+                    d = t_rx + gap.timeout(GAP_MIN_S, GAP_MAX_S)
+                    if (len(a["have"]) == 1 and not a["nacks"]) or d > a["deadline"]:
+                        a["deadline"] = d
+                if (not self.args.no_prefetch and early > 0 and not a["asked"] and not req_q
                       and len(a["buf"]) - len(a["have"]) * P <= early):
                     a["asked"] = True  # pedido antecipado
                     ask(REQ_FRAME)
@@ -298,6 +345,8 @@ class FakePSP:
             "dropped": self.dropped,
             "lost": self.lost,
             "nacks": self.nacks,
+            "lost_chunks": self.lost_chunks,
+            "dup_chunks": self.dup_chunks,
         }, jpeg
 
 
@@ -329,7 +378,7 @@ def main(argv=None):
     else:
         print("{frames} frames em {seconds} s: {fps} fps, {kb_per_frame} KB/frame, {kbps} KB/s, "
               "rede {net_ms} ms, local {local_ms} ms, descartados {dropped}, perdidos {lost}, "
-              "NACKs {nacks}".format(**summary))
+              "NACKs {nacks}, pedaços perdidos/repetidos {lost_chunks}/{dup_chunks}".format(**summary))
     return 0
 
 

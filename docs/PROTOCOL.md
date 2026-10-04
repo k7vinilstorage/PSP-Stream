@@ -1,4 +1,4 @@
-# Protocolo PSPStream v1
+# Protocolo PSPStream v2
 
 TCP **ou** UDP, porta padrão **5123** (o servidor atende os dois ao mesmo
 tempo; o PSP escolhe com `transport=` no `server.txt`). Todos os inteiros são **little-endian** (PSP e PC
@@ -118,7 +118,9 @@ encerra a sessão na hora (no UDP não existe "fechar conexão").
 | situação | ação |
 |---|---|
 | chegou o último pedaço e faltam outros | NACK na hora (os pedaços vêm em ordem: os que faltam se perderam) |
-| frame incompleto sem pedaço novo por 4x o intervalo médio entre pedaços (6-20 ms) | NACK com os que faltam (até 3 vezes no total) |
+| frame incompleto sem pedaço novo por média + 4 desvios do intervalo entre pedaços (20-50 ms) | NACK com os que faltam (o fim do frame se perdeu) |
+| depois de um NACK | espera a resposta por média + 4 desvios da ida e volta (pedido -> 1º pedaço, 30-200 ms); cada pedaço reenviado que chega adia a espera |
+| chegou o último pedaço do reenvio e ainda faltam outros | NACK de novo na hora |
 | 3 NACKs sem completar | desiste do frame (conta em "perdidos") e pede outro |
 | pedido sem nenhuma resposta por 200 ms | reenvia o pedido |
 | 3 s sem completar nenhum frame | o pedido vai com HELLO (o servidor pode ter reiniciado) |

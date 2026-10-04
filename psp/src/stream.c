@@ -10,17 +10,19 @@
  *
  * Transportes:
  *  - TCP: cabeçalho + JPEG num fluxo.
- *  - UDP: o JPEG chega em pedaços de 1400 bytes, remontados no slot. Se faltar
- *    algum, depois de CHUNK_GAP_US sem pedaço novo pedimos só os que faltam
- *    (NACK). Depois de MAX_NACKS desistimos do frame e pedimos outro. Pedido
- *    sem resposta é reenviado a cada REQ_RETRY_US (o servidor ignora
- *    duplicados).
+ *  - UDP: o JPEG chega em pedaços de 1400 bytes, remontados no slot. Os que
+ *    faltam são pedidos de novo (NACK): na hora, se o último pedaço chegou e
+ *    há buracos; ou depois de um silêncio maior que o normal entre pedaços,
+ *    se o fim do frame se perdeu. Depois de um NACK, esperamos uma ida e volta
+ *    inteira (medida) antes do próximo. Depois de MAX_NACKS desistimos do
+ *    frame e pedimos outro. Pedido sem resposta é reenviado a cada
+ *    REQ_RETRY_US (o servidor ignora duplicados).
  *
- * Pedido antecipado (UDP): cada frame custa ~20 ms fixos de ida e volta do
- * pedido, com o rádio parado. Quando faltam `early` bytes do frame atual, já
- * pedimos o próximo: ele chega logo atrás, e o rádio não fica ocioso. Por isso
- * podem existir dois frames sendo remontados; quando um mais novo completa, o
- * mais velho incompleto é abandonado (o mais novo é o que interessa).
+ * Pedido antecipado (UDP, experimental, desligado por padrão): quando faltam
+ * `early` bytes do frame atual, já pedimos o próximo, para esconder a ida e
+ * volta do pedido. No PSP-3000 não aumentou o FPS e piorou a latência (o
+ * 802.11b é half duplex). Com ele podem existir dois frames sendo remontados;
+ * quando um mais novo completa, o mais velho incompleto é abandonado.
  */
 #include "stream.h"
 #include "net.h"
@@ -36,8 +38,17 @@
  * chegam dados, o recv() roda na hora. */
 #define NET_THREAD_PRIO 0x24
 
-#define CHUNK_GAP_MAX_US (20 * 1000) /* frame incompleto sem pedaço novo: NACK (limite) */
-#define CHUNK_GAP_MIN_US (6 * 1000)  /* ... adaptado a 4x o intervalo médio entre pedaços */
+/* Fim do frame perdido: sem pedaço novo por média + 4 desvios do intervalo
+ * entre pedaços, nunca menos de 20 ms. Um piso menor (6 ms, testado no
+ * PSP-3000) confunde as pausas normais do Wi-Fi com perda e pede de novo
+ * pedaços que ainda estão a caminho. */
+#define GAP_MIN_US (20 * 1000)
+#define GAP_MAX_US (50 * 1000)
+/* Depois de um NACK: a resposta leva uma ida e volta (média + 4 desvios do
+ * pedido -> primeiro pedaço). Esperar menos só gera NACK e reenvio repetidos. */
+#define RTO_MIN_US (30 * 1000)
+#define RTO_MAX_US (200 * 1000)
+#define RTT_SAMPLE_MAX_US (150 * 1000) /* acima disso o servidor esperou frame novo: não é a rede */
 #define MAX_NACKS 3
 #define REQ_RETRY_US (200 * 1000)  /* pedido sem resposta: reenvia */
 #define STALL_US (3000 * 1000)     /* nada completo por 3 s: recomeça (HELLO); > keepalive de 1 s do servidor */
@@ -62,7 +73,9 @@ static volatile int net_error;
 static volatile int stopping;
 
 static volatile int wifi_signal, wifi_flags;
-static unsigned gap_ewma_us = 3000; /* intervalo médio entre pedaços de um frame */
+/* Estimativas (us), como o RTO do TCP: média móvel e desvio médio. */
+static int gap_avg = 3000, gap_dev = 3000;   /* entre pedaços seguidos de um frame */
+static int rtt_avg = 30000, rtt_dev = 10000; /* pedido -> primeiro pedaço */
 
 static volatile uint32_t in_buttons;
 static volatile uint8_t in_lx = 128, in_ly = 128;
@@ -217,8 +230,11 @@ typedef struct {
     int idx;           /* slot; -1 = vazio */
     uint32_t frame_no;
     int count, got, nacks;
+    int nack_last;     /* maior pedaço pedido no último NACK (o último do reenvio) */
     int asked_next;    /* já pediu o próximo antecipado */
-    unsigned last_rx;
+    unsigned last_rx;  /* último pedaço recebido */
+    unsigned t_nack;   /* último NACK */
+    unsigned deadline; /* sem pedaço novo até aqui: NACK ou desistência */
     unsigned t_req;    /* quando saiu o pedido que gerou este frame */
     unsigned t_first;  /* primeiro pedaço */
     uint32_t have[PS_MAX_CHUNKS / 32];
@@ -237,25 +253,43 @@ static int asm_missing(const asm_t *a, int i)
     return !(a->have[i / 32] >> (i % 32) & 1);
 }
 
+static void est_update(int *avg, int *dev, int sample)
+{
+    int err = sample - *avg;
+    *avg += err / 8;
+    *dev += ((err < 0 ? -err : err) - *dev) / 4;
+}
+
+static int clampi(int v, int lo, int hi)
+{
+    return v < lo ? lo : v > hi ? hi : v;
+}
+
+static int gap_timeout_us(void)
+{
+    return clampi(gap_avg + 4 * gap_dev, GAP_MIN_US, GAP_MAX_US);
+}
+
+static int rto_us(void)
+{
+    return clampi(rtt_avg + 4 * rtt_dev, RTO_MIN_US, RTO_MAX_US);
+}
+
 static int send_nack(asm_t *a)
 {
     ps_nack_t nk;
     memset(&nk, 0, sizeof(nk));
     nk.frame_no = a->frame_no;
     for (int i = 0; i < a->count; i++)
-        if (asm_missing(a, i))
+        if (asm_missing(a, i)) {
             nk.missing[i / 32] |= 1u << (i % 32);
+            a->nack_last = i;
+        }
     a->nacks++;
     nacks++;
-    a->last_rx = now_us();
+    a->t_nack = now_us();
+    a->deadline = a->t_nack + rto_us();
     return send_req(0, &nk);
-}
-
-/* Sem pedaço novo por isso, o resto do frame se perdeu: 4x o intervalo médio. */
-static int chunk_gap_us(void)
-{
-    unsigned g = gap_ewma_us * 4;
-    return g < CHUNK_GAP_MIN_US ? CHUNK_GAP_MIN_US : g > CHUNK_GAP_MAX_US ? CHUNK_GAP_MAX_US : (int)g;
 }
 
 static int net_thread_udp(void)
@@ -289,7 +323,7 @@ static int net_thread_udp(void)
             asm_t *a = &as[k];
             if (a->idx < 0)
                 continue;
-            int left = chunk_gap_us() - (int)(now - a->last_rx);
+            int left = (int)(a->deadline - now);
             if (left > 0) {
                 if (left < timeout)
                     timeout = left;
@@ -384,6 +418,9 @@ static int net_thread_udp(void)
                 a->t_req = req_q[0];
                 req_q[0] = req_q[1];
                 pending--;
+                int rtt = (int)(a->t_first - a->t_req);
+                if (rtt < RTT_SAMPLE_MAX_US)
+                    est_update(&rtt_avg, &rtt_dev, rtt);
             } else {
                 a->t_req = now_us();
             }
@@ -396,8 +433,8 @@ static int net_thread_udp(void)
         if (asm_missing(a, h.chunk)) {
             if (a->got > 0 && a->nacks == 0) { /* intervalo entre pedaços seguidos do mesmo frame */
                 unsigned dt = t_rx - a->last_rx;
-                if (dt < 50 * 1000)
-                    gap_ewma_us = (gap_ewma_us * 7 + dt) / 8;
+                if (dt < 100 * 1000)
+                    est_update(&gap_avg, &gap_dev, (int)dt);
             }
             a->have[h.chunk / 32] |= 1u << (h.chunk % 32);
             memcpy(slots[a->idx].data + h.chunk * PS_CHUNK_PAYLOAD, pkt + sizeof(h), plen);
@@ -430,12 +467,17 @@ static int net_thread_udp(void)
             } else if (!asked && pending == 0) {
                 ASK(PS_REQ_FRAME);
             }
-        } else if (h.chunk == a->count - 1 && a->nacks == 0) {
-            /* NACK rápido: o último pedaço chegou e faltam outros. Os pedaços vêm
-             * em ordem, então os que faltam se perderam: pede já, sem esperar o
-             * intervalo. */
-            if (send_nack(a) < 0)
-                return -1;
+        } else if (a->nacks == 0 ? h.chunk == a->count - 1
+                                 : h.chunk >= a->nack_last && (int)(t_rx - a->t_nack) > rtt_avg / 2) {
+            /* O último pedaço do envio (ou do reenvio) chegou e ainda há
+             * buracos. Os pedaços vêm em ordem, então os que faltam se
+             * perderam: age já, sem esperar o silêncio. Um pedaço que chega
+             * antes de meia ida e volta não é resposta ao NACK: ignora. */
+            a->deadline = t_rx;
+        } else { /* ainda chegando: adia (sem antecipar a espera de um NACK) */
+            unsigned d = t_rx + gap_timeout_us();
+            if ((a->got == 1 && a->nacks == 0) || (int)(d - a->deadline) > 0)
+                a->deadline = d;
         }
         if (a->idx >= 0 && a->got < a->count && g_prefetch && g_early > 0 && !a->asked_next && pending == 0 &&
             (int)slots[a->idx].size - a->got * PS_CHUNK_PAYLOAD <= g_early) {
