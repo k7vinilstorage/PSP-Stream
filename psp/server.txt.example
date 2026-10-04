@@ -1,0 +1,5 @@
+# PSPStream: IP do PC na primeira linha (porta opcional, padrão 5123)
+192.168.1.100
+
+# Perfil de rede salvo em Ajustes > Ajustes de rede (1 = primeiro)
+wifi_profile=1

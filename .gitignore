@@ -1,0 +1,15 @@
+# build do PSP
+psp/*.elf
+psp/*.prx
+psp/*.PBP
+psp/PARAM.SFO
+psp/src/*.o
+psp/dist/
+
+# Python
+__pycache__/
+*.pyc
+
+# testes locais
+/tmp/
+*.log
