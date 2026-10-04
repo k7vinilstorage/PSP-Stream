@@ -4,7 +4,7 @@
 #
 #   PPSSPP_HEADLESS=/caminho/PPSSPPHeadless tools/emu_test.sh [saida.png] [args do servidor...]
 #
-# Variáveis: EXIT_AFTER (frames até sair, padrão 1), TIMEOUT (s, padrão 30),
+# Variáveis: EXIT_AFTER (frames até sair, padrão 1), TIMEOUT (s, padrão 30), PYTHON,
 #            EXTRA_CFG (linhas extras para o server.txt).
 set -e
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -20,7 +20,7 @@ mkdir -p "$game"
 cp "$root/psp/EBOOT.PBP" "$game/"
 printf '127.0.0.1:%s\nexit_after=%s\n%b\n' "$port" "${EXIT_AFTER:-1}" "${EXTRA_CFG:-}" > "$game/server.txt"
 
-python3 "$root/server/pspstream.py" --port "$port" --stats-interval 1 "$@" > "$work/server.log" 2>&1 &
+${PYTHON:-python3} "$root/server/pspstream.py" --port "$port" --stats-interval 1 "$@" > "$work/server.log" 2>&1 &
 srv=$!
 sleep 1
 

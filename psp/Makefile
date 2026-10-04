@@ -3,7 +3,7 @@
 #   make dist       -> dist/PSP/GAME/PSPStream/ pronto para copiar no memory stick
 
 TARGET = PSPStream
-OBJS = src/main.o src/config.o src/net.o src/display.o src/decode.o
+OBJS = src/main.o src/config.o src/net.o src/display.o src/decode.o src/stream.o
 
 INCDIR =
 CFLAGS = -O2 -G0 -Wall -Wextra -Wno-unused-parameter -std=gnu11

@@ -160,11 +160,46 @@ class Session:
             self.stats.maybe_report(self.source.quality)
 
 
+def parse_size(text: str):
+    try:
+        w, h = (int(v) for v in text.lower().split("x"))
+    except ValueError:
+        raise argparse.ArgumentTypeError("use LARGURAxALTURA, ex.: 480x272") from None
+    if not (16 <= w <= 480 and 16 <= h <= 272):
+        raise argparse.ArgumentTypeError("o PSP exibe no máximo 480x272")
+    return w, h
+
+
 def build_source(args):
+    w, h = args.size
     if args.source == "static":
+        from jpeginfo import jpeg_info
         from sources import StaticSource
-        return StaticSource(Path(args.image).read_bytes())
-    raise SystemExit(f"fonte desconhecida: {args.source}")
+        data = Path(args.image).read_bytes()
+        try:
+            ok = data[:2] == b"\xff\xd8" and not jpeg_info(data).problems(w, h)
+        except ValueError:
+            ok = False
+        if not ok:
+            from gst_source import transcode_image
+            log.info("convertendo %s para %dx%d 4:2:0", args.image, w, h)
+            data = transcode_image(args.image, w, h, args.quality, not args.stretch)
+        return StaticSource(data)
+
+    from gst_source import SOURCES, GstSource
+    keepalive = None
+    if args.source == "portal":
+        from portal import open_screencast
+        keepalive = open_screencast(window=args.window, cursor=not args.no_cursor,
+                                    remember=not args.forget)
+        src = keepalive.gst_source()
+    elif args.source == "gst":
+        if not args.gst_src:
+            raise SystemExit("--source gst precisa de --gst-src \"<elementos GStreamer>\"")
+        src = args.gst_src
+    else:
+        src = SOURCES[args.source]
+    return GstSource(src, w, h, args.fps, args.quality, args.scale, not args.stretch, keepalive)
 
 
 def parse_args(argv=None):
@@ -172,10 +207,23 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description="PSPStream: transmite a tela do PC para o PSP (MJPEG).")
     p.add_argument("--port", type=int, default=protocol.DEFAULT_PORT, help="porta TCP (padrão %(default)s)")
     p.add_argument("--bind", default="0.0.0.0", help="endereço local (padrão %(default)s)")
-    p.add_argument("--source", choices=["static"], default="static",
-                   help="de onde vêm os frames (padrão %(default)s)")
+    p.add_argument("--source", choices=["portal", "test", "x11", "gst", "static"], default="portal",
+                   help="portal = tela no Wayland (padrão); test = padrão animado com relógio; "
+                        "x11 = sessão X11; gst = pipeline próprio (--gst-src); static = uma imagem")
     p.add_argument("--image", default=str(here.parent / "assets" / "testcard.jpg"),
-                   help="imagem JPEG do modo static (padrão: assets/testcard.jpg)")
+                   help="imagem do modo static (padrão: assets/testcard.jpg)")
+    p.add_argument("--gst-src", help="elementos GStreamer da fonte para --source gst")
+    p.add_argument("--size", type=parse_size, default=(480, 272), help="resolução enviada (padrão 480x272)")
+    p.add_argument("--fps", type=int, default=60,
+                   help="taxa máxima de captura (padrão %(default)s). Capturar acima do que o PSP "
+                        "exibe reduz a idade do frame enviado")
+    p.add_argument("-q", "--quality", type=int, default=70, help="qualidade JPEG 1-100 (padrão %(default)s)")
+    p.add_argument("--scale", default="bilinear", choices=["nearest-neighbour", "bilinear", "lanczos"],
+                   help="filtro de redução (lanczos = texto mais nítido, ~5 ms a mais por frame)")
+    p.add_argument("--stretch", action="store_true", help="esticar em vez de manter a proporção")
+    p.add_argument("--window", action="store_true", help="portal: escolher uma janela em vez de um monitor")
+    p.add_argument("--no-cursor", action="store_true", help="portal: não desenhar o cursor")
+    p.add_argument("--forget", action="store_true", help="portal: não reutilizar/guardar a escolha de tela")
     p.add_argument("--stats-interval", type=float, default=2.0, help="segundos entre linhas de estatística")
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
@@ -185,15 +233,29 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
-    source = build_source(args)
-    source.start()
+    try:
+        source = build_source(args)
+        source.start()
+    except Exception as exc:  # erros de portal/GStreamer: mensagem curta, sem traceback
+        if args.verbose:
+            raise
+        log.error("não foi possível iniciar a captura: %s", exc)
+        return 1
 
     srv = socket.create_server((args.bind, args.port))
     log.info("aguardando o PSP em %s:%d (coloque este IP no server.txt)", local_ip(), args.port)
+    srv.settimeout(0.5)
     current = None
     try:
         while True:
-            conn, addr = srv.accept()
+            if getattr(source, "failed", None):
+                log.error("captura parou: %s", source.failed)
+                return 1
+            try:
+                conn, addr = srv.accept()
+            except socket.timeout:
+                continue
+            conn.settimeout(None)
             # Um PSP por vez. Se ele reconectar (app reiniciado), a sessão
             # antiga, provavelmente meio-aberta, é derrubada.
             if current is not None:

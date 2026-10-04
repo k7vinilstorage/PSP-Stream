@@ -4,8 +4,13 @@
  *
  *   192.168.1.100
  *   wifi_profile=1
+ *   decoder=auto     (auto | hw | sw)
+ *   vsync=1
+ *   prefetch=1
+ *   overlay=1
  */
 #include "config.h"
+#include "decode.h"
 #include "protocol.h"
 
 #include <ctype.h>
@@ -32,6 +37,14 @@ static void set_key(ps_config_t *cfg, const char *key, const char *value)
         cfg->port = v;
     else if (!strcmp(key, "wifi_profile"))
         cfg->wifi_profile = v;
+    else if (!strcmp(key, "decoder"))
+        cfg->decoder = !strcmp(value, "hw") ? DEC_HW : !strcmp(value, "sw") ? DEC_SW : DEC_AUTO;
+    else if (!strcmp(key, "vsync"))
+        cfg->vsync = v;
+    else if (!strcmp(key, "prefetch"))
+        cfg->prefetch = v;
+    else if (!strcmp(key, "overlay"))
+        cfg->overlay = v;
     else if (!strcmp(key, "exit_after"))
         cfg->exit_after = v;
 }
@@ -41,6 +54,10 @@ int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen)
     memset(cfg, 0, sizeof(*cfg));
     cfg->port = PS_DEFAULT_PORT;
     cfg->wifi_profile = 1;
+    cfg->decoder = DEC_AUTO;
+    cfg->vsync = 1;
+    cfg->prefetch = 1;
+    cfg->overlay = 1;
 
     char path[256];
     snprintf(path, sizeof(path), "%sserver.txt", dir);

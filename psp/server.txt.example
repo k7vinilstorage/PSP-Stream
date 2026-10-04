@@ -3,3 +3,16 @@
 
 # Perfil de rede salvo em Ajustes > Ajustes de rede (1 = primeiro)
 wifi_profile=1
+
+# auto = decoder de hardware (sceJpeg) com fallback para software
+# hw | sw = forçar um deles. Se a imagem sair torta ou com cores erradas, use sw.
+decoder=auto
+
+# 1 = troca de quadro no vblank (sem rasgo na imagem, +0 a 16 ms)
+vsync=1
+
+# 1 = pede o próximo frame antes de decodificar o atual (rede e decode em paralelo)
+prefetch=1
+
+# 1 = mostra FPS, KB/frame, tempos de decode e rede
+overlay=1
