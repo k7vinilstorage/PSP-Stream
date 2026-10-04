@@ -292,6 +292,79 @@ class CaptureRateTest(unittest.TestCase):
         self.assertIn("queue name=q", desc)
 
 
+class DmabufCaptureTest(unittest.TestCase):
+    """--dmabuf: redução no OpenGL. Sem GPU aqui, o teste usa EGL sem tela
+    (llvmpipe) e uma fonte em memória comum no lugar do DMA-BUF do portal."""
+
+    SRC = "videotestsrc is-live=true pattern=white ! video/x-raw,width=2240,height=1400,format=BGRA,framerate=30/1"
+
+    def setUp(self):
+        try:
+            import gst_source
+        except (ImportError, ValueError):
+            self.skipTest("sem GStreamer")
+        from gi.repository import Gst
+        if not Gst.ElementFactory.find("glupload"):
+            self.skipTest("sem os elementos OpenGL do GStreamer")
+        import os
+        os.environ.setdefault("GST_GL_WINDOW", "surfaceless")
+        os.environ.setdefault("GST_GL_PLATFORM", "egl")
+        self.gst_source = gst_source
+
+    def test_gpu_size_keeps_aspect(self):
+        self.assertEqual(self.gst_source.gpu_size((2240, 1400), 480, 272), (436, 272))
+        self.assertEqual(self.gst_source.gpu_size((1920, 1080), 480, 272), (480, 270))
+        self.assertEqual(self.gst_source.gpu_size((2240, 1400), 480, 272, keep_aspect=False), (480, 272))
+
+    def test_gl_chain_letterboxes(self):
+        desc = self.gst_source.build_pipeline(self.SRC, 480, 272, 60, 60, codec="h264", gpu_from=(2240, 1400))
+        self.assertIn('caps="video/x-raw(memory:DMABuf)"', desc)
+        from gi.repository import Gst
+        pipe = Gst.parse_launch(desc.replace('! capsfilter caps="video/x-raw(memory:DMABuf)" ', ""))
+        pipe.set_state(Gst.State.PLAYING)
+        try:
+            sample = pipe.get_by_name("sink").emit("try-pull-sample", 10 * Gst.SECOND)
+        finally:
+            pipe.set_state(Gst.State.NULL)
+        self.assertIsNotNone(sample, "o OpenGL não entregou frame")
+        caps = sample.get_caps().get_structure(0)
+        self.assertEqual((caps.get_value("width"), caps.get_value("height")), (480, 272))
+        data = sample.get_buffer().extract_dup(0, 480 * 272)  # plano Y
+        row = data[136 * 480:137 * 480]
+        self.assertLess(row[2], 40)      # borda preta (436 de 480 com imagem)
+        self.assertGreater(row[240], 200)  # fonte branca no meio
+
+    def test_fallback_without_dmabuf(self):
+        # o pipeline nem monta (a fonte não oferece DMA-BUF)
+        self.check_fallback(self.SRC)
+
+    def test_fallback_when_negotiation_fails_later(self):
+        # como o pipewiresrc: monta, e a negociação falha só com o pipeline rodando
+        self.check_fallback(self.SRC + " ! identity")
+
+    def check_fallback(self, src):
+        import argparse
+        import pspstream
+
+        class FakePortal:
+            size = (2240, 1400)
+
+            def gst_source(_, dmabuf=False):
+                return src
+
+        args = argparse.Namespace(source="portal", dmabuf=True, size=(480, 272), fps=60, quality=60,
+                                  scale="bilinear", stretch=False, codec="h264")
+        with self.assertLogs("pspstream", "WARNING") as logs:
+            source = pspstream.start_source(args, FakePortal())
+        try:
+            self.assertFalse(source.gpu)
+            self.assertFalse(args.dmabuf)
+            self.assertIsNotNone(source.wait_newer(0, 5), "o modo normal não entregou frame")
+        finally:
+            source.stop()
+        self.assertIn("--dmabuf não funcionou", logs.output[0])
+
+
 class H264QualityTest(unittest.TestCase):
     def test_qp_mapping(self):
         try:

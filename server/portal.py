@@ -49,8 +49,13 @@ class ScreenCastSession:
         self.fd = fd
         self.size = size
 
-    def gst_source(self) -> str:
-        return f"pipewiresrc fd={self.fd} path={self.node_id} do-timestamp=true always-copy=true"
+    def gst_source(self, dmabuf: bool = False) -> str:
+        """dmabuf=True: a tela fica na memória da GPU (o pipeline reduz no OpenGL).
+        Cada pipeline recebe uma cópia do fd, para dar para refazer o pipeline
+        (ex.: --dmabuf que não funcionou) sem abrir outra sessão do portal."""
+        fd = os.dup(self.fd)
+        copy = "" if dmabuf else " always-copy=true"
+        return f"pipewiresrc fd={fd} path={self.node_id} do-timestamp=true{copy}"
 
     def close(self):
         try:

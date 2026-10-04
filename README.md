@@ -186,6 +186,7 @@ Para o PSP recusar H.264, use `h264=0` no `server.txt`.
 | `--source static --image arq.png` | uma imagem fixa (benchmark reproduzível) |
 | `--source x11` / `--source gst --gst-src "..."` | sessão X11 / pipeline GStreamer próprio |
 | `--window` | portal: capturar uma janela em vez do monitor |
+| `--dmabuf` | portal, experimental: a tela fica na memória da GPU e é reduzida no OpenGL; só 480x272 vem para a CPU. Se não funcionar, volta sozinho para o modo normal |
 | `--target-fps 20` | qualidade adaptativa: FPS que a banda precisa sustentar (padrão 20) |
 | `--fixed-quality -q 70` | qualidade fixa em vez de adaptativa |
 | `--q-min 25 --q-max 90` | limites da qualidade adaptativa |

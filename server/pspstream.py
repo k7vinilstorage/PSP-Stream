@@ -336,7 +336,8 @@ def parse_size(text: str):
     return w, h
 
 
-def build_source(args):
+def build_source(args, portal=None):
+    """portal: sessão do portal já aberta (refazer o pipeline sem novo diálogo)."""
     w, h = args.size
     if args.source == "static":
         from sources import StaticSource
@@ -362,19 +363,64 @@ def build_source(args):
         return StaticSource(reencode(args.quality), reencode, args.quality)
 
     from gst_source import SOURCES, GstSource
-    keepalive = None
+    keepalive, gpu_from = portal, None
     if args.source == "portal":
-        from portal import open_screencast
-        keepalive = open_screencast(window=args.window, cursor=not args.no_cursor,
-                                    remember=not args.forget)
-        src = keepalive.gst_source()
+        if keepalive is None:
+            keepalive = open_portal(args)
+        if args.dmabuf:
+            gpu_from = tuple(keepalive.size) if keepalive.size else (w, h)
+            if not keepalive.size and not args.stretch:
+                log.warning("--dmabuf: o portal não disse o tamanho da tela; a imagem pode sair esticada")
+        src = keepalive.gst_source(dmabuf=args.dmabuf)
     elif args.source == "gst":
         if not args.gst_src:
             raise SystemExit("--source gst precisa de --gst-src \"<elementos GStreamer>\"")
         src = args.gst_src
     else:
         src = SOURCES[args.source]
-    return GstSource(src, w, h, args.fps, args.quality, args.scale, not args.stretch, keepalive, args.codec)
+    return GstSource(src, w, h, args.fps, args.quality, args.scale, not args.stretch, keepalive, args.codec,
+                     gpu_from)
+
+
+DMABUF_FIRST_FRAME_S = 5
+
+
+def open_portal(args):
+    from portal import open_screencast
+    return open_screencast(window=args.window, cursor=not args.no_cursor, remember=not args.forget)
+
+
+def start_source(args, portal=None):
+    """--dmabuf é experimental: se o pipeline não sobe ou não sai frame em
+    alguns segundos (DMA-BUF ou OpenGL indisponível), volta para a captura
+    pela memória comum na mesma sessão do portal (sem outro diálogo)."""
+    if args.source == "portal" and portal is None:
+        portal = open_portal(args)
+    if not args.dmabuf:
+        source = build_source(args, portal)
+        source.start()
+        return source
+    source = None
+    try:
+        source = build_source(args, portal)
+        source.start()
+        deadline = time.monotonic() + DMABUF_FIRST_FRAME_S
+        got = None
+        while not got and not source.failed and time.monotonic() < deadline:
+            got = source.wait_newer(0, 0.1)
+        reason = source.failed or (None if got else f"nenhum frame em {DMABUF_FIRST_FRAME_S} s")
+    except Exception as exc:  # pipeline que não monta (GLib.Error) ou não inicia
+        reason = str(exc)
+    if reason is None:
+        log.info("captura: DMA-BUF + redução na GPU (OpenGL), --dmabuf")
+        return source
+    log.warning("--dmabuf não funcionou (%s); voltando para a captura pela memória comum", reason)
+    if source is not None:
+        source.stop()
+    args.dmabuf = False
+    fallback = build_source(args, portal)
+    fallback.start()
+    return fallback
 
 
 def parse_args(argv=None):
@@ -421,6 +467,10 @@ def parse_args(argv=None):
                         "bilinear; lanczos = texto um pouco mais nítido, ~2 ms a mais")
     p.add_argument("--stretch", action="store_true", help="esticar em vez de manter a proporção")
     p.add_argument("--window", action="store_true", help="portal: escolher uma janela em vez de um monitor")
+    p.add_argument("--dmabuf", action="store_true",
+                   help="portal, experimental: receber a tela na memória da GPU (DMA-BUF) e reduzir para "
+                        "480x272 no OpenGL; só a imagem pequena vem para a CPU. Se não funcionar, volta "
+                        "sozinho para o modo normal")
     p.add_argument("--no-cursor", action="store_true", help="portal: não desenhar o cursor")
     p.add_argument("--forget", action="store_true", help="portal: não reutilizar/guardar a escolha de tela")
     p.add_argument("--no-input", action="store_true", help="não injetar os controles do PSP no PC")
@@ -468,9 +518,11 @@ def main(argv=None) -> int:
             log.error("--codec h264 só funciona em 480x272 (o decoder do PSP escreve a tela inteira)")
             return 1
         log.info("codec: H.264 (todo frame IDR, decoder de hardware do PSP)")
+    if args.dmabuf and args.source != "portal":
+        log.warning("--dmabuf só vale para --source portal; ignorado")
+        args.dmabuf = False
     try:
-        source = build_source(args)
-        source.start()
+        source = start_source(args)
     except Exception as exc:  # erros de portal/GStreamer: mensagem curta, sem traceback
         if args.verbose:
             raise

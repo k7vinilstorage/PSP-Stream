@@ -616,6 +616,16 @@ Os intervalos são de 1 ou 2 quadros da tela (16,7 ou 33,3 ms), com ~40% de
 Teste: ver a "fonte" com algo que muda a 60 fps de verdade (o mouse girando
 sem parar no desktop, ou um vídeo de 60 fps) e o FPS do Minecraft na tela F3.
 
+**Resultado:** o Minecraft roda a 60 fps no notebook, então a explicação 1
+cai e quem limita é a captura do GNOME. O formato negociado não tem
+`memory:DMABuf`, então a cada frame o GNOME copia a tela inteira (12,5 MB) da
+GPU para a memória comum. O `--dmabuf` (experimental) pede a tela como
+DMA-BUF e reduz no OpenGL: só 480x272 (~0,5 MB) chega à CPU. Se o limite for
+essa cópia, a fonte sobe para ~60 fps. Se for o limitador de intervalo do
+GNOME, nada muda. Testado aqui só sem GPU (EGL sem tela, llvmpipe): a
+redução gera 480x272 com as bordas certas, e um pipeline sem DMA-BUF volta
+sozinho para o modo normal.
+
 **Minecraft nesta rodada** (q90, sinal 50-100%): frames de 6-11 KB dão 29-39
 fps e 35-65 ms. Nas cenas de 13-15,6 KB, 24-28 fps e 70-84 ms (p95 88-133
 ms): aí a rede limita, e o decode sobe para 6-7 ms.

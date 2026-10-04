@@ -6,6 +6,12 @@ Pipeline (só guarda o frame mais novo em cada etapa):
           ! videoscale (480x272, mantém proporção) ! videoconvert I420
           ! jpegenc quality=Q ! appsink (1 buffer, drop)
 
+Com --dmabuf (portal, experimental), a tela chega na memória da GPU e a
+redução é no OpenGL; só a imagem já pequena vem para a CPU:
+
+  pipewiresrc ! capsfilter (memory:DMABuf) ! queue leaky ! glupload ! glcolorconvert
+          ! glcolorscale (436x272 para 2240x1400) ! gldownload ! videoscale (bordas) ! ...
+
 Sem videorate: o portal entrega taxa variável (framerate=0/1), e com isso o
 `videorate drop-only=true max-rate=60` deixava passar só ~38 de 60 fps (os
 horários variam ±1 ms; medido no GStreamer 1.24, também com max-rate=75). Era
@@ -38,14 +44,34 @@ Gst.init(None)
 SCALE_THREADS = min(4, os.cpu_count() or 1)
 
 
+def gpu_size(src_size, width: int, height: int, keep_aspect: bool = True):
+    """Tamanho da redução na GPU: cabe em width x height mantendo a proporção
+    (as bordas pretas vêm depois, na CPU, já em 480x272). Larguras e alturas pares."""
+    if not keep_aspect or not src_size:
+        return width, height
+    sw, sh = src_size
+    f = min(width / sw, height / sh)
+    return max(2, round(sw * f / 2) * 2), max(2, round(sh * f / 2) * 2)
+
+
 def build_pipeline(src: str, width: int, height: int, fps: int, quality: int,
-                   scale: str = "bilinear", keep_aspect: bool = True, codec: str = "jpeg") -> str:
+                   scale: str = "bilinear", keep_aspect: bool = True, codec: str = "jpeg",
+                   gpu_from=None) -> str:
+    """gpu_from = (largura, altura) da fonte: recebe DMA-BUF e reduz no OpenGL
+    (só 480x272 chega à CPU); None = tudo na CPU."""
     # h264: o pipeline entrega I420 cru e o H264Encoder (h264.py) codifica,
     # porque o QP do openh264enc não muda com o pipeline rodando.
     enc = f"! jpegenc name=enc quality={quality} " if codec == "jpeg" else ""
+    head, gpu = f"{src} ", ""
+    if gpu_from:
+        gw, gh = gpu_size(gpu_from, width, height, keep_aspect)
+        head += '! capsfilter caps="video/x-raw(memory:DMABuf)" '
+        gpu = ("! glupload ! glcolorconvert ! glcolorscale "
+               f"! video/x-raw(memory:GLMemory),format=RGBA,width={gw},height={gh} ! gldownload ")
     return (
-        f"{src} "
+        head +
         "! queue name=q leaky=downstream max-size-buffers=1 max-size-bytes=0 max-size-time=0 "
+        f"{gpu}"
         f"! videoscale method={scale} n-threads={SCALE_THREADS} add-borders={'true' if keep_aspect else 'false'} "
         f"! video/x-raw,width={width},height={height},pixel-aspect-ratio=1/1 "
         "! videoconvert ! video/x-raw,format=I420 "
@@ -115,15 +141,17 @@ class CaptureMeter:
 
 class GstSource(FrameSource):
     def __init__(self, src: str, width: int, height: int, fps: int, quality: int,
-                 scale: str = "bilinear", keep_aspect: bool = True, keepalive=None, codec: str = "jpeg"):
+                 scale: str = "bilinear", keep_aspect: bool = True, keepalive=None, codec: str = "jpeg",
+                 gpu_from=None):
         super().__init__()
-        self._keepalive = keepalive  # objeto que precisa viver junto (ex.: sessão do portal)
+        self.keepalive = keepalive  # objeto que precisa viver junto (ex.: sessão do portal)
         self._quality = quality
         self.h264 = None
         if codec == "h264":
             from h264 import H264Encoder
             self.h264 = H264Encoder(width, height, quality)
-        desc = build_pipeline(src, width, height, fps, quality, scale, keep_aspect, codec)
+        self.gpu = bool(gpu_from)
+        desc = build_pipeline(src, width, height, fps, quality, scale, keep_aspect, codec, gpu_from)
         log.debug("pipeline: %s", desc)
         self.pipeline = Gst.parse_launch(desc)
         self.enc = self.pipeline.get_by_name("enc")
