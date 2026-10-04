@@ -424,6 +424,31 @@ Sinal 72%. Ping no início não registrado.
   Teste do (1): `prefetch=0`. O bench agora mostra o mínimo e a mediana do
   1º pedaço.
 
+#### prefetch=1 x prefetch=0: o custo fixo era quase todo travada de 200 ms [PSP]
+
+H.264, power save do PC desligado, `early_kb=0`, v0.6:
+
+| q | FPS (pre1 / pre0) | 1º pedaço pre1: média (mín, mediana) | 1º pedaço pre0: média (mín, mediana) | ping no stream (pre1 / pre0) |
+|---|---|---|---|---|
+| 30 | 29,0 / 24,2 | 41,6 (5,2, **8,7**) | 37,5 (5,3, **8,1**) | 7,4 / 8,1 |
+| 50 | 42,3 / 24,5 | 23,0 (5,1, **7,5**) | 33,0 (5,2, **9,1**) | 10,8 / 9,4 |
+| 70 | 37,2 / 25,6 | 20,9 (5,0, **7,2**) | 28,0 (5,0, **9,4**) | 9,2 / 11,4 |
+| 90 | 29,6 / 25,8 | 25,5 (5,0, **7,7**) | 23,5 (5,3, **8,9**) | 7,0 / 13,3 |
+
+- **O frame típico chega em ~8 ms** (mediana), igual ao ping. A média de
+  20-40 ms vem de poucos frames muito atrasados. O prefetch não muda a
+  mediana: o decode não atrapalha a recepção (suspeito 1 descartado). O
+  prefetch vale 1,2-1,7x de FPS.
+- Média - mediana = 13-33 ms. Com o PSP esperando **200 ms fixos** para
+  repetir um pedido sem resposta, isso é ~1 frame em 6-15 que perdeu o
+  pedido ou a resposta inteira. A q30 é a pior: frames de 2 pedaços somem
+  inteiros numa rajada de interferência, e perdas parciais o NACK resolve
+  rápido.
+- **v0.7:** o pedido é repetido depois de uma ida e volta medida (média + 4
+  desvios do 1º pedaço, 30-200 ms), e o overlay conta as repetições
+  ("repet"). Simulação (`fake_client --loss 0.02 --loss-up 0.05 --rtt-ms 8`,
+  H.264 q30) [SIM]: **63-70 fps** contra 40-47 fps com os 200 ms.
+
 ## 1. Tamanho de frame [PC]
 
 Mesmo pipeline do servidor (`videoscale` -> I420 -> `jpegenc`), saída 480x272

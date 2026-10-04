@@ -53,7 +53,7 @@ GAP_MIN_S, GAP_MAX_S = 0.020, 0.050  # fim do frame perdido: silêncio > média 
 RTO_MIN_S, RTO_MAX_S = 0.030, 0.200  # depois de um NACK: média + 4 desvios da ida e volta
 RTT_SAMPLE_MAX_S = 0.150             # acima disso o servidor esperou frame novo
 MAX_NACKS = 3          # depois disso desiste do frame e pede outro
-REQ_RETRY_S = 0.200    # pedido sem resposta: reenvia
+# pedido sem resposta: reenvia depois de uma ida e volta medida (rtt.timeout(RTO_MIN_S, RTO_MAX_S))
 STALL_S = 3.0          # nada completo por 3 s: recomeça (HELLO)
 
 
@@ -120,6 +120,8 @@ class FakePSP:
         self._raw_send(data)
 
     def _raw_send(self, data):
+        if self.args.loss_up and random.random() < self.args.loss_up:
+            return  # pedido "perdido no Wi-Fi" na subida
         with self.send_lock:
             try:
                 if self.udp:
@@ -221,7 +223,7 @@ class FakePSP:
                     if not req_q:
                         ask(REQ_FRAME)
                         continue
-                    left = REQ_RETRY_S - (time.monotonic() - last_req)
+                    left = rtt.timeout(RTO_MIN_S, RTO_MAX_S) - (time.monotonic() - last_req)
                     if left <= 0:
                         stalled = time.monotonic() - last_done > STALL_S
                         last_req = time.monotonic()
@@ -410,6 +412,8 @@ def main(argv=None):
     p.add_argument("--seconds", type=float, default=0, help="ou rodar por N segundos")
     p.add_argument("--transport", choices=["tcp", "udp"], default="tcp")
     p.add_argument("--loss", type=float, default=0, help="UDP: fração de pacotes perdidos (ex.: 0.02)")
+    p.add_argument("--loss-up", type=float, default=0,
+                   help="UDP: fração dos pedidos do PSP perdidos na subida (ex.: 0.05)")
     p.add_argument("--rtt-ms", type=float, default=0, help="UDP: atraso fixo por pedido (ex.: 21, medido no PSP)")
     p.add_argument("--early-kb", type=float, default=0, help="UDP: pedido antecipado (0 = desligado), como no PSP")
     p.add_argument("--kbps", type=float, default=0, help="limitar a vazão (KB/s), ex.: 400")

@@ -151,7 +151,7 @@ encerra a sessão na hora (no UDP não existe "fechar conexão").
 | depois de um NACK | espera a resposta por média + 4 desvios da ida e volta (pedido -> 1º pedaço, 30-200 ms); cada pedaço reenviado que chega adia a espera |
 | chegou o último pedaço do reenvio e ainda faltam outros | NACK de novo na hora |
 | 3 NACKs sem completar | desiste do frame (conta em "perdidos") e pede outro |
-| pedido sem nenhuma resposta por 200 ms | reenvia o pedido |
+| pedido sem nenhuma resposta por uma ida e volta medida (média + 4 desvios do pedido -> 1º pedaço, 30-200 ms) | reenvia o pedido |
 | 3 s sem completar nenhum frame | o pedido vai com HELLO (o servidor pode ter reiniciado) |
 | pedaço de frame mais antigo ou duplicado | ignorado |
 

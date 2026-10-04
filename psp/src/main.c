@@ -273,8 +273,8 @@ static void draw_overlay(const ui_t *ui, const stats_t *s)
             unsigned sel, poll, live, live_min;
             int polling;
             stream_ping(&sel, &poll, &polling, &live, &live_min);
-            display_text(0, 2, 0xFF00FF00, "perdidos %u  nack %u  ping %.1f ms (min %.1f, inicio %.1f %s)",
-                         stream_lost(), stream_nacks(), live / 1000.0f, live_min / 1000.0f,
+            display_text(0, 2, 0xFF00FF00, "perdidos %u nack %u repet %u ping %.1f ms (min %.1f, ini %.1f %s)",
+                         stream_lost(), stream_nacks(), stream_retries(), live / 1000.0f, live_min / 1000.0f,
                          (polling ? poll : sel) / 1000.0f, polling ? "poll" : "sel");
         }
     }
@@ -442,7 +442,7 @@ int main(int argc, char *argv[])
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
     display_init();
-    status("PSPStream v0.6");
+    status("PSPStream v0.7");
 
     char dir[192], err[128];
     app_dir(argc > 0 ? argv[0] : NULL, dir, sizeof(dir));

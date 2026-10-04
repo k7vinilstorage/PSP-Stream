@@ -65,6 +65,8 @@ unsigned stream_dropped(void);
 /* UDP: frames abandonados incompletos e NACKs enviados. */
 unsigned stream_lost(void);
 unsigned stream_nacks(void);
+/* UDP: pedidos repetidos por falta de resposta (pedido ou resposta perdidos). */
+unsigned stream_retries(void);
 
 /* Frames completos recebidos nesta conexão. */
 unsigned stream_completed(void);

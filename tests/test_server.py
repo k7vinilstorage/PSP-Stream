@@ -125,7 +125,7 @@ class UdpEndToEndTest(unittest.TestCase):
         try:
             client_args = argparse.Namespace(host="127.0.0.1", port=port, transport="udp", loss=loss, kbps=2000,
                                              decode_ms=5, no_prefetch=False, frames=0, seconds=seconds,
-                                             input_demo=False, rtt_ms=rtt_ms, early_kb=early_kb)
+                                             input_demo=False, rtt_ms=rtt_ms, early_kb=early_kb, loss_up=0)
             summary, jpeg = fake_client.FakePSP(client_args).run()
         finally:
             server.close()

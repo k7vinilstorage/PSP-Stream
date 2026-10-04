@@ -15,8 +15,8 @@
  *    há buracos; ou depois de um silêncio maior que o normal entre pedaços,
  *    se o fim do frame se perdeu. Depois de um NACK, esperamos uma ida e volta
  *    inteira (medida) antes do próximo. Depois de MAX_NACKS desistimos do
- *    frame e pedimos outro. Pedido sem resposta é reenviado a cada
- *    REQ_RETRY_US (o servidor ignora duplicados).
+ *    frame e pedimos outro. Pedido sem resposta é reenviado depois de uma
+ *    ida e volta medida (rto_us, 30-200 ms; o servidor ignora duplicados).
  *
  * Cabeçalho JPEG (UDP): as tabelas no início de cada JPEG (~620 bytes) só
  * mudam com a qualidade. Guardamos as duas últimas e dizemos ao servidor qual
@@ -60,7 +60,10 @@
 #define RTO_MAX_US (200 * 1000)
 #define RTT_SAMPLE_MAX_US (150 * 1000) /* acima disso o servidor esperou frame novo: não é a rede */
 #define MAX_NACKS 3
-#define REQ_RETRY_US (200 * 1000)  /* pedido sem resposta: reenvia */
+/* Pedido sem resposta: reenvia depois de rto_us(). Eram 200 ms fixos: no
+ * PSP-3000 o 1º pedaço tinha mediana de ~8 ms e média de 20-40 ms, puxada por
+ * ~1 frame em 10 que perdia o pedido ou a resposta inteira (frames H.264 de
+ * 2 pedaços somem juntos numa rajada de interferência) e esperava os 200 ms. */
 #define STALL_US (3000 * 1000)     /* nada completo por 3 s: recomeça (HELLO); > keepalive de 1 s do servidor */
 
 enum { SLOT_FREE, SLOT_RECV, SLOT_READY, SLOT_DECODING };
@@ -69,7 +72,7 @@ static ps_frame_t slots[NUM_SLOTS];
 static int state[NUM_SLOTS];
 static int ready_idx = -1;
 static ps_ack_t last_ack;
-static unsigned dropped, lost, nacks, completed;
+static unsigned dropped, lost, nacks, completed, retries;
 
 static SceUID lock_sema = -1, ready_sema = -1, want_sema = -1, send_sema = -1;
 static SceUID net_thid = -1;
@@ -580,11 +583,12 @@ static int net_thread_udp(void)
                 ASK(PS_REQ_FRAME);
                 continue;
             }
-            int left = REQ_RETRY_US - (int)(now_us() - last_req);
+            int left = rto_us() - (int)(now_us() - last_req);
             if (left <= 0) {
                 /* o pedido (ou a resposta) se perdeu, ou a tela está parada */
                 int stalled = now_us() - last_done > STALL_US;
                 last_req = now_us();
+                retries++;
                 if (send_req(PS_REQ_FRAME | (stalled ? PS_REQ_HELLO : 0), NULL) < 0)
                     return -1;
                 continue;
@@ -774,7 +778,7 @@ int stream_start(int sock, int udp, const struct sockaddr_in *dest, int prefetch
     g_running = running;
     net_error = 0;
     stopping = 0;
-    dropped = lost = nacks = completed = 0;
+    dropped = lost = nacks = completed = retries = 0;
     ready_idx = -1;
     memset(&last_ack, 0, sizeof(last_ack));
     for (int i = 0; i < NUM_SLOTS; i++) {
@@ -876,6 +880,11 @@ unsigned stream_lost(void)
 unsigned stream_nacks(void)
 {
     return nacks;
+}
+
+unsigned stream_retries(void)
+{
+    return retries;
 }
 
 unsigned stream_completed(void)
