@@ -63,7 +63,7 @@ class _UInput:
         caps = {ecodes.EV_KEY: keys, ecodes.EV_REL: [ecodes.REL_X, ecodes.REL_Y, ecodes.REL_WHEEL]}
         try:
             self.ui = UInput(caps, name="PSPStream (PSP)")
-        except (OSError, PermissionError) as exc:
+        except Exception as exc:  # OSError/PermissionError ou evdev.UInputError (módulo não carregado)
             raise RuntimeError(f"sem acesso a /dev/uinput ({exc}); veja a seção Controles do README") from exc
 
     def key(self, code: str, down: bool):

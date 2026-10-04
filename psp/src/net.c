@@ -95,6 +95,12 @@ void net_ap_info(net_ap_info_t *info)
     info->power_save = sceNetApctlGetInfo(PSP_NET_APCTL_INFO_POWER_SAVE, &v) == 0 ? v.powerSave : -1;
 }
 
+int net_ap_connected(void)
+{
+    int state = 0;
+    return sceNetApctlGetState(&state) == 0 && state == PSP_NET_APCTL_STATE_GOT_IP;
+}
+
 int net_connect_server(const char *host, int port, int rcvbuf_kb)
 {
     int sock = socket(AF_INET, SOCK_STREAM, 0);

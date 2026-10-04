@@ -18,6 +18,9 @@ typedef struct {
 
 void net_ap_info(net_ap_info_t *info);
 
+/* 1 se ainda está conectado ao ponto de acesso (com IP). */
+int net_ap_connected(void);
+
 /* Abre a conexão TCP com o servidor. rcvbuf_kb = buffer de recepção (janela
  * TCP). Devolve o socket ou < 0. */
 int net_connect_server(const char *host, int port, int rcvbuf_kb);

@@ -89,6 +89,9 @@ void display_writeback(void)
 
 void display_clear_back(void)
 {
+    /* Sem isso, linhas velhas no cache (de um frame anterior neste buffer)
+     * poderiam ser gravadas por cima dos zeros nas bordas da imagem. */
+    sceKernelDcacheWritebackInvalidateAll();
     memset(UNCACHED(fb[draw_idx]), 0, FB_BYTES);
 }
 

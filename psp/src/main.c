@@ -14,6 +14,7 @@
 #include <pspdisplay.h>
 #include <pspiofilemgr.h>
 #include <pspkernel.h>
+#include <pspnet_apctl.h>
 #include <psppower.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -425,6 +426,16 @@ int main(int argc, char *argv[])
     input_enabled = cfg.input;
 
     while (g_running) {
+        if (!net_ap_connected()) {
+            display_console("Wi-Fi caiu. Reconectando (perfil %d)...", cfg.wifi_profile);
+            sceNetApctlDisconnect();
+            if (net_connect_ap(cfg.wifi_profile, ip, sizeof(ip), status, &g_running) < 0) {
+                for (int i = 0; i < 30 && g_running; i++) /* tenta de novo em 3 s */
+                    sceKernelDelayThread(100 * 1000);
+                continue;
+            }
+            display_console("IP do PSP: %s", ip);
+        }
         display_console("Conectando ao PC %s:%d...", cfg.host, cfg.port);
         int sock = net_connect_server(cfg.host, cfg.port, cfg.rcvbuf_kb);
         if (sock < 0) {
