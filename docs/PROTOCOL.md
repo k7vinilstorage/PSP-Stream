@@ -220,8 +220,15 @@ em TCP e UDP.
 - Um PSP por vez. Uma nova conexão (TCP, ou HELLO por UDP) derruba a anterior
   (o PSP pode ter reiniciado o app e deixado uma sessão meio aberta).
 - Se nenhum frame novo surgir em 1 s (tela parada no Wayland), o servidor
-  reenvia o último para a conexão continuar viva. Esse reenvio fica fora da
-  média de latência (a imagem não mudou) e aparece como "reenvios".
+  reenvia o último para a conexão continuar viva (com frames P, um P sem
+  mudança, ~100 bytes). Esse reenvio fica fora da média de latência (a
+  imagem não mudou) e aparece como "reenvios".
+- **Procurar o PC na rede** (tela de configuração do PSP): o PSP manda o
+  pedido de 52 bytes com `PING` (0x10) para 255.255.255.255 e para o
+  broadcast da sub-rede, na porta configurada, a cada 200 ms por até 2 s. O
+  servidor responde ping de qualquer endereço, sem sessão, e o IP de origem
+  do `ps_pong_t` vira o IP do PC. O `echo_ts` do ping de busca tem o bit 30
+  ligado, para não ser confundido com os pings do stream.
 - Se o PSP passar 10 s sem enviar nada, o servidor encerra a sessão e volta a
   esperar conexões.
 - **Tecla presa:** se o PSP ficar 500 ms sem mandar nada enquanto há tecla ou

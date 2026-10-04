@@ -10,6 +10,7 @@
 #include "decode.h"
 #include "display.h"
 #include "protocol.h"
+#include "version.h"
 
 #include <pspctrl.h>
 #include <pspkernel.h>
@@ -286,7 +287,7 @@ static void draw(const ps_config_t *cfg, const char *dir, int sel, const editor_
                  uint32_t status_color, int countdown)
 {
     display_clear_back();
-    display_text(1, 0, C_TITLE, "PSPStream v0.9 - configuracao");
+    display_text(1, 0, C_TITLE, "PSPStream v%s - configuracao", PSPSTREAM_VERSION);
     display_text(1, 1, C_DIM, "%.56sserver.txt", dir);
     for (int i = 0; i < IT_COUNT; i++) {
         int row = item_row(i);

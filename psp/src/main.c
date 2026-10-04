@@ -31,8 +31,9 @@
 #include "net.h"
 #include "protocol.h"
 #include "stream.h"
+#include "version.h"
 
-PSP_MODULE_INFO("PSPStream", PSP_MODULE_USER, 0, 3);
+PSP_MODULE_INFO("PSPStream", PSP_MODULE_USER, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
 /* Heap fixo: os módulos de rede/avcodec carregados depois precisam de RAM livre. */
 PSP_HEAP_SIZE_KB(8 * 1024);
@@ -559,7 +560,7 @@ int main(int argc, char *argv[])
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
     display_init();
-    status("PSPStream v0.9");
+    status("PSPStream v" PSPSTREAM_VERSION);
 
     char dir[192], err[128];
     app_dir(argc > 0 ? argv[0] : NULL, dir, sizeof(dir));
@@ -594,7 +595,7 @@ int main(int argc, char *argv[])
             menu_msg = NULL;
             apply_config(&cfg, &ui, decoder_ready);
             display_console_clear();
-            status("PSPStream v0.9");
+            status("PSPStream v" PSPSTREAM_VERSION);
         }
         if (!decoder_ready) {
             if (decoder_init(cfg.decoder) < 0) {

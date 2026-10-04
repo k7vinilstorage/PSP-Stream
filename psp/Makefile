@@ -37,4 +37,5 @@ dist: EBOOT.PBP
 	mkdir -p $(DIST_DIR)
 	cp EBOOT.PBP $(DIST_DIR)/
 	[ -f $(DIST_DIR)/server.txt ] || cp server.txt.example $(DIST_DIR)/server.txt
-	@echo "Copie a pasta dist/PSP para a raiz do memory stick e edite PSP/GAME/PSPStream/server.txt"
+	@echo "Copie a pasta dist/PSP para a raiz do memory stick. O IP do PC se configura no próprio PSP"
+	@echo "(tela de configuracao, 'Procurar o PC na rede') ou em PSP/GAME/PSPStream/server.txt."

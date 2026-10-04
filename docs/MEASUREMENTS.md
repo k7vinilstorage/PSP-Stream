@@ -1,4 +1,8 @@
-# Medições (Marco 3)
+# Medições
+
+Caderno de medições do desenvolvimento, em ordem: cada seção registra o que
+se sabia naquele momento, inclusive hipóteses que os números seguintes
+derrubaram. O resumo atual está no [README](../README.md#desempenho-medido).
 
 Cada número aqui tem uma origem, e elas não se misturam:
 
@@ -852,9 +856,40 @@ Outras causas possíveis que a sonda não cobre:
   2 s.
 - **Bateria fraca:** 3 decodes por frame gastam mais.
 
-**No PSP (a medir, depois da v4.1):** `dec` no overlay (esperado ~10,6 ms, com
-`h264p`), FPS e latência no log do servidor contra o `--codec h264` na mesma
-cena, o contador `idr` (IDRs pedidos) e `repet` (pedidos repetidos).
+#### Teste v4.2 e gameplay: frames P funcionando [PSP]
+
+A sonda v4.2 testou a correção (Stop antes de todo IDR que chega com frames
+P no decoder): IDR a cada 10 frames com Stop antes, e perda de 5 frames +
+Stop + IDR, o mesmo cenário do passo 8 que desligava. Os dois passaram, e o
+stream com `--codec h264p` (EBOOT v0.9 com a correção) rodou em gameplay sem
+problemas. Ficam para medir no PSP: FPS e latência contra o `--codec h264`
+na mesma cena, o `dec` no overlay (esperado ~10,6 ms) e os contadores `idr`
+e `repet`.
+
+#### openh264 direto, sem o GStreamer (v1.0) [PC]
+
+Pelo GStreamer (appsrc -> openh264enc -> appsink), cada AU passa por duas
+filas e duas threads. Com a libopenh264 chamada direto (ctypes), o mesmo
+encode, imagem parada com o servidor de verdade e um pedido a cada ~5 ms:
+
+| | pedido -> 1º pacote, mediana | p95 |
+|---|---|---|
+| JPEG ou H.264 já pronto (referência: ida e volta no localhost) | 0,43-0,48 ms | 0,66-0,72 ms |
+| frames P pelo GStreamer | 2,83 ms | 4,17 ms |
+| **frames P, openh264 direto** | **1,78 ms** | **2,67 ms** |
+
+Por AU, com a imagem andando: frame 0,85 ms e cópia 0,30 ms com o encoder
+"quente"; com 16 ms parado entre pacotes (60 fps), 1,7 e 0,5 ms (a CPU sai
+do ritmo). Desligar a detecção de fundo ou de troca de cena, ou baixar a
+complexidade, mudou menos que o ruído da medida, então os parâmetros ficaram
+iguais aos do openh264enc: o fluxo sai idêntico, byte a byte (teste
+`test_direct_matches_gstreamer`).
+
+O ganho maior é outro: com o controle de taxa desligado, o QP de cada frame
+vem do `iDLayerQp`, que o `SetOption(ENCODER_OPTION_SVC_ENCODE_PARAM_EXT)`
+atualiza sem reset (`WelsEncoderParamAdjust`, ramo sem reset, conferido no
+código da 2.6). A qualidade adaptativa muda sem IDR; pelo GStreamer, cada
+troca refazia o encoder (IDR) e esperava até 3 s.
 
 ## 1. Tamanho de frame [PC]
 

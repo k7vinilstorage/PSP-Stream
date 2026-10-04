@@ -24,6 +24,7 @@ log = logging.getLogger("pspstream")
 
 # Sem frame novo por este tempo, reenvia o último para a conexão não morrer
 # (no Wayland o compositor só manda frames quando a tela muda).
+VERSION = "1.0"
 KEEPALIVE_S = 1.0
 
 
@@ -480,7 +481,8 @@ def start_source(args, portal=None):
 
 def parse_args(argv=None):
     here = Path(__file__).resolve().parent
-    p = argparse.ArgumentParser(description="PSPStream: transmite a tela do PC para o PSP (MJPEG).")
+    p = argparse.ArgumentParser(description="PSPStream: transmite a tela do PC para o PSP (H.264 ou MJPEG).")
+    p.add_argument("--version", action="version", version=f"PSPStream {VERSION}")
     p.add_argument("--port", type=int, default=protocol.DEFAULT_PORT,
                    help="porta TCP e UDP (padrão %(default)s)")
     p.add_argument("--codec", choices=["auto", "jpeg", "h264", "h264p"], default="auto",
@@ -626,7 +628,8 @@ def main(argv=None) -> int:
     udp.bind((args.bind, args.port))
     server = Server(source, args, injector)
     threading.Thread(target=server.serve_udp, args=(udp,), name="udp", daemon=True).start()
-    log.info("aguardando o PSP em %s:%d, TCP e UDP (coloque este IP no server.txt)", local_ip(), args.port)
+    log.info("PSPStream %s: aguardando o PSP em %s:%d, TCP e UDP (no PSP: 'Procurar o PC na rede', ou este IP "
+             "no server.txt)", VERSION, local_ip(), args.port)
     from netcheck import check_pc_wifi
     check_pc_wifi(local_ip())
     srv.settimeout(0.5)
