@@ -400,6 +400,30 @@ Sem anotação de power save nem `early_kb` (a confirmar), sinal 55%:
 - A v0.6 manda um ping por segundo durante o stream (coluna "ping no
   stream" no bench), para separar rádio de resposta com frame.
 
+#### H.264, power save do PC desligado, `early_kb=0`, v0.6 [PSP]
+
+Sinal 72%. Ping no início não registrado.
+
+| q | FPS | latência / p95 | rede | 1º pedaço | ping no stream (mín) | rajada | reenviados |
+|---|---|---|---|---|---|---|---|
+| 30 | 32,1 | 23 / 50 ms | 33,2 | 32,2 | 11,2 (3,5) | 7,6 | 1,6% |
+| 50 | **42,8** | **19 / 34 ms** | 21,8 | 18,4 | 8,4 (3,5) | 3,5 | 1,1% |
+| 70 | 23,9 | 31 / 68 ms | 39,4 | 30,7 | 13,3 (3,8) | 8,8 | 2,0% |
+| 90 | 28,6 | 29 / 45 ms | 34,8 | 23,3 | 9,7 (3,5) | 11,6 | 1,2% |
+
+- Com o power save ligado (12:22): 27,1 / 28,7 / 28,6 / 22,1 fps. Melhorou
+  em q50 e q90, empatou em q30 e q70: efeito menor do que eu previa, dentro
+  da variação entre rodadas fora a q50.
+- **O ping durante o stream mede 8-13 ms (mínimo 3,5 ms), e o 1º pedaço
+  18-32 ms.** O caminho de rede é o mesmo (PSP -> roteador -> PC ->
+  servidor -> volta). Sobram ~10-20 ms por frame que só aparecem quando a
+  resposta é um frame: não é a ida e volta do rádio em geral.
+- Suspeitos: (1) o PSP começa o decode e o flip logo depois de pedir o
+  próximo frame (prefetch), e isso atrasaria a recepção; (2) o pacote de
+  1452 bytes contra 8 do ping, se o roteador mandar ao PSP numa taxa baixa.
+  Teste do (1): `prefetch=0`. O bench agora mostra o mínimo e a mediana do
+  1º pedaço.
+
 ## 1. Tamanho de frame [PC]
 
 Mesmo pipeline do servidor (`videoscale` -> I420 -> `jpegenc`), saída 480x272

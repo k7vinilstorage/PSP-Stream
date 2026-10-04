@@ -77,6 +77,8 @@ class Window:
             "local_ms": _avg(self.local),
             "decode_ms": _avg(self.decode),
             "first_ms": _avg(self.first),
+            "first_min_ms": min(self.first) if self.first else 0.0,
+            "first_med_ms": statistics.median(self.first) if self.first else 0.0,
             "burst_ms": _avg(self.burst),
             "burst_kbps": statistics.median(self.burst_rate) if self.burst_rate else 0.0,
             "ping_ms": _avg(self.ping),
