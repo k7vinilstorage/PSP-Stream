@@ -525,6 +525,17 @@ tests/                 testes do servidor
 
 ## Decisões técnicas
 
+- **Servidor em Python, o trabalho pesado em C.** Captura, redução,
+  conversão de cor e codificação são GStreamer, openh264 e OpenGL (C/C++,
+  GPU); o auxiliar KMS é C. O Python só costura: lê pedidos, chama o
+  encoder e corta o frame em pacotes. Medido aqui, a 60 fps: as threads de
+  Python usam 3-6% de um núcleo (o resto do processo é C), e do pedido do
+  PSP ao 1º pacote do frame são 0,43-0,48 ms no localhost, o mesmo de um
+  ping. Reescrever em C ou Rust economizaria uns 20-30 MB de RAM e nada
+  perceptível de latência. Onde dá para ganhar no PC é no encoder dos frames
+  P: frame + 2 cópias levam ~3 ms (1,3-2,1 ms o frame, ~0,7 ms cada cópia),
+  todo esse tempo no GStreamer/openh264.
+
 - **GStreamer em vez de ffmpeg.** No Wayland, a única captura de tela robusta
   é o portal ScreenCast, que entrega um stream PipeWire. O GStreamer lê
   PipeWire nativamente (`pipewiresrc`). O `x11grab` do ffmpeg não captura
