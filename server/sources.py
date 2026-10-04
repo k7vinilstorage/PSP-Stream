@@ -67,10 +67,13 @@ class StaticSource(FrameSource):
         super().__init__()
         self._reencode = reencode
         self._quality = quality if reencode else None
-        info = jpeg_info(jpeg)
-        for problem in info.problems():
-            log.warning("imagem estática: %s", problem)
-        log.info("imagem estática: %dx%d, %.1f KB", info.width, info.height, len(jpeg) / 1024)
+        if jpeg[:2] == b"\xff\xd8":
+            info = jpeg_info(jpeg)
+            for problem in info.problems():
+                log.warning("imagem estática: %s", problem)
+            log.info("imagem estática: %dx%d, %.1f KB", info.width, info.height, len(jpeg) / 1024)
+        else:
+            log.info("imagem estática: H.264, %.1f KB", len(jpeg) / 1024)
         self.publish(jpeg)
 
     def set_quality(self, quality: int) -> None:

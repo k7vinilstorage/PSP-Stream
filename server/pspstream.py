@@ -59,6 +59,7 @@ class Session:
         self.hello_seen = False
         self.wifi = None  # (sinal %, flags) informados pelo PSP
         self.ping = None  # (select, polling, usando polling) medidos pelo PSP no início
+        self.h264_warned = False
 
     def run(self) -> None:
         log.info("PSP conectado via %s: %s:%d", self.transport.name.upper(), *self.transport.addr)
@@ -102,6 +103,10 @@ class Session:
             self.injector.update(req.buttons, req.lx, req.ly)
         if req.signal:
             self._wifi(req.signal, req.wflags)
+        if self.args.codec == "h264" and not req.wflags & protocol.CAP_H264 and not self.h264_warned:
+            self.h264_warned = True
+            log.warning("o PSP não decodifica H.264 (EBOOT anterior à v0.5, ou h264=0 no server.txt): "
+                        "atualize o EBOOT ou rode o servidor com --codec jpeg")
         ping = (req.ping_select, req.ping_poll, req.wflags & protocol.WIFI_RX_POLL)
         if ping[:2] != (0, 0) and ping != self.ping:
             self.ping = ping
@@ -218,6 +223,7 @@ class Session:
                          f"DSCP: {self.args.dscp}")
         out = Path(f"bench_{time.strftime('%Y%m%d_%H%M%S')}.md")
         out.write_text(f"Fonte: {self.args.source} {self.args.size[0]}x{self.args.size[1]}, "
+                       f"codec: {self.args.codec.upper()}, "
                        f"transporte: {self.transport.name.upper()}\n\n" + "\n".join(table) + "\n")
         log.info("benchmark concluído, tabela salva em %s:\n%s", out, "\n".join(table))
 
@@ -331,8 +337,17 @@ def build_source(args):
             # de até 480x272) e a qualidade não muda.
             return StaticSource(Path(args.image).read_bytes())
 
-        def reencode(q):
-            return transcode_image(args.image, w, h, q, not args.stretch, args.scale)
+        if args.codec == "h264":
+            from h264 import H264Encoder, image_to_i420
+            raw = image_to_i420(args.image, w, h, not args.stretch, args.scale)
+            enc = H264Encoder(w, h, args.quality)
+
+            def reencode(q):
+                enc.set_quality(q)
+                return enc.encode(raw)
+        else:
+            def reencode(q):
+                return transcode_image(args.image, w, h, q, not args.stretch, args.scale)
 
         return StaticSource(reencode(args.quality), reencode, args.quality)
 
@@ -349,7 +364,7 @@ def build_source(args):
         src = args.gst_src
     else:
         src = SOURCES[args.source]
-    return GstSource(src, w, h, args.fps, args.quality, args.scale, not args.stretch, keepalive)
+    return GstSource(src, w, h, args.fps, args.quality, args.scale, not args.stretch, keepalive, args.codec)
 
 
 def parse_args(argv=None):
@@ -357,6 +372,9 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description="PSPStream: transmite a tela do PC para o PSP (MJPEG).")
     p.add_argument("--port", type=int, default=protocol.DEFAULT_PORT,
                    help="porta TCP e UDP (padrão %(default)s)")
+    p.add_argument("--codec", choices=["jpeg", "h264"], default="jpeg",
+                   help="jpeg (padrão) ou h264: todo frame IDR, decodificado pelo hardware do PSP; "
+                        "~40%% dos bytes do JPEG na mesma qualidade (precisa do openh264enc e do EBOOT v0.5)")
     p.add_argument("--udp-pace", type=float, default=0, metavar="KB/s",
                    help="UDP: limitar a taxa de envio dos pedaços (0 = sem limite, padrão)")
     p.add_argument("--no-hdr-cache", dest="hdr_cache", action="store_false",
@@ -418,6 +436,20 @@ def main(argv=None) -> int:
     sys.setswitchinterval(0.001)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+    if args.codec == "h264":
+        try:
+            import h264
+            ok = h264.available()
+        except (ImportError, ValueError):
+            ok = False
+        if not ok:
+            log.error("--codec h264 precisa do openh264enc do GStreamer. No Fedora: "
+                      "sudo dnf install gstreamer1-plugin-openh264 (repositório fedora-cisco-openh264)")
+            return 1
+        if tuple(args.size) != (480, 272):
+            log.error("--codec h264 só funciona em 480x272 (o decoder do PSP escreve a tela inteira)")
+            return 1
+        log.info("codec: H.264 (todo frame IDR, decoder de hardware do PSP)")
     try:
         source = build_source(args)
         source.start()

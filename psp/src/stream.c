@@ -83,6 +83,7 @@ static volatile int net_error;
 static volatile int stopping;
 
 static volatile int wifi_signal, wifi_flags;
+static volatile int cap_h264 = 1;
 /* Estimativas (us), como o RTO do TCP: média móvel e desvio médio. */
 static int gap_avg = 3000, gap_dev = 3000;   /* entre pedaços seguidos de um frame */
 static int rtt_avg = 30000, rtt_dev = 10000; /* pedido -> primeiro pedaço */
@@ -155,7 +156,7 @@ static int send_req(uint16_t flags, const ps_nack_t *nack)
         r->burst_t = a.burst_t;
     }
     r->signal = wifi_signal;
-    r->wflags = wifi_flags | (rx_poll ? PS_WIFI_RX_POLL : 0);
+    r->wflags = wifi_flags | (rx_poll ? PS_WIFI_RX_POLL : 0) | (cap_h264 ? PS_CAP_H264 : 0);
     r->lost = lost > 0xFFFF ? 0xFFFF : lost;
     r->hdr_have = hdr_have;
     r->ping_select = clamp_u16(ping_sel_us / 100);
@@ -777,6 +778,11 @@ void stream_ping(unsigned *select_us, unsigned *poll_us, int *polling)
     *select_us = ping_sel_us;
     *poll_us = ping_poll_us;
     *polling = rx_poll;
+}
+
+void stream_set_h264(int on)
+{
+    cap_h264 = on;
 }
 
 void stream_set_wifi(int signal, int flags)

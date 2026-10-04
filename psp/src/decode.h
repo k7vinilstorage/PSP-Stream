@@ -13,9 +13,13 @@ int decoder_select(int kind);
 int decoder_kind(void);
 
 /* Decodifica para dst (framebuffer, endereço com cache, stride FB_STRIDE),
- * centralizado. Os dados do jpeg precisam estar alinhados a 64 bytes.
+ * centralizado. JPEG ou H.264 (todo frame IDR), detectado pelos primeiros
+ * bytes. Os dados precisam estar alinhados a 64 bytes.
  * Devolve 0 se ok e preenche *w, *h. */
 int decoder_decode(const uint8_t *jpeg, int size, uint32_t *dst, int *w, int *h);
+
+/* 1 se os dados são H.264 Annex B (começam com start code); senão JPEG. */
+int decoder_is_h264(const uint8_t *data, int size);
 
 const char *decoder_name(void);
 const char *decoder_error(void);

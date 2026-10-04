@@ -81,6 +81,7 @@ class Request:
 
 WIFI_POWER_SAVE = 0x01  # "Economia de energia WLAN" ligada no XMB
 WIFI_RX_POLL = 0x02     # o PSP espera pacotes consultando o socket (não select())
+CAP_H264 = 0x04         # o PSP decodifica H.264 (todo frame IDR) pelo hardware
 
 # Campo hdr do pedaço UDP: bits 0-30 = id do cabeçalho deste JPEG, bit 31 = o
 # cabeçalho foi tirado (o PSP põe de volta o que guardou com esse id).

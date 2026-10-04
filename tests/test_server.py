@@ -116,7 +116,7 @@ class UdpEndToEndTest(unittest.TestCase):
         card = (ROOT / "assets/testcard.jpg").read_bytes()
         args = argparse.Namespace(adaptive=False, bench=None, stats_interval=60, target_fps=30, q_min=25,
                                   q_max=90, udp_pace=0, source="static", size=(480, 272), hdr_cache=hdr_cache,
-                                  dscp="ef")
+                                  dscp="ef", codec="jpeg")
         server = pspstream.Server(source or StaticSource(card), args, None)
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.bind(("127.0.0.1", 0))
@@ -184,12 +184,44 @@ class UdpEndToEndTest(unittest.TestCase):
         self.assertIn(jpeg, variants)
         self.assertGreater(summary["stripped"], summary["frames"] // 2, summary)
 
+    def test_h264_static(self):
+        # --codec h264: todo frame é um AU Annex B (SPS + PPS + IDR), sem cache de cabeçalho
+        try:
+            import h264
+        except (ImportError, ValueError):
+            self.skipTest("sem GStreamer")
+        if not h264.available():
+            self.skipTest("sem openh264enc")
+        from sources import StaticSource
+        raw = h264.image_to_i420(str(ROOT / "assets/testcard.jpg"), 480, 272)
+        au = h264.H264Encoder(480, 272, 60).encode(raw)
+        self.assertTrue(h264.is_h264(au))
+        self.assertEqual(protocol.jpeg_header_len(au), 0)
+        summary, got, _ = self.run_stream(early_kb=0, loss=0.02, source=StaticSource(au))
+        self.assertGreater(summary["frames"], 20)
+        self.assertEqual(got, au)
+        self.assertEqual(summary["stripped"], 0)
+
     def test_early_request_keeps_streaming(self):
         # Com pedido antecipado, uma perda no fim do frame N vira pulo para o
         # N+1 (que já está chegando) em vez de esperar o NACK.
         summary, jpeg, card = self.run_stream(early_kb=10)
         self.assertGreater(summary["frames"], 20)
         self.assertEqual(jpeg, card)
+
+
+class H264QualityTest(unittest.TestCase):
+    def test_qp_mapping(self):
+        try:
+            import h264
+        except (ImportError, ValueError):
+            self.skipTest("sem GStreamer")
+        # calibrado na mesma SSIM do jpegenc (docs/MEASUREMENTS.md)
+        self.assertEqual([h264.qp_for_quality(q) for q in (30, 50, 70, 90)], [40, 37, 33, 30])
+        self.assertEqual(h264.qp_for_quality(1), 44)
+        self.assertEqual(h264.qp_for_quality(100), 29)
+        self.assertTrue(h264.is_h264(b"\x00\x00\x00\x01\x67"))
+        self.assertFalse(h264.is_h264(b"\xff\xd8\xff"))
 
 
 class JpegInfoTest(unittest.TestCase):

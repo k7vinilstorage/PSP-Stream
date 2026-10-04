@@ -19,7 +19,7 @@ LDFLAGS =
 # depois da libc. Listados aqui também, os stubs de um mesmo módulo seriam
 # puxados em dois blocos separados, e o carregador (PSP e PPSSPP) leria NIDs
 # errados. Foi assim que socket()/connect() quebraram no primeiro teste.
-LIBS = -lturbojpeg -lpspjpeg -lpsppower
+LIBS = -lturbojpeg -lpspmpeg -lpspmpegbase -lpspjpeg -lpsppower
 
 EXTRA_TARGETS = EBOOT.PBP
 PSP_EBOOT_TITLE = PSPStream

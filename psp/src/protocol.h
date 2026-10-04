@@ -54,6 +54,7 @@ typedef struct __attribute__((packed)) {
 
 #define PS_WIFI_POWER_SAVE 0x01 /* "Economia de energia WLAN" ligada no XMB */
 #define PS_WIFI_RX_POLL 0x02    /* esperando pacotes por consulta, não select() */
+#define PS_CAP_H264 0x04        /* decodifica H.264 (todo frame IDR) pelo hardware */
 
 /* PC -> PSP (16 bytes), seguido de `size` bytes de JPEG. */
 typedef struct __attribute__((packed)) {

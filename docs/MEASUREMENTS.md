@@ -290,6 +290,44 @@ do JPEG) com metade dos bytes na rede. Pelo modelo de custo por frame
 por frame. A v3 do teste confere isso no PSP: intra com e sem Stop, CABAC,
 um frame pulado e o Stop gravando direto na VRAM.
 
+#### Teste v3: todo frame IDR + Stop [PSP]
+
+| passo | tempo por frame | atraso |
+|---|---|---|
+| intra, 1 chamada | 4,16 ms | 1 frame |
+| **intra + Stop** | **4,23 ms** (Stop 1,12 ms) | **0** |
+| intra CABAC + Stop | 4,30 ms, 11% menos bytes | 0 |
+| intra + Stop, sem o frame 10 | 4,24 ms, sem erros | 0 |
+| **intra + Stop direto na VRAM** | **3,72 ms** (Stop 0,62 ms) | **0** |
+
+**É o que entrou no stream (v0.5, `--codec h264`).** Comparado com o
+`sceJpeg`: metade do tempo de decode, ~40% dos bytes na mesma qualidade,
+nenhum frame de atraso, e cada frame independente como no MJPEG.
+
+#### Encoder do servidor [PC]
+
+- **x264enc (GStreamer) segura 1 frame** em todas as configurações testadas
+  (`tune=zerolatency`, `threads=1`, `rc-lookahead=0`, `sync-lookahead=0`,
+  `pass=quant`): o AU do frame N só sai depois de entrar o N+1. Numa tela
+  parada (o portal só manda frame quando algo muda), a última mudança nunca
+  sairia. Descartado.
+- **openh264enc entrega na hora.** Só faz baseline/CAVLC (11% maior que
+  CABAC no teste do PSP). Com `rate-control=off` ele ignora `qp-min/qp-max`;
+  com `rate-control=quality`, bitrate alto e `qp-min = qp-max`, o QP vale.
+  O QP não muda com o pipeline rodando: como todo frame é IDR, o servidor
+  recria o pipeline do encoder quando a qualidade muda.
+- Calibração (12 frames, desktop + jogos, mesma SSIM do `jpegenc`), 3,7 ms
+  de encode por frame:
+
+| JPEG | KB | QP do openh264 | KB | % do JPEG |
+|---|---|---|---|---|
+| q30 | 10,2 | 40 | 4,0 | 40% |
+| q50 | 13,6 | 36 | 6,1 | 45% |
+| q70 | 18,3 | 34 | 7,7 | 42% |
+| q90 | 34,5 | 30 | 11,3 | 33% |
+
+  Reta usada: `QP = 44,6 - 0,16·q` (q na escala do JPEG).
+
 ## 1. Tamanho de frame [PC]
 
 Mesmo pipeline do servidor (`videoscale` -> I420 -> `jpegenc`), saída 480x272

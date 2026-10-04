@@ -15,6 +15,7 @@ typedef struct {
     int udp;          /* transporte: 0 = TCP, 1 = UDP */
     int early_kb;     /* UDP: pede o próximo frame quando faltar isso do atual (0 = desligado) */
     int rxwait;       /* UDP: RXWAIT_AUTO, RXWAIT_SELECT ou RXWAIT_POLL */
+    int h264;         /* 1 = aceita H.264 do servidor (--codec h264) */
     int exit_after;   /* testes: sai depois de exibir N frames (0 = nunca) */
 } ps_config_t;
 

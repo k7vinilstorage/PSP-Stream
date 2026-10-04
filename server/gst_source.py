@@ -31,7 +31,10 @@ SCALE_THREADS = min(4, os.cpu_count() or 1)
 
 
 def build_pipeline(src: str, width: int, height: int, fps: int, quality: int,
-                   scale: str = "bilinear", keep_aspect: bool = True) -> str:
+                   scale: str = "bilinear", keep_aspect: bool = True, codec: str = "jpeg") -> str:
+    # h264: o pipeline entrega I420 cru e o H264Encoder (h264.py) codifica,
+    # porque o QP do openh264enc não muda com o pipeline rodando.
+    enc = f"! jpegenc name=enc quality={quality} " if codec == "jpeg" else ""
     return (
         f"{src} "
         "! queue leaky=downstream max-size-buffers=1 max-size-bytes=0 max-size-time=0 "
@@ -39,7 +42,7 @@ def build_pipeline(src: str, width: int, height: int, fps: int, quality: int,
         f"! videoscale method={scale} n-threads={SCALE_THREADS} add-borders={'true' if keep_aspect else 'false'} "
         f"! video/x-raw,width={width},height={height},pixel-aspect-ratio=1/1 "
         "! videoconvert ! video/x-raw,format=I420 "
-        f"! jpegenc name=enc quality={quality} "
+        f"{enc}"
         "! appsink name=sink emit-signals=true max-buffers=1 drop=true sync=false"
     )
 
@@ -57,11 +60,15 @@ SOURCES = {
 
 class GstSource(FrameSource):
     def __init__(self, src: str, width: int, height: int, fps: int, quality: int,
-                 scale: str = "bilinear", keep_aspect: bool = True, keepalive=None):
+                 scale: str = "bilinear", keep_aspect: bool = True, keepalive=None, codec: str = "jpeg"):
         super().__init__()
         self._keepalive = keepalive  # objeto que precisa viver junto (ex.: sessão do portal)
         self._quality = quality
-        desc = build_pipeline(src, width, height, fps, quality, scale, keep_aspect)
+        self.h264 = None
+        if codec == "h264":
+            from h264 import H264Encoder
+            self.h264 = H264Encoder(width, height, quality)
+        desc = build_pipeline(src, width, height, fps, quality, scale, keep_aspect, codec)
         log.debug("pipeline: %s", desc)
         self.pipeline = Gst.parse_launch(desc)
         self.enc = self.pipeline.get_by_name("enc")
@@ -85,9 +92,17 @@ class GstSource(FrameSource):
         ok, info = buf.map(Gst.MapFlags.READ)
         if ok:
             try:
-                self.publish(bytes(info.data), capture_ms)
+                data = bytes(info.data)
             finally:
                 buf.unmap(info)
+            if self.h264 is not None:
+                data = self.h264.encode(data)
+                if data is None:
+                    log.warning("o encoder H.264 não devolveu o frame")
+                    return Gst.FlowReturn.OK
+                if capture_ms is not None and clock is not None:
+                    capture_ms = (clock.get_time() - self.pipeline.get_base_time() - buf.pts) / Gst.MSECOND
+            self.publish(data, capture_ms)
         return Gst.FlowReturn.OK
 
     def _watch_bus(self):
@@ -118,12 +133,17 @@ class GstSource(FrameSource):
     def stop(self) -> None:
         self._stop.set()
         self.pipeline.set_state(Gst.State.NULL)
+        if self.h264 is not None:
+            self.h264.close()
 
     def set_quality(self, quality: int) -> None:
-        # jpegenc aceita mudar a qualidade com o pipeline rodando.
+        # jpegenc aceita mudar a qualidade com o pipeline rodando; o H.264 troca o QP no próximo frame.
         quality = max(1, min(100, int(quality)))
         if quality != self._quality:
-            self.enc.set_property("quality", quality)
+            if self.h264 is not None:
+                self.h264.set_quality(quality)
+            else:
+                self.enc.set_property("quality", quality)
             self._quality = quality
 
     @property

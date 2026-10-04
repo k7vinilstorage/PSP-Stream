@@ -47,7 +47,7 @@ PSP                                   PC
 | 28 | u16 | first_t | 0,1 ms: pedido -> primeiro pedaço/byte do frame (ida e volta + reação do servidor) |
 | 30 | u16 | burst_t | 0,1 ms: primeiro -> último pedaço (dá a vazão real do enlace) |
 | 32 | u8 | signal | sinal do Wi-Fi do PSP, % |
-| 33 | u8 | wflags | `0x1` = "Economia de energia WLAN" ligada no XMB; `0x2` = esperando pacotes por consulta, não `select()` |
+| 33 | u8 | wflags | `0x1` = "Economia de energia WLAN" ligada no XMB; `0x2` = esperando pacotes por consulta, não `select()`; `0x4` = decodifica H.264 |
 | 34 | u16 | lost | UDP: frames abandonados incompletos desde o início do stream |
 | 36 | u32 | hdr_have | UDP: id do cabeçalho JPEG guardado no PSP (0 = nenhum) |
 | 40 | u16 | ping_select | 0,1 ms: ida e volta pura medida no início, esperando com `select()` |
@@ -69,7 +69,10 @@ ela permite mandar botões com mais frequência que os frames.
 | 8 | u32 | size | bytes de JPEG que seguem (máx. 256 KB) |
 | 12 | u32 | send_ts | relógio monotônico do servidor em ms (32 bits, dá a volta) |
 
-O payload é um JPEG **baseline 4:2:0**, de no máximo 480x272. Se for menor, o
+O payload é um JPEG **baseline 4:2:0**, de no máximo 480x272, ou, com
+`--codec h264`, um access unit H.264 Annex B (SPS + PPS + IDR, 480x272). O
+PSP distingue pelos primeiros bytes: `FF D8` é JPEG, `00 00 00 01` ou
+`00 00 01` é H.264. Se for menor, o
 PSP centraliza. 4:2:0 é exigência do decoder de hardware (`sceJpeg`); o
 decoder em software aceita qualquer amostragem.
 

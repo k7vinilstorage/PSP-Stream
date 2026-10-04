@@ -285,6 +285,11 @@ static void draw_overlay(const ui_t *ui, const stats_t *s)
  * médio. Compara hw x sw no PSP real sem a rede no meio. */
 static void decode_bench(const ps_frame_t *f)
 {
+    if (decoder_is_h264(f->data, f->size)) { /* hw x sw só existe para JPEG */
+        display_console("Benchmark de decode: so para JPEG (o servidor esta em H.264).");
+        sceKernelDelayThread(2 * 1000 * 1000);
+        return;
+    }
     const int runs = 30;
     int original = decoder_kind();
     int kinds[2] = {DEC_SW, DEC_HW};
@@ -318,6 +323,7 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
 {
     input_udp = ui->udp;
     ui->switch_transport = 0;
+    stream_set_h264(cfg->h264);
     if (stream_start(sock, ui->udp, dest, ui->prefetch, cfg->early_kb * 1024, cfg->rxwait, &g_running) < 0) {
         status("Erro ao iniciar a thread de rede");
         return -1;
@@ -384,6 +390,10 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
         int w = 0, h = 0;
         if (decoder_decode(f->data, f->size, dst, &w, &h) < 0) {
             printf("frame %u: %s\n", (unsigned)f->frame_no, decoder_error());
+            if (!(ui->toast_until && (int)(ui->toast_until - now_us()) > 0))
+                toast(ui, decoder_error()); /* na tela: senão só aparece no PSPLink */
+            draw_overlay(ui, &st);
+            display_writeback();
             stream_release(f, NULL);
             continue;
         }
@@ -431,7 +441,7 @@ int main(int argc, char *argv[])
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
     display_init();
-    status("PSPStream v0.4");
+    status("PSPStream v0.5");
 
     char dir[192], err[128];
     app_dir(argc > 0 ? argv[0] : NULL, dir, sizeof(dir));

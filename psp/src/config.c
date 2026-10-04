@@ -14,6 +14,7 @@
  *   transport=udp    (udp | tcp)
  *   early_kb=0       (UDP, experimental: pede o próximo frame quando faltar isso do atual)
  *   rxwait=auto      (UDP: auto | select | poll; auto mede os dois no início e fica com o mais rápido)
+ *   h264=1           (1 = aceita H.264 do servidor rodando com --codec h264)
  */
 #include "config.h"
 #include "decode.h"
@@ -63,6 +64,8 @@ static void set_key(ps_config_t *cfg, const char *key, const char *value)
         cfg->early_kb = v;
     else if (!strcmp(key, "rxwait"))
         cfg->rxwait = !strcmp(value, "select") ? RXWAIT_SELECT : !strcmp(value, "poll") ? RXWAIT_POLL : RXWAIT_AUTO;
+    else if (!strcmp(key, "h264"))
+        cfg->h264 = v;
     else if (!strcmp(key, "exit_after"))
         cfg->exit_after = v;
 }
@@ -80,6 +83,7 @@ int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen)
     cfg->input = 1;
     cfg->udp = 1; /* medido no PSP-3000: UDP sem travadas, TCP com várias */
     cfg->early_kb = 0; /* medido no PSP-3000: não aumentou o FPS e piorou a latência */
+    cfg->h264 = 1;
 
     char path[256];
     snprintf(path, sizeof(path), "%sserver.txt", dir);

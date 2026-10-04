@@ -41,6 +41,9 @@ ps_frame_t *stream_take(unsigned timeout_us);
 /* Devolve o slot depois de exibir o frame. */
 void stream_release(ps_frame_t *frame, const ps_ack_t *ack);
 
+/* Diz ao servidor (em todo pedido) se aceitamos H.264. Padrão: sim. */
+void stream_set_h264(int on);
+
 /* Estado do Wi-Fi (sinal %, PS_WIFI_*), enviado em todo pedido para o log do servidor. */
 void stream_set_wifi(int signal, int flags);
 
