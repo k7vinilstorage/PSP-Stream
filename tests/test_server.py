@@ -253,6 +253,45 @@ class UdpEndToEndTest(unittest.TestCase):
         self.assertIn("v4", logs.output[0])
 
 
+class CaptureRateTest(unittest.TestCase):
+    """O portal entrega taxa variável com horários tremidos: o limite de --fps
+    não pode cortar uma fonte de 60 Hz (o videorate deixava ~38 fps)."""
+
+    def rate(self, src_hz, fps, jitter_ms=2.0, seconds=10):
+        try:
+            import gst_source
+        except (ImportError, ValueError):
+            self.skipTest("sem GStreamer")
+        import random
+        rnd = random.Random(1)
+        lim = gst_source.RateLimiter(fps)
+        n = int(src_hz * seconds)
+        kept = sum(lim.keep(int(max(0.0, i / src_hz + rnd.uniform(-jitter_ms, jitter_ms) / 1000) * 1e9))
+                   for i in range(n))
+        return kept / seconds
+
+    def test_60hz_source_passes_whole(self):
+        self.assertGreater(self.rate(60, 60), 59.5)
+        self.assertGreater(self.rate(59.94, 60, jitter_ms=3), 59.4)
+
+    def test_limits_faster_sources(self):
+        self.assertLess(self.rate(144, 60), 75)
+        self.assertGreater(self.rate(144, 60), 55)
+        self.assertAlmostEqual(self.rate(60, 30), 30, delta=1.5)
+
+    def test_slower_source_untouched(self):
+        self.assertGreater(self.rate(40, 60, jitter_ms=4), 39.5)
+
+    def test_pipeline_has_no_videorate(self):
+        try:
+            import gst_source
+        except (ImportError, ValueError):
+            self.skipTest("sem GStreamer")
+        desc = gst_source.build_pipeline("videotestsrc", 480, 272, 60, 60, codec="h264")
+        self.assertNotIn("videorate", desc)
+        self.assertIn("queue name=q", desc)
+
+
 class H264QualityTest(unittest.TestCase):
     def test_qp_mapping(self):
         try:

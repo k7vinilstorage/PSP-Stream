@@ -474,7 +474,12 @@ desligado, sinal 72%:
 | v0.3 (JPEG, UDP) | 19,7 / 46 ms | 10,9 / 90 ms |
 | v0.5 (H.264 intra + Stop) | 28,7 / 28 ms | 22,1 / 33 ms |
 | v0.6 (+ power save do PC desligado) | 42,8 / 19 ms | 28,6 / 29 ms |
-| **v0.7 (repetição de pedido adaptativa)** | **60,6 / 20 ms** | **43,3 / 28 ms** |
+| v0.7 (repetição de pedido adaptativa) | 60,6 / 20 ms | 43,3 / 28 ms |
+| **v0.8 (pedido antecipado automático)** | **69,5 / 21 ms** | **61,3 / 26 ms** |
+
+Acima de 60 fps, o PSP recebe mais frames do que a tela de 60 Hz mostra, e
+o excedente é descartado antes do decode. Mesmo assim, sempre há um frame
+novo pronto na hora da troca de tela.
 
 #### v0.7 com a tela de verdade: desktop e Minecraft [PSP]
 
@@ -534,6 +539,59 @@ O FPS é o do PSP falso, e a latência e o tempo morto vêm do log do servidor.
 - **Isto é simulação.** A primeira versão do pedido antecipado também ganhou
   na simulação (+62%) e não ganhou nada no PSP. O bench e o teste com o jogo
   no PSP decidem. `early_kb=0` no `server.txt` volta ao comportamento da v0.7.
+
+#### v0.8 no PSP-3000: bench e Minecraft [PSP]
+
+**Bench** (H.264, `--source static`, `early_kb=auto`, sinal 100%):
+
+| q | KB | v0.7: FPS / latência / p95 | v0.8: FPS / latência / p95 | tempo morto entre frames | antecipa |
+|---|---|---|---|---|---|
+| 30 | 1,7 | 64,2 / 19 / 37 ms | **71,2** / 21 / 36 ms | +6,7 ms | 3,2 KB |
+| 50 | 2,4 | 60,6 / 20 / 39 ms | **69,5** / 21 / 38 ms | +5,2 ms | 2,5 KB |
+| 70 | 3,8 | 53,4 / 23 / 40 ms | 55,7 / 31 / 70 ms | +4,5 ms | 2,5 KB |
+| 90 | 5,4 | 43,3 / 28 / 55 ms | **61,3** / 26 / 36 ms | +4,0 ms | 2,5 KB |
+
+- O limite calculado ficou em 2,5-3,2 KB, como previsto. O tempo morto
+  ficou em 4-7 ms, perto do piso (o intervalo de um pedaço).
+- Em q90, +42% de FPS, com latência e p95 menores. A fase q70 teve ping no
+  stream mais alto (12 ms contra 7-10 ms) e latência pior. Entre rodadas, o
+  Wi-Fi varia ~20%.
+
+**Tela de verdade** (`--source portal`, adaptativo em q90, sinal 70-100%):
+
+| trecho | KB/frame | FPS (fonte) | latência / p95 | tempo morto | espera por frame novo |
+|---|---|---|---|---|---|
+| desktop | 2,1-4,2 | 29-37,5 (36-40) | 24-37 / 31-77 ms | +15-24 ms | 10-17 ms |
+| Minecraft | 5-9 | 25-39,5, típico 35-37 (37-40) | 28-46 / 37-85 ms, típico 30-38 | +6-14 ms | 3-11 ms |
+| interferência | 11 | 9,5-25,5 | 58-115 / 84-239 ms | | 0,1-0,8 ms |
+
+- **Minecraft:** de ~28 fps e 50-60 ms (v0.7) para 35-37 fps e 30-38 ms.
+  O FPS encostou no da fonte, então quem limitava passou a ser a captura.
+- **Desktop:** de 24-30 para 29-37,5 fps, também perto da fonte. O tempo
+  morto aqui é a espera por um frame novo.
+- Os ~38 fps da "fonte" eram um defeito do servidor (abaixo).
+
+#### Captura do portal: o videorate cortava 60 fps para ~38 [PC]
+
+O pipeline tinha `videorate drop-only=true max-rate=60` para respeitar o
+`--fps`. O portal entrega taxa variável (`framerate=0/1`), e o horário dos
+frames treme ±1 ms. Nessa situação, o videorate (GStreamer 1.24) descarta
+~1/3 dos frames:
+
+| entrada (60 Hz, `framerate=0/1`) | videorate `max-rate=60` | videorate `max-rate=75` | limitador novo |
+|---|---|---|---|
+| sem tremor | 60,0 | - | 60,0 |
+| tremor ±1 ms | **38,2** | 38,0 | 60,0 |
+| tremor ±2 ms | 39,5 | 37,7 | 60,0 |
+| ao vivo, pipeline completo, ±1-2 ms | **37,3** | - | **60,0** |
+
+É a "fonte" de 36-40 fps de todos os logs com o portal. O videorate saiu, e
+o `--fps` agora é aplicado por uma sonda na saída da fila (`RateLimiter`):
+agenda de 1/fps com 25% de tolerância. Uma fonte de 60 Hz passa inteira, e
+uma de 144 Hz fica em ~60-70 fps. O servidor agora loga quanto a fonte
+entrega, quanto passa pelo limite e quanto é codificado. A medida no portal
+de verdade ainda falta: o próprio GNOME também poderia limitar a taxa, e o
+log novo mostra isso.
 
 ## 1. Tamanho de frame [PC]
 

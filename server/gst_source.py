@@ -2,17 +2,25 @@
 
 Pipeline (só guarda o frame mais novo em cada etapa):
 
-  <fonte> ! queue leaky (1 buffer) ! videorate max-rate=FPS
+  <fonte> ! queue leaky (1 buffer) [limite de --fps: RateLimiter, sonda na saída da fila]
           ! videoscale (480x272, mantém proporção) ! videoconvert I420
           ! jpegenc quality=Q ! appsink (1 buffer, drop)
+
+Sem videorate: o portal entrega taxa variável (framerate=0/1), e com isso o
+`videorate drop-only=true max-rate=60` deixava passar só ~38 de 60 fps (os
+horários variam ±1 ms; medido no GStreamer 1.24, também com max-rate=75). Era
+a "fonte" de 36-40 fps nos logs do PSP-3000.
 
 Reduzir antes de converter: o videoconvert trabalha em 480x272 e não em
 1080p/1440p. Custo medido (CPU de desenvolvimento, 1080p): ~1 ms com
 bilinear, ~5 ms com lanczos, + ~1 ms do jpegenc.
 """
+import collections
 import logging
 import os
+import statistics
 import threading
+import time
 
 import gi
 
@@ -37,8 +45,7 @@ def build_pipeline(src: str, width: int, height: int, fps: int, quality: int,
     enc = f"! jpegenc name=enc quality={quality} " if codec == "jpeg" else ""
     return (
         f"{src} "
-        "! queue leaky=downstream max-size-buffers=1 max-size-bytes=0 max-size-time=0 "
-        f"! videorate drop-only=true max-rate={fps} "
+        "! queue name=q leaky=downstream max-size-buffers=1 max-size-bytes=0 max-size-time=0 "
         f"! videoscale method={scale} n-threads={SCALE_THREADS} add-borders={'true' if keep_aspect else 'false'} "
         f"! video/x-raw,width={width},height={height},pixel-aspect-ratio=1/1 "
         "! videoconvert ! video/x-raw,format=I420 "
@@ -56,6 +63,54 @@ SOURCES = {
     # Sessão X11 (no Wayland use "portal").
     "x11": "ximagesrc use-damage=false show-pointer=true ! video/x-raw,framerate=60/1",
 }
+
+
+class RateLimiter:
+    """Até `fps` frames por segundo pelo pts, com 25% de tolerância no
+    intervalo: uma fonte de 60 Hz com horários tremidos passa inteira com
+    --fps 60, e uma de 144 Hz fica em ~60-70."""
+
+    def __init__(self, fps: float):
+        self.period = int(Gst.SECOND / max(1.0, fps))
+        self.tol = self.period // 4
+        self.next = None
+
+    def keep(self, pts: int) -> bool:
+        if pts == Gst.CLOCK_TIME_NONE:
+            return True
+        if self.next is not None and pts < self.next - self.tol:
+            return False
+        base = pts if self.next is None else self.next
+        self.next = max(base + self.period, pts + self.period - self.tol)
+        return True
+
+
+class CaptureMeter:
+    """Quantos frames a fonte entrega e quantos seguem, para achar onde a taxa cai."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.arrived = 0
+        self.kept = 0
+        self.last = None
+        self.intervals = collections.deque(maxlen=240)  # ms entre frames da fonte
+
+    def on_arrival(self) -> None:
+        now = time.monotonic()
+        with self.lock:
+            self.arrived += 1
+            if self.last is not None:
+                self.intervals.append((now - self.last) * 1000)
+            self.last = now
+
+    def on_kept(self) -> None:
+        with self.lock:
+            self.kept += 1
+
+    def snapshot(self):
+        with self.lock:
+            iv = sorted(self.intervals)
+            return self.arrived, self.kept, iv
 
 
 class GstSource(FrameSource):
@@ -76,6 +131,55 @@ class GstSource(FrameSource):
         sink.connect("new-sample", self._on_sample)
         self.failed = None
         self._stop = threading.Event()
+        self.fps = fps
+        self._limiter = RateLimiter(fps)
+        self.meter = CaptureMeter()
+        queue = self.pipeline.get_by_name("q")
+        self._queue_in = queue.get_static_pad("sink")
+        self._queue_in.add_probe(Gst.PadProbeType.BUFFER, self._probe_arrival)
+        queue.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, self._probe_limit)
+        self._report_at = None  # primeiro relatório da captura 5 s depois do primeiro frame
+        self._report_base = None
+        self._caps_logged = False
+
+    def _probe_arrival(self, pad, info):
+        self.meter.on_arrival()
+        return Gst.PadProbeReturn.OK
+
+    def _probe_limit(self, pad, info):
+        if not self._limiter.keep(info.get_buffer().pts):
+            return Gst.PadProbeReturn.DROP
+        self.meter.on_kept()
+        return Gst.PadProbeReturn.OK
+
+    def _maybe_report(self) -> None:
+        """Log da taxa da captura: 5 s depois do primeiro frame e depois a cada 60 s."""
+        now = time.monotonic()
+        arrived, kept, iv = self.meter.snapshot()
+        if self._report_at is None:
+            if arrived:
+                self._report_at = now + 5
+                self._report_base = (now, arrived, kept, self.latest()[0])
+            return
+        if now < self._report_at:
+            return
+        t0, a0, k0, p0 = self._report_base
+        dt = max(1e-6, now - t0)
+        if not self._caps_logged:
+            self._caps_logged = True
+            caps = self._queue_in.get_current_caps()
+            if caps is not None:
+                log.info("formato da captura: %s", caps.to_string())
+        if iv:
+            spread = (f"intervalo mediano {statistics.median(iv):.1f} ms, "
+                      f"p10 {iv[len(iv) // 10]:.1f}, p90 {iv[len(iv) * 9 // 10]:.1f}")
+        else:
+            spread = "sem intervalos"
+        log.info("captura: a fonte entrega %.1f fps (%s); passam pelo limite de %d fps: %.1f; "
+                 "codificados: %.1f", (arrived - a0) / dt, spread, self.fps, (kept - k0) / dt,
+                 (self.latest()[0] - p0) / dt)
+        self._report_at = now + 60
+        self._report_base = (now, arrived, kept, self.latest()[0])
 
     def _on_sample(self, sink):
         sample = sink.emit("pull-sample")
@@ -111,6 +215,7 @@ class GstSource(FrameSource):
         while not self._stop.is_set():
             msg = bus.timed_pop_filtered(100 * Gst.MSECOND, mask)
             if msg is None:
+                self._maybe_report()
                 continue
             if msg.type == Gst.MessageType.WARNING:
                 err, _ = msg.parse_warning()
