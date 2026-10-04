@@ -8,6 +8,8 @@
  *   vsync=1
  *   prefetch=1
  *   overlay=1
+ *   rcvbuf=64        (KB)
+ *   bench=0          (1 = mede decode hw x sw no primeiro frame)
  */
 #include "config.h"
 #include "decode.h"
@@ -45,6 +47,10 @@ static void set_key(ps_config_t *cfg, const char *key, const char *value)
         cfg->prefetch = v;
     else if (!strcmp(key, "overlay"))
         cfg->overlay = v;
+    else if (!strcmp(key, "rcvbuf"))
+        cfg->rcvbuf_kb = v;
+    else if (!strcmp(key, "bench"))
+        cfg->bench = v;
     else if (!strcmp(key, "exit_after"))
         cfg->exit_after = v;
 }
@@ -58,6 +64,7 @@ int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen)
     cfg->vsync = 1;
     cfg->prefetch = 1;
     cfg->overlay = 1;
+    cfg->rcvbuf_kb = 64;
 
     char path[256];
     snprintf(path, sizeof(path), "%sserver.txt", dir);
@@ -96,5 +103,7 @@ int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen)
     }
     if (cfg->port <= 0 || cfg->port > 65535)
         cfg->port = PS_DEFAULT_PORT;
+    if (cfg->rcvbuf_kb < 8 || cfg->rcvbuf_kb > 256)
+        cfg->rcvbuf_kb = 64;
     return 0;
 }

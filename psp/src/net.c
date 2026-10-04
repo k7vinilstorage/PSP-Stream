@@ -87,7 +87,15 @@ int net_connect_ap(int profile, char *ip_out, int ip_len, net_status_fn status, 
     return 0;
 }
 
-int net_connect_server(const char *host, int port)
+void net_ap_info(net_ap_info_t *info)
+{
+    SceNetApctlInfo v;
+    info->strength = sceNetApctlGetInfo(PSP_NET_APCTL_INFO_STRENGTH, &v) == 0 ? v.strength : -1;
+    info->channel = sceNetApctlGetInfo(PSP_NET_APCTL_INFO_CHANNEL, &v) == 0 ? v.channel : -1;
+    info->power_save = sceNetApctlGetInfo(PSP_NET_APCTL_INFO_POWER_SAVE, &v) == 0 ? v.powerSave : -1;
+}
+
+int net_connect_server(const char *host, int port, int rcvbuf_kb)
 {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0)
@@ -97,7 +105,7 @@ int net_connect_server(const char *host, int port)
     int one = 1;
     setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
     /* Buffer de recepção maior = janela TCP maior (o frame chega numa rajada). */
-    int rcvbuf = 64 * 1024;
+    int rcvbuf = rcvbuf_kb * 1024;
     setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
 
     struct sockaddr_in addr;

@@ -10,8 +10,17 @@ int net_init(void);
  * Para se *running virar 0. */
 int net_connect_ap(int profile, char *ip_out, int ip_len, net_status_fn status, volatile int *running);
 
-/* Abre a conexão TCP com o servidor. Devolve o socket ou < 0. */
-int net_connect_server(const char *host, int port);
+typedef struct {
+    int strength;   /* sinal, % */
+    int channel;
+    int power_save; /* "Economia de energia WLAN" do XMB: 1 = ligada (mais latência) */
+} net_ap_info_t;
+
+void net_ap_info(net_ap_info_t *info);
+
+/* Abre a conexão TCP com o servidor. rcvbuf_kb = buffer de recepção (janela
+ * TCP). Devolve o socket ou < 0. */
+int net_connect_server(const char *host, int port, int rcvbuf_kb);
 
 int net_send_all(int sock, const void *buf, int len);
 int net_recv_all(int sock, void *buf, int len);

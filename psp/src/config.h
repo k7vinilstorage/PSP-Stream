@@ -9,6 +9,8 @@ typedef struct {
     int vsync;        /* 1 = troca de buffer no vblank (sem rasgo, +0..16 ms) */
     int prefetch;     /* 1 = pede o próximo frame antes de decodificar o atual */
     int overlay;      /* 1 = mostra FPS/estatísticas */
+    int rcvbuf_kb;    /* buffer de recepção TCP em KB */
+    int bench;        /* 1 = mede decode hw x sw com o primeiro frame */
     int exit_after;   /* testes: sai depois de exibir N frames (0 = nunca) */
 } ps_config_t;
 

@@ -42,8 +42,9 @@ def build_pipeline(src: str, width: int, height: int, fps: int, quality: int,
 # Fontes prontas. {w}/{h} são do frame de teste, não da saída.
 SOURCES = {
     # Padrão animado + relógio na tela (útil para medir latência filmando).
-    "test": ("videotestsrc is-live=true pattern=ball ! video/x-raw,width=1920,height=1080,framerate=60/1 "
-             "! timeoverlay font-desc=\"Sans 64\" halignment=center valignment=center"),
+    # 720p: em 1080p o timeoverlay sozinho pode não sustentar 60 fps e o atraso acumula.
+    "test": ("videotestsrc is-live=true pattern=ball ! video/x-raw,width=1280,height=720,framerate=60/1 "
+             "! timeoverlay font-desc=\"Sans 48\" halignment=center valignment=center"),
     # Sessão X11 (no Wayland use "portal").
     "x11": "ximagesrc use-damage=false show-pointer=true ! video/x-raw,framerate=60/1",
 }
@@ -69,10 +70,17 @@ class GstSource(FrameSource):
         if sample is None:
             return Gst.FlowReturn.OK
         buf = sample.get_buffer()
+        # Fontes ao vivo carimbam o buffer na captura (running time): a
+        # diferença para o relógio agora = captura + escala + encode.
+        capture_ms = None
+        clock = self.pipeline.get_clock()
+        if clock is not None and buf.pts != Gst.CLOCK_TIME_NONE:
+            running = clock.get_time() - self.pipeline.get_base_time()
+            capture_ms = (running - buf.pts) / Gst.MSECOND
         ok, info = buf.map(Gst.MapFlags.READ)
         if ok:
             try:
-                self.publish(bytes(info.data))
+                self.publish(bytes(info.data), capture_ms)
             finally:
                 buf.unmap(info)
         return Gst.FlowReturn.OK
@@ -118,11 +126,12 @@ class GstSource(FrameSource):
         return self._quality
 
 
-def transcode_image(path: str, width: int, height: int, quality: int, keep_aspect: bool = True) -> bytes:
+def transcode_image(path: str, width: int, height: int, quality: int, keep_aspect: bool = True,
+                    scale: str = "bilinear") -> bytes:
     """Converte qualquer imagem (PNG, JPEG grande...) num JPEG 4:2:0 de até width x height."""
     src = f"filesrc location=\"{path}\" ! decodebin ! imagefreeze num-buffers=1 ! videoconvert"
     desc = (
-        f"{src} ! videoscale add-borders={'true' if keep_aspect else 'false'} "
+        f"{src} ! videoscale method={scale} add-borders={'true' if keep_aspect else 'false'} "
         f"! video/x-raw,width={width},height={height},pixel-aspect-ratio=1/1 "
         f"! videoconvert ! video/x-raw,format=I420 ! jpegenc quality={quality} "
         "! appsink name=sink max-buffers=1"

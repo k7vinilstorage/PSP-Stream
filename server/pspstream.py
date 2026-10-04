@@ -11,11 +11,12 @@ import socket
 import sys
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 import protocol
 from protocol import REQ_FRAME, REQ_HELLO, Request
-from stats import SessionStats, now_ms
+from stats import SessionStats, format_summary, now_ms
 
 log = logging.getLogger("pspstream")
 
@@ -53,9 +54,14 @@ class Session:
         self.source = source
         self.args = args
         self.injector = injector
-        self.stats = SessionStats(args.stats_interval)
+        adaptive = None
+        if args.adaptive and not args.bench and source.quality is not None:
+            from adaptive import AdaptiveQuality
+            adaptive = AdaptiveQuality(source, args.target_fps, args.q_min, args.q_max)
+        self.stats = SessionStats(args.stats_interval, adaptive)
         self.cond = threading.Condition()
         self.pending = 0
+        self.arrivals = deque()  # quando cada pedido de frame chegou
         self.alive = True
         self.frame_no = 0
         conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -65,6 +71,8 @@ class Session:
         log.info("PSP conectado: %s:%d", *self.addr)
         reader = threading.Thread(target=self._reader, name="reader", daemon=True)
         reader.start()
+        if self.args.bench:
+            threading.Thread(target=self._bench, name="bench", daemon=True).start()
         try:
             self._sender()
         except OSError as exc:
@@ -112,6 +120,7 @@ class Session:
         if req.flags & REQ_FRAME:
             with self.cond:
                 self.pending += 1
+                self.arrivals.append(time.monotonic())
                 self.cond.notify_all()
 
     def _next_frame(self, last_seq: int):
@@ -136,6 +145,7 @@ class Session:
                 if not self.alive:
                     return
                 self.pending -= 1
+                arrived = self.arrivals.popleft() if self.arrivals else time.monotonic()
             got = self._next_frame(last_seq)
             if got is None:
                 return
@@ -143,6 +153,7 @@ class Session:
             if jpeg is None:  # fonte ainda não produziu nada
                 with self.cond:
                     self.pending += 1
+                    self.arrivals.appendleft(arrived)
                 time.sleep(0.01)
                 continue
             last_seq = seq
@@ -151,13 +162,45 @@ class Session:
                             len(jpeg) // 1024, protocol.MAX_JPEG // 1024)
                 with self.cond:
                     self.pending += 1
+                    self.arrivals.appendleft(arrived)
                 continue
             self.frame_no += 1
             send_ms = now_ms()
             age_ms = (time.monotonic() - ready_t) * 1000 if not self.source.repeat else 0.0
+            wait_ms = (time.monotonic() - arrived) * 1000
             self.conn.sendall(protocol.pack_frame_header(self.frame_no, len(jpeg), send_ms) + jpeg)
-            self.stats.on_send(self.frame_no, send_ms, age_ms, len(jpeg))
+            self.stats.on_send(self.frame_no, send_ms, age_ms, len(jpeg), wait_ms, self.source.capture_ms)
             self.stats.maybe_report(self.source.quality)
+
+    def _bench(self) -> None:
+        """Varre qualidades fixas e imprime uma tabela (Marco 3, números do hardware)."""
+        qualities = [int(q) for q in self.args.bench.split(",")]
+        rows = []
+        for q in qualities:
+            self.source.set_quality(q)
+            log.info("benchmark: qualidade %d (%.0f s)", q, self.args.bench_seconds)
+            time.sleep(2)  # aquecimento: frames da qualidade anterior saem do caminho
+            if not self.alive:
+                return
+            self.stats.start_phase()
+            time.sleep(self.args.bench_seconds)
+            if not self.alive:
+                return
+            summary = self.stats.phase_summary(self.source.quality)
+            log.info("benchmark q%s: %s", q, format_summary(summary))
+            rows.append(summary)
+        table = [
+            "| q | KB/frame | FPS | Wi-Fi (KB/s) | latência média (ms) | p95 (ms) | rede (ms) | decode (ms) | PSP recebido->exibido (ms) |",
+            "|---|---|---|---|---|---|---|---|---|",
+        ] + [
+            f"| {r['quality']} | {r['kb_per_frame']:.1f} | {r['fps']:.1f} | {r['wifi_kbps']:.0f} | "
+            f"{r['latency_ms']:.1f} | {r['latency_p95_ms']:.1f} | {r['transfer_ms']:.1f} | "
+            f"{r['decode_ms']:.1f} | {r['local_ms']:.1f} |"
+            for r in rows
+        ]
+        out = Path(f"bench_{time.strftime('%Y%m%d_%H%M%S')}.md")
+        out.write_text(f"Fonte: {self.args.source} {self.args.size[0]}x{self.args.size[1]}\n\n" + "\n".join(table) + "\n")
+        log.info("benchmark concluído, tabela salva em %s:\n%s", out, "\n".join(table))
 
 
 def parse_size(text: str):
@@ -173,18 +216,18 @@ def parse_size(text: str):
 def build_source(args):
     w, h = args.size
     if args.source == "static":
-        from jpeginfo import jpeg_info
         from sources import StaticSource
-        data = Path(args.image).read_bytes()
         try:
-            ok = data[:2] == b"\xff\xd8" and not jpeg_info(data).problems(w, h)
-        except ValueError:
-            ok = False
-        if not ok:
             from gst_source import transcode_image
-            log.info("convertendo %s para %dx%d 4:2:0", args.image, w, h)
-            data = transcode_image(args.image, w, h, args.quality, not args.stretch)
-        return StaticSource(data)
+        except (ImportError, ValueError):
+            # Sem GStreamer: envia o arquivo como está (precisa ser JPEG 4:2:0
+            # de até 480x272) e a qualidade não muda.
+            return StaticSource(Path(args.image).read_bytes())
+
+        def reencode(q):
+            return transcode_image(args.image, w, h, q, not args.stretch, args.scale)
+
+        return StaticSource(reencode(args.quality), reencode, args.quality)
 
     from gst_source import SOURCES, GstSource
     keepalive = None
@@ -217,14 +260,28 @@ def parse_args(argv=None):
     p.add_argument("--fps", type=int, default=60,
                    help="taxa máxima de captura (padrão %(default)s). Capturar acima do que o PSP "
                         "exibe reduz a idade do frame enviado")
-    p.add_argument("-q", "--quality", type=int, default=70, help="qualidade JPEG 1-100 (padrão %(default)s)")
-    p.add_argument("--scale", default="bilinear", choices=["nearest-neighbour", "bilinear", "lanczos"],
-                   help="filtro de redução (lanczos = texto mais nítido, ~5 ms a mais por frame)")
+    p.add_argument("-q", "--quality", type=int, default=60,
+                   help="qualidade JPEG 1-100: inicial (adaptativo) ou fixa (--fixed-quality). Padrão %(default)s")
+    p.add_argument("--fixed-quality", dest="adaptive", action="store_false",
+                   help="não adaptar a qualidade à banda medida")
+    p.add_argument("--target-fps", type=float, default=30,
+                   help="adaptativo: FPS que a banda precisa sustentar (padrão %(default)s). Menor = mais "
+                        "qualidade e mais latência por frame")
+    p.add_argument("--q-min", type=int, default=25, help="adaptativo: qualidade mínima (padrão %(default)s)")
+    p.add_argument("--q-max", type=int, default=90, help="adaptativo: qualidade máxima (padrão %(default)s)")
+    p.add_argument("--scale", default="bilinear2",
+                   choices=["nearest-neighbour", "bilinear", "bilinear2", "lanczos", "mitchell", "catrom"],
+                   help="filtro de redução. bilinear2 (padrão) não serrilha e gera frames ~27%% menores que "
+                        "bilinear; lanczos = texto um pouco mais nítido, ~2 ms a mais")
     p.add_argument("--stretch", action="store_true", help="esticar em vez de manter a proporção")
     p.add_argument("--window", action="store_true", help="portal: escolher uma janela em vez de um monitor")
     p.add_argument("--no-cursor", action="store_true", help="portal: não desenhar o cursor")
     p.add_argument("--forget", action="store_true", help="portal: não reutilizar/guardar a escolha de tela")
     p.add_argument("--stats-interval", type=float, default=2.0, help="segundos entre linhas de estatística")
+    p.add_argument("--bench", metavar="Q1,Q2,...", nargs="?", const="30,50,70,90",
+                   help="benchmark: quando o PSP conectar, roda cada qualidade por --bench-seconds e salva "
+                        "uma tabela em bench_*.md (padrão 30,50,70,90)")
+    p.add_argument("--bench-seconds", type=float, default=10)
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
 

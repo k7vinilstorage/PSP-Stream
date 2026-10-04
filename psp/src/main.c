@@ -194,6 +194,37 @@ static void draw_overlay(const ui_t *ui, const stats_t *s)
         display_text(0, 33, 0xFF00FFFF, "%s", ui->toast);
 }
 
+/* bench=1: decodifica o mesmo frame N vezes com cada decoder e mostra o tempo
+ * médio. Compara hw x sw no PSP real sem a rede no meio. */
+static void decode_bench(const ps_frame_t *f)
+{
+    const int runs = 30;
+    int original = decoder_kind();
+    int kinds[2] = {DEC_SW, DEC_HW};
+    char line[2][64];
+    for (int k = 0; k < 2; k++) {
+        if (decoder_select(kinds[k]) != kinds[k]) {
+            snprintf(line[k], sizeof(line[k]), "%s: indisponivel (%s)", kinds[k] == DEC_HW ? "hw" : "sw",
+                     decoder_error());
+            continue;
+        }
+        int w, h, fails = 0;
+        decoder_decode(f->data, f->size, display_back(), &w, &h); /* aquece caches/módulo */
+        unsigned t0 = now_us();
+        for (int i = 0; i < runs; i++)
+            fails += decoder_decode(f->data, f->size, display_back(), &w, &h) < 0;
+        unsigned dt = now_us() - t0;
+        snprintf(line[k], sizeof(line[k]), "%-6s %5.2f ms/frame (%dx%d, %.1f KB)%s", decoder_name(),
+                 dt / 1000.0f / runs, w, h, f->size / 1024.0f, fails ? " COM ERROS" : "");
+    }
+    decoder_select(original);
+    display_console("Benchmark de decode (%d execucoes):", runs);
+    display_console("  %s", line[0]);
+    display_console("  %s", line[1]);
+    display_console("O stream continua em 5 s...");
+    sceKernelDelayThread(5 * 1000 * 1000);
+}
+
 /* Um stream completo, até a conexão cair ou o usuário sair. */
 static int run_stream(int sock, const ps_config_t *cfg, ui_t *ui)
 {
@@ -206,6 +237,7 @@ static int run_stream(int sock, const ps_config_t *cfg, ui_t *ui)
     st.t0 = now_us();
     uint32_t prev_buttons = 0;
     int shown = 0, last_w = SCR_W, last_h = SCR_H;
+    int bench_pending = cfg->bench;
     ui->clear = 3;
 
     while (g_running) {
@@ -218,6 +250,12 @@ static int run_stream(int sock, const ps_config_t *cfg, ui_t *ui)
             if (stream_error())
                 break;
             continue;
+        }
+
+        if (bench_pending) {
+            bench_pending = 0;
+            decode_bench(f);
+            ui->clear = 3;
         }
 
         unsigned t0 = now_us();
@@ -293,6 +331,14 @@ int main(int argc, char *argv[])
         wait_exit();
     }
     display_console("IP do PSP: %s", ip);
+    net_ap_info_t ap;
+    net_ap_info(&ap);
+    display_console("Sinal %d%%, canal %d", ap.strength, ap.channel);
+    if (ap.power_save == 1) {
+        status("AVISO: 'Economia de energia WLAN' esta LIGADA.");
+        status("  Ela desliga o radio entre beacons e aumenta muito a latencia.");
+        status("  Desligue em Ajustes > Ajustes de economia de energia.");
+    }
 
     if (decoder_init(cfg.decoder) < 0) {
         display_console("Decoder falhou: %s", decoder_error());
@@ -310,7 +356,7 @@ int main(int argc, char *argv[])
 
     while (g_running) {
         display_console("Conectando ao PC %s:%d...", cfg.host, cfg.port);
-        int sock = net_connect_server(cfg.host, cfg.port);
+        int sock = net_connect_server(cfg.host, cfg.port, cfg.rcvbuf_kb);
         if (sock < 0) {
             status("Sem conexao. Servidor rodando? Firewall liberado?");
             for (int i = 0; i < 20 && g_running; i++) /* tenta de novo em 2 s */

@@ -1,5 +1,6 @@
-"""Estatísticas da sessão: FPS, KB/frame, banda e latência."""
+"""Estatísticas da sessão: FPS, KB/frame, vazão do Wi-Fi e latência."""
 import logging
+import statistics
 import time
 
 log = logging.getLogger("pspstream.stats")
@@ -20,32 +21,76 @@ def _p95(values):
     return ordered[min(len(ordered) - 1, int(len(ordered) * 0.95))]
 
 
-class SessionStats:
-    def __init__(self, interval: float):
-        self.interval = interval
-        self.sent = {}  # frame_no -> (send_ms, age_ms, size)
-        self.last_report = time.monotonic()
-        self.total_frames = 0
-        self.total_bytes = 0
-        self.last_line = None
-        self._reset()
+class Window:
+    """Acumuladores de um intervalo (linha de log ou fase do benchmark)."""
 
-    def _reset(self):
+    def __init__(self):
+        self.t0 = time.monotonic()
         self.frames = 0
         self.bytes = 0
-        self.latency = []  # PC pronto -> PSP exibido (ms)
+        self.latency = []  # captura no PC -> PSP exibido (ms)
+        self.capture = []  # captura -> JPEG pronto, no GStreamer (ms)
         self.age = []      # frame pronto -> enviado (ms)
+        self.wait = []     # pedido chegou -> frame enviado (ms): espera por frame novo
         self.net = []      # pedido -> frame recebido, medido no PSP (ms)
-        self.local = []    # recebido -> exibido, medido no PSP (ms)
+        self.transfer = [] # net - espera: tempo de rede de fato (ms)
+        self.rate = []     # KB/s estimados por frame (tamanho / transferência)
+        self.local = []    # recebido -> exibido, no PSP (ms)
         self.decode = []   # só decode (ms)
 
-    def on_send(self, frame_no: int, send_ms: int, age_ms: float, size: int) -> None:
-        self.sent[frame_no] = (send_ms, age_ms, size)
+    def summary(self, quality=None) -> dict:
+        elapsed = max(1e-6, time.monotonic() - self.t0)
+        return {
+            "fps": self.frames / elapsed,
+            "kb_per_frame": self.bytes / self.frames / 1024 if self.frames else 0.0,
+            "send_kbps": self.bytes / elapsed / 1024,
+            "wifi_kbps": statistics.median(self.rate) if self.rate else 0.0,
+            "latency_ms": _avg(self.latency),
+            "latency_p95_ms": _p95(self.latency),
+            "capture_ms": _avg(self.capture),
+            "age_ms": _avg(self.age),
+            "wait_ms": _avg(self.wait),
+            "transfer_ms": _avg(self.transfer),
+            "local_ms": _avg(self.local),
+            "decode_ms": _avg(self.decode),
+            "quality": quality,
+            "frames": self.frames,
+        }
+
+
+def format_summary(s: dict) -> str:
+    line = (
+        f"{s['fps']:5.1f} fps | {s['kb_per_frame']:5.1f} KB/frame | Wi-Fi {s['wifi_kbps']:5.0f} KB/s | "
+        f"latência {s['latency_ms']:5.1f} ms (p95 {s['latency_p95_ms']:5.1f}) ~ "
+        f"captura {s['capture_ms']:4.1f} + idade {s['age_ms']:4.1f} + "
+        f"rede {s['transfer_ms']:5.1f} + psp {s['local_ms']:5.1f} "
+        f"| decode {s['decode_ms']:4.1f} ms | espera por frame novo {s['wait_ms']:4.1f} ms"
+    )
+    if s["quality"] is not None:
+        line += f" | q {s['quality']}"
+    return line
+
+
+class SessionStats:
+    def __init__(self, interval: float, adaptive=None):
+        self.interval = interval
+        self.adaptive = adaptive
+        self.sent = {}  # frame_no -> (send_ms, age_ms, size, wait_ms, capture_ms)
+        self.total_frames = 0
+        self.total_bytes = 0
+        self.window = Window()
+        self.phase = Window()
+        self.last_summary = None
+
+    def on_send(self, frame_no: int, send_ms: int, age_ms: float, size: int, wait_ms: float,
+                capture_ms: float = 0.0) -> None:
+        self.sent[frame_no] = (send_ms, age_ms, size, wait_ms, capture_ms)
         if len(self.sent) > 256:
             for old in sorted(self.sent)[:128]:
                 del self.sent[old]
-        self.frames += 1
-        self.bytes += size
+        for w in (self.window, self.phase):
+            w.frames += 1
+            w.bytes += size
         self.total_frames += 1
         self.total_bytes += size
 
@@ -53,39 +98,38 @@ class SessionStats:
         meta = self.sent.pop(req.ack_frame, None)
         if meta is None:
             return
-        send_ms, age_ms, _ = meta
+        _, age_ms, size, wait_ms, capture_ms = meta
         # Relógio só do servidor: envio -> exibição -> (ack sobe pela rede).
         path = ((recv_ms - req.echo_ts) & 0xFFFFFFFF) - req.since_t / 10
-        if 0 <= path < 10_000:
-            self.latency.append(age_ms + path)
-        self.age.append(age_ms)
-        self.net.append(req.net_t / 10)
-        self.local.append(req.local_t / 10)
-        self.decode.append(req.decode_t / 10)
+        net = req.net_t / 10
+        transfer = max(0.0, net - wait_ms)
+        decode = req.decode_t / 10
+        for w in (self.window, self.phase):
+            if 0 <= path < 10_000:
+                w.latency.append(capture_ms + age_ms + path)
+            w.capture.append(capture_ms)
+            w.age.append(age_ms)
+            w.wait.append(wait_ms)
+            w.net.append(net)
+            w.transfer.append(transfer)
+            if transfer > 0.5:
+                w.rate.append(size / 1024 / (transfer / 1000))
+            w.local.append(req.local_t / 10)
+            w.decode.append(decode)
+        if self.adaptive:
+            self.adaptive.on_ack(size, transfer, decode)
 
     def maybe_report(self, quality=None) -> None:
-        now = time.monotonic()
-        elapsed = now - self.last_report
-        if elapsed < self.interval:
+        if self.adaptive:
+            self.adaptive.update()
+        if time.monotonic() - self.window.t0 < self.interval:
             return
-        fps = self.frames / elapsed
-        kb = self.bytes / self.frames / 1024 if self.frames else 0
-        kbps = self.bytes / elapsed / 1024
-        line = (
-            f"{fps:5.1f} fps | {kb:5.1f} KB/frame | {kbps:6.1f} KB/s | "
-            f"latência {_avg(self.latency):5.1f} ms (p95 {_p95(self.latency):5.1f}) = "
-            f"idade {_avg(self.age):4.1f} + rede {_avg(self.net):5.1f} + psp {_avg(self.local):5.1f} "
-            f"| decode {_avg(self.decode):4.1f} ms"
-        )
-        if quality is not None:
-            line += f" | q {quality}"
-        log.info(line)
-        self.last_line = {
-            "fps": fps, "kb_per_frame": kb, "kbps": kbps,
-            "latency_ms": _avg(self.latency), "latency_p95_ms": _p95(self.latency),
-            "age_ms": _avg(self.age), "net_ms": _avg(self.net),
-            "local_ms": _avg(self.local), "decode_ms": _avg(self.decode),
-            "quality": quality,
-        }
-        self.last_report = now
-        self._reset()
+        self.last_summary = self.window.summary(quality)
+        log.info(format_summary(self.last_summary))
+        self.window = Window()
+
+    def start_phase(self) -> None:
+        self.phase = Window()
+
+    def phase_summary(self, quality=None) -> dict:
+        return self.phase.summary(quality)
