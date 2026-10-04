@@ -268,7 +268,11 @@ class Server:
         self.old_warned = set()  # endereços de PSPs com EBOOT antigo já avisados
 
     def replace(self, transport):
+        """None se o servidor está fechando (um pedido que chegou junto com o Ctrl+C)."""
         with self.lock:
+            if not self.running:
+                transport.close()
+                return None
             old = self.current
             if old is not None:
                 old[0].close()
@@ -314,14 +318,16 @@ class Server:
                 if req.flags & protocol.REQ_BYE or not (req.flags & REQ_HELLO or cur is None or not cur.alive):
                     continue
                 cur = self.replace(UdpTransport(sock, addr, self.args.udp_pace, self.args.hdr_cache))
+                if cur is None:
+                    return
             try:
                 cur.transport.feed(req, nack)
             except Exception:  # um datagrama ruim não pode derrubar a thread do UDP
                 log.exception("erro tratando pedido UDP")
 
     def close(self):
-        self.running = False
         with self.lock:
+            self.running = False
             if self.current is not None:
                 self.current[0].close()
 

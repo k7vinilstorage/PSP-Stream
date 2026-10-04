@@ -626,6 +626,44 @@ GNOME, nada muda. Testado aqui só sem GPU (EGL sem tela, llvmpipe): a
 redução gera 480x272 com as bordas certas, e um pipeline sem DMA-BUF volta
 sozinho para o modo normal.
 
+**`--dmabuf` no PC do usuário [PSP]:** funcionou, com a tela em DMA-BUF
+(`drm-format=XR24:0x0100000000000002`, tiled da Intel). Mas a fonte continuou
+em 38,3-38,7 fps (intervalo mediano 32,4-33,1 ms, p10 16,0-16,6 ms), e a
+"captura" subiu de ~4 para 5-9 ms (a GPU sincroniza para devolver a imagem).
+Sem ganho: a cópia não era o limite. Fica como opção, mas não é recomendado.
+
+**A causa, no código do mutter 50** (`meta-screen-cast-stream-src.c`, conferido
+nas tags 46.0, 48.0, 50.0 e 51.0):
+
+```c
+min_interval_us = (G_USEC_PER_SEC * max_framerate.denom) / max_framerate.num;
+if (time_since_last_frame_us < min_interval_us) {
+    /* "Skipped recording frame on stream %u, too early" */
+    meta_screen_cast_stream_src_queue_follow_up (src, flags);
+    return;
+}
+```
+
+- O `max-framerate` negociado é a taxa da tela (7864015/131072 = 59,998 Hz),
+  então o intervalo mínimo vira 16 667 µs (divisão inteira). O horário de
+  cada frame é o tempo de apresentação esperado do quadro, que treme alguns
+  µs em torno de 16 667,3. Todo quadro que cai abaixo de 16 667 é pulado.
+- Na captura de monitor, a reposição de um frame pulado pede um redesenho
+  (`clutter_actor_queue_redraw_with_clip` de 1x1 pixel), que só sai no
+  próximo quadro da tela: 33,3 ms depois do último frame gravado.
+- Se uma fração p dos quadros passa, o intervalo médio é 16,7p + 33,3(1-p).
+  Com 38,3 fps, p = 0,43: ~43% de intervalos de 16,7 ms e o resto de 33 ms.
+  Bate com o p10 de 16,6 ms e a mediana de 33 ms.
+- Na captura de **janela**, a reposição é um timer de 1/60 s que grava sem
+  esperar redesenho. É por isso que o OBS relata que só a captura de tela
+  inteira fica travada ([mutter #4214](https://gitlab.gnome.org/GNOME/mutter/-/work_items/4214)).
+- No mutter 50, a faixa anunciada para monitores é de 1/1 até a taxa da
+  tela, e o cliente não consegue negociar outro valor. No mutter 51, o
+  mínimo voltou a 0/1, e `max-framerate=0/1` desliga o limitador
+  (`max_framerate.num > 0`).
+
+Teste seguinte: `--window`, escolhendo a janela do Minecraft.
+
 **Minecraft nesta rodada** (q90, sinal 50-100%): frames de 6-11 KB dão 29-39
 fps e 35-65 ms. Nas cenas de 13-15,6 KB, 24-28 fps e 70-84 ms (p95 88-133
 ms): aí a rede limita, e o decode sobe para 6-7 ms.

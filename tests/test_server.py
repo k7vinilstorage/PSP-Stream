@@ -230,6 +230,23 @@ class UdpEndToEndTest(unittest.TestCase):
         self.assertGreater(s["early_kb"], 0)
         self.assertIn("tempo morto", stats.format_summary(s))
 
+    def test_no_new_session_while_closing(self):
+        # Ctrl+C com o PSP mandando pedidos: um pedido que chega durante o
+        # encerramento não abre sessão nova ("PSP conectado" depois de "encerrando")
+        import pspstream
+        from sources import StaticSource
+        from transports import UdpTransport
+        args = argparse.Namespace(adaptive=False, bench=None, stats_interval=60, udp_pace=0, hdr_cache=True,
+                                  codec="jpeg")
+        server = pspstream.Server(StaticSource((ROOT / "assets/testcard.jpg").read_bytes()), args, None)
+        server.close()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            self.assertIsNone(server.replace(UdpTransport(sock, ("127.0.0.1", 9), 0, True)))
+            self.assertIsNone(server.current)
+        finally:
+            sock.close()
+
     def test_old_eboot_warned_once(self):
         import pspstream
         from sources import StaticSource
