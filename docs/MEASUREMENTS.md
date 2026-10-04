@@ -328,6 +328,34 @@ nenhum frame de atraso, e cada frame independente como no MJPEG.
 
   Reta usada: `QP = 44,6 - 0,16·q` (q na escala do JPEG).
 
+#### v0.5 no PSP-3000: H.264 x JPEG no stream de verdade [PSP]
+
+UDP, `--source static`, mesma imagem, sinal do PSP 45-47%. Ping no início
+do stream: 6,3 ms (select) / 5,8 ms (consulta).
+
+| q | H.264: KB | JPEG: KB | H.264: FPS | JPEG: FPS | H.264: latência / p95 | JPEG: latência / p95 | H.264: decode | JPEG: decode | H.264: reenviados | JPEG: reenviados |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 30 | 1,7 | 6,8 | 27,1 | 22,5 | 26 / 103 ms | 40 / 65 ms | 4,1 ms | 7,3 ms | 0,6% | 1,6% |
+| 50 | 2,4 | 9,3 | **28,7** | 19,5 | **28 / 77 ms** | 48 / 117 ms | 4,0 ms | 7,4 ms | 0,3% | 2,3% |
+| 70 | 3,8 | 12,5 | **28,6** | 12,8 | **27 / 55 ms** | 62 / 116 ms | 4,1 ms | 7,4 ms | 0,8% | 3,4% |
+| 90 | 5,4 | 23,5 | **22,1** | 7,0 | **33 / 61 ms** | 124 / 236 ms | 4,2 ms | 7,9 ms | 1,9% | 14,8% |
+
+- Na mesma qualidade (q na escala do JPEG), o H.264 mandou **23-30% dos
+  bytes** nesta imagem, menos que os 33-45% da calibração com 12 frames.
+  Resultado: **+47% de FPS na q50, 2,2x na q70, 3,2x na q90**, e latência
+  41-74% menor. O decode no stream (4,0-4,2 ms) confere com o teste v3.
+- Com frames de 2-4 KB, **o custo fixo por frame virou o gargalo**: o FPS
+  fica em ~28,7 de q30 a q70. A rede leva ~38-40 ms por frame, dos quais o
+  "1º pedaço" é 22-35 ms e a rajada só 4-8 ms. O servidor reage em 0,1-0,2
+  ms ("espera por frame novo"), e o ping no início é de 6 ms. Sobram ~16-29
+  ms por frame entre o pedido sair do PSP e o 1º pedaço chegar, sem
+  explicação ainda.
+- Com o rádio parado ~80% do tempo, pedir o próximo frame antes de o atual
+  chegar (`early_kb`) deveria esconder esse custo fixo. Com JPEG grande, isso
+  piorou porque o rádio estava ocupado; com H.264, a situação é outra.
+- A "vazão na rajada" de q30 (62 KB/s) não vale: com 2 pedaços por frame, a
+  conta tem um pedaço só.
+
 ## 1. Tamanho de frame [PC]
 
 Mesmo pipeline do servidor (`videoscale` -> I420 -> `jpegenc`), saída 480x272
