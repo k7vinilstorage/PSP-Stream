@@ -270,11 +270,12 @@ static void draw_overlay(const ui_t *ui, const stats_t *s)
         display_text(0, 1, 0xFF00FF00, "dec %4.1f ms (%s) rede %4.1f ms %s drop %u", s->dec_ms, decoder_name(),
                      s->net_ms, ui->udp ? "udp" : "tcp", stream_dropped());
         if (ui->udp) {
-            unsigned sel, poll;
+            unsigned sel, poll, live, live_min;
             int polling;
-            stream_ping(&sel, &poll, &polling);
-            display_text(0, 2, 0xFF00FF00, "perdidos %u  nack %u  ping %.1f/%.1f ms (%s)", stream_lost(),
-                         stream_nacks(), sel / 1000.0f, poll / 1000.0f, polling ? "poll" : "select");
+            stream_ping(&sel, &poll, &polling, &live, &live_min);
+            display_text(0, 2, 0xFF00FF00, "perdidos %u  nack %u  ping %.1f ms (min %.1f, inicio %.1f %s)",
+                         stream_lost(), stream_nacks(), live / 1000.0f, live_min / 1000.0f,
+                         (polling ? poll : sel) / 1000.0f, polling ? "poll" : "sel");
         }
     }
     if (ui->toast_until && (int)(ui->toast_until - now_us()) > 0)
@@ -441,7 +442,7 @@ int main(int argc, char *argv[])
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
     display_init();
-    status("PSPStream v0.5");
+    status("PSPStream v0.6");
 
     char dir[192], err[128];
     app_dir(argc > 0 ? argv[0] : NULL, dir, sizeof(dir));

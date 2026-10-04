@@ -1,4 +1,4 @@
-# Protocolo PSPStream v3
+# Protocolo PSPStream v4
 
 TCP **ou** UDP, porta padrão **5123** (o servidor atende os dois ao mesmo
 tempo; o PSP escolhe com `transport=` no `server.txt`). Todos os inteiros são **little-endian** (PSP e PC
@@ -29,11 +29,11 @@ PSP                                   PC
 - Pedir antes de decodificar ("prefetch") sobrepõe rede e decode. Nesse modo,
   quem limita o FPS é o mais lento dos dois, não a soma.
 
-## PSP -> PC: pedido (44 bytes)
+## PSP -> PC: pedido (48 bytes)
 
 | offset | tipo | campo | descrição |
 |---|---|---|---|
-| 0 | char[4] | magic | `"PSC3"` (v3; um EBOOT antigo, `"PSC1"`/`"PSC2"`, é recusado com aviso no log) |
+| 0 | char[4] | magic | `"PSC4"` (v4; um EBOOT antigo, `"PSC1"` a `"PSC3"`, é recusado com aviso no log) |
 | 4 | u32 | buttons | máscara `PSP_CTRL_*` (Marco 4) |
 | 8 | u8 | lx | analógico X, 0..255 (128 = centro) |
 | 9 | u8 | ly | analógico Y |
@@ -52,6 +52,8 @@ PSP                                   PC
 | 36 | u32 | hdr_have | UDP: id do cabeçalho JPEG guardado no PSP (0 = nenhum) |
 | 40 | u16 | ping_select | 0,1 ms: ida e volta pura medida no início, esperando com `select()` |
 | 42 | u16 | ping_poll | 0,1 ms: o mesmo, consultando o socket a cada 0,5 ms (0 = não medido) |
+| 44 | u16 | ping_live | 0,1 ms: ping a cada 1 s **durante** o stream, média móvel (0 = ainda não) |
+| 46 | u16 | ping_live_min | 0,1 ms: o menor dos últimos 8 |
 
 `first_t` e `burst_t` separam o tempo de rede em ida e volta (fixo por frame)
 e transferência (proporcional ao tamanho). Cada parte tem um remédio
@@ -121,16 +123,20 @@ guardado vale mesmo depois de reiniciar o servidor ou o PSP.
 `echo_ts` = um token. O servidor responde na hora, sem passar pela sessão,
 com 8 bytes: `"PSO1"` + o token. Metade dos pings espera a resposta com
 `select()` e metade consultando o socket a cada 0,5 ms. As medianas vão em
-`ping_select`/`ping_poll` de todo pedido. Com `rxwait=auto`, o PSP passa a
+`ping_select`/`ping_poll` de todo pedido. Durante o stream, o PSP manda um
+ping por segundo (token com o bit 31 ligado = horário de envio) e reporta a
+média e o mínimo em `ping_live`/`ping_live_min`. Comparar com o "1º pedaço"
+separa o tempo do rádio sob o tráfego do stream do tempo das respostas com
+frame. Com `rxwait=auto`, o PSP passa a
 esperar por consulta se isso for mais de 1 ms mais rápido.
 
-**PSP -> PC:** o mesmo pedido de 44 bytes, um por datagrama. Com a flag
+**PSP -> PC:** o mesmo pedido de 48 bytes, um por datagrama. Com a flag
 `NACK` (0x4), vem logo depois:
 
 | offset | tipo | campo | descrição |
 |---|---|---|---|
-| 44 | u32 | frame_no | frame incompleto |
-| 48 | u32[8] | missing | bit `i` = pedaço `i` faltando |
+| 48 | u32 | frame_no | frame incompleto |
+| 52 | u32[8] | missing | bit `i` = pedaço `i` faltando |
 
 O servidor reenvia só esses pedaços. Ele guarda os últimos 4 frames enviados.
 `BYE` (0x8) avisa que o app do PSP está saindo: o servidor solta as teclas e

@@ -31,9 +31,10 @@ struct sockaddr_in;
 int stream_start(int sock, int udp, const struct sockaddr_in *dest, int prefetch, int early_bytes, int rxwait,
                  volatile int *running);
 
-/* UDP: ida e volta pura medida no início (us, 0 = não medido) e se a thread
- * de rede espera consultando o socket (1) ou com select() (0). */
-void stream_ping(unsigned *select_us, unsigned *poll_us, int *polling);
+/* UDP: ida e volta pura medida no início (us, 0 = não medido), se a thread
+ * de rede espera consultando o socket (1) ou com select() (0), e o ping a
+ * cada 1 s durante o stream (média móvel e mínimo dos últimos 8). */
+void stream_ping(unsigned *select_us, unsigned *poll_us, int *polling, unsigned *live_us, unsigned *live_min_us);
 
 /* Pega o frame pronto mais novo, esperando até timeout_us. NULL se não há. */
 ps_frame_t *stream_take(unsigned timeout_us);

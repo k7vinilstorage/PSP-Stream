@@ -1,4 +1,4 @@
-"""Protocolo v3 do PSPStream (TCP ou UDP, little-endian). Ver docs/PROTOCOL.md.
+"""Protocolo v4 do PSPStream (TCP ou UDP, little-endian). Ver docs/PROTOCOL.md.
 
 Manter em sincronia com psp/src/protocol.h.
 """
@@ -8,8 +8,8 @@ from dataclasses import dataclass
 
 DEFAULT_PORT = 5123
 
-MAGIC_REQ = b"PSC3"       # v3: cache do cabeçalho JPEG e ida e volta medida
-MAGIC_REQ_OLD = (b"PSC1", b"PSC2")  # EBOOT antigo: recusado com mensagem clara
+MAGIC_REQ = b"PSC4"       # v4: ping durante o stream
+MAGIC_REQ_OLD = (b"PSC1", b"PSC2", b"PSC3")  # EBOOT antigo: recusado com mensagem clara
 MAGIC_FRAME = b"PSF1"
 MAGIC_CHUNK = b"PSU2"
 MAGIC_PONG = b"PSO1"
@@ -27,12 +27,12 @@ REQ_PING = 0x0010  # UDP: responda já com PONG_STRUCT (mede a ida e volta pura)
 CHUNK_PAYLOAD = 1400
 MAX_CHUNKS = 256
 
-REQ_STRUCT = struct.Struct("<4sIBBHIIHHHHHHBBHIHH")
+REQ_STRUCT = struct.Struct("<4sIBBHIIHHHHHHBBHIHHHH")
 FRAME_HDR_STRUCT = struct.Struct("<4sIII")
 CHUNK_HDR_STRUCT = struct.Struct("<4sIIIHHI")  # magic, frame_no, size, send_ts, chunk, count, hdr
 NACK_STRUCT = struct.Struct("<I8I")            # frame_no, máscara de 256 bits
 PONG_STRUCT = struct.Struct("<4sI")            # magic, token (o echo_ts do ping)
-assert REQ_STRUCT.size == 44
+assert REQ_STRUCT.size == 48
 assert FRAME_HDR_STRUCT.size == 16
 assert CHUNK_HDR_STRUCT.size == 24
 assert NACK_STRUCT.size == 36
@@ -59,6 +59,8 @@ class Request:
     hdr_have: int = 0  # UDP: id do cabeçalho JPEG guardado no PSP (0 = nenhum)
     ping_select: int = 0  # 0,1 ms: ida e volta pura no início do stream, esperando com select()
     ping_poll: int = 0    # ... e consultando o socket a cada 0,5 ms (0 = não medido)
+    ping_live: int = 0    # 0,1 ms: ping a cada 1 s durante o stream (média móvel; 0 = ainda não)
+    ping_live_min: int = 0  # 0,1 ms: o menor dos últimos 8
 
     def pack(self) -> bytes:
         return REQ_STRUCT.pack(
@@ -66,7 +68,7 @@ class Request:
             self.ack_frame, self.echo_ts,
             self.net_t, self.local_t, self.since_t, self.decode_t,
             self.first_t, self.burst_t, self.signal, self.wflags, self.lost,
-            self.hdr_have, self.ping_select, self.ping_poll,
+            self.hdr_have, self.ping_select, self.ping_poll, self.ping_live, self.ping_live_min,
         )
 
     @classmethod

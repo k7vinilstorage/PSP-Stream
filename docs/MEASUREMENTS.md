@@ -381,6 +381,25 @@ do PC ligado. Streams contínuos (Moonlight, por exemplo) não têm pausas e
 não sentem isso. **Teste que decide:** `sudo iw dev wlp0s20f3 set
 power_save off` (volta no reboot) e o mesmo bench.
 
+#### H.264, bench das 12:37 [PSP]
+
+Sem anotação de power save nem `early_kb` (a confirmar), sinal 55%:
+
+| q | KB | FPS | latência / p95 | rede | 1º pedaço | rajada | reenviados |
+|---|---|---|---|---|---|---|---|
+| 30 | 1,7 | **44,8** | **20 / 34 ms** | 26,0 ms | 23,7 ms | 2,4 ms | 0,4% |
+| 50 | 2,4 | **40,8** | **22 / 36 ms** | 25,6 ms | 21,3 ms | 4,4 ms | 1,1% |
+| 70 | 3,8 | 21,1 | 55 / 154 ms | 51,2 ms | 32,3 ms | 19,1 ms | 6,3% |
+| 90 | 5,4 | 6,9 | 558 / 957 ms | 148,7 ms | 55,6 ms | 93,2 ms | 15,2% |
+
+- q30/q50: o melhor resultado até aqui, 41-45 fps e ~21 ms de latência
+  média (antes 27-32 fps).
+- q70/q90: o enlace piorou no meio da rodada (vazão na rajada de 205 e 56
+  KB/s, 6-15% reenviados, o Wi-Fi caiu para 46 KB/s). Com 3,8-5,4 KB por
+  frame, as rodadas anteriores fizeram 22-32 fps; não é efeito da qualidade.
+- A v0.6 manda um ping por segundo durante o stream (coluna "ping no
+  stream" no bench), para separar rádio de resposta com frame.
+
 ## 1. Tamanho de frame [PC]
 
 Mesmo pipeline do servidor (`videoscale` -> I420 -> `jpegenc`), saída 480x272

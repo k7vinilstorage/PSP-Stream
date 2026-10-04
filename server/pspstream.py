@@ -199,15 +199,16 @@ class Session:
             rows.append(summary)
         table = [
             "| q | KB/frame | FPS | fonte (fps) | Wi-Fi (KB/s) | latência média (ms) | p95 (ms) | rede (ms) "
-            "| 1º pedaço (ms) | rajada (ms) | vazão na rajada (KB/s) "
+            "| 1º pedaço (ms) | ping no stream (ms) | rajada (ms) | vazão na rajada (KB/s) "
             "| espera por frame novo (ms) | decode (ms) | PSP recebido->exibido (ms) | reenvios 1 s "
             "| pedaços reenviados | frames perdidos |",
-            "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
         ] + [
             f"| {r['quality']} | {r['kb_per_frame']:.1f} | {r['fps']:.1f} | "
             f"{'-' if r['source_fps'] is None else format(r['source_fps'], '.1f')} | "
             f"{r['wifi_kbps']:.0f} | {r['latency_ms']:.1f} | {r['latency_p95_ms']:.1f} | {r['transfer_ms']:.1f} | "
-            f"{r['first_ms']:.1f} | {r['burst_ms']:.1f} | {r['burst_kbps']:.0f} | "
+            f"{r['first_ms']:.1f} | {r['ping_ms']:.1f} (mín {r['ping_min_ms']:.1f}) | {r['burst_ms']:.1f} | "
+            f"{r['burst_kbps']:.0f} | "
             f"{r['wait_ms']:.1f} | {r['decode_ms']:.1f} | {r['local_ms']:.1f} | {r['keepalive']} | "
             f"{r['resent_pct']:.1f}% | {r['lost']} |"
             for r in rows

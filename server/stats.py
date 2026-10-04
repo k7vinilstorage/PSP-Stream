@@ -45,6 +45,8 @@ class Window:
         self.first = []    # pedido -> primeiro pedaço, no PSP (ms): ida e volta
         self.burst = []    # primeiro -> último pedaço (ms)
         self.burst_rate = []  # KB/s dentro da rajada: vazão real do enlace
+        self.ping = []     # ping durante o stream, informado pelo PSP (ms)
+        self.ping_min = []
         self.lost0 = None  # contador de frames perdidos do PSP no início da janela
         self.lost1 = 0
 
@@ -77,6 +79,8 @@ class Window:
             "first_ms": _avg(self.first),
             "burst_ms": _avg(self.burst),
             "burst_kbps": statistics.median(self.burst_rate) if self.burst_rate else 0.0,
+            "ping_ms": _avg(self.ping),
+            "ping_min_ms": min(self.ping_min) if self.ping_min else 0.0,
             "lost": (self.lost1 - self.lost0) if self.lost0 is not None else 0,
             "quality": quality,
             "frames": self.frames,
@@ -94,6 +98,8 @@ def format_summary(s: dict) -> str:
         f"| rede = 1º pedaço {s['first_ms']:4.1f} + rajada {s['burst_ms']:4.1f} ms ({s['burst_kbps']:4.0f} KB/s) "
         f"| decode {s['decode_ms']:4.1f} ms | espera por frame novo {s['wait_ms']:4.1f} ms"
     )
+    if s["ping_ms"]:
+        line += f" | ping no stream {s['ping_ms']:4.1f} ms (mín {s['ping_min_ms']:4.1f})"
     if s["quality"] is not None:
         line += f" | q {s['quality']}"
     if s["keepalive"]:
@@ -136,6 +142,9 @@ class SessionStats:
             if w.lost0 is None:
                 w.lost0 = req.lost
             w.lost1 = req.lost
+            if req.ping_live:
+                w.ping.append(req.ping_live / 10)
+                w.ping_min.append(req.ping_live_min / 10)
         meta = self.sent.pop(req.ack_frame, None)
         if meta is None:
             return

@@ -104,6 +104,13 @@ static volatile uint32_t hdr_have;
 static int g_rxwait;
 static volatile int rx_poll;
 static volatile unsigned ping_sel_us, ping_poll_us;
+/* Ping durante o stream: separa o tempo do rádio/roteador sob o tráfego do
+ * stream do tempo específico das respostas com frame (o "1º pedaço"). */
+#define LIVE_PING_EVERY_US (1000 * 1000)
+#define LIVE_PING_TAG 0x80000000u /* token = horário de envio com este bit (não colide com a fase inicial) */
+static volatile unsigned live_avg_us, live_min_us;
+static unsigned live_hist[8];
+static int live_n;
 
 static volatile uint32_t in_buttons;
 static volatile uint8_t in_lx = 128, in_ly = 128;
@@ -161,6 +168,8 @@ static int send_req(uint16_t flags, const ps_nack_t *nack)
     r->hdr_have = hdr_have;
     r->ping_select = clamp_u16(ping_sel_us / 100);
     r->ping_poll = clamp_u16(ping_poll_us / 100);
+    r->ping_live = clamp_u16(live_avg_us / 100);
+    r->ping_live_min = clamp_u16(live_min_us / 100);
     int len = sizeof(ps_req_t);
     if (nack) {
         msg.n = *nack;
@@ -403,9 +412,8 @@ static int wait_rx(int timeout_us)
 }
 
 /* Um ping: 1 = respondido (rtt em us), 0 = sem resposta, -1 = erro de rede. */
-static int ping_once(int poll, uint32_t token, unsigned *rtt)
+static int send_ping(uint32_t token)
 {
-    static uint8_t buf[sizeof(ps_chunk_hdr_t) + PS_CHUNK_PAYLOAD + 64];
     ps_req_t r;
     memset(&r, 0, sizeof(r));
     r.magic = PS_MAGIC_REQ;
@@ -414,11 +422,17 @@ static int ping_once(int poll, uint32_t token, unsigned *rtt)
     r.ly = in_ly;
     r.flags = PS_REQ_PING;
     r.echo_ts = token;
-    unsigned t0 = now_us();
     sceKernelWaitSema(send_sema, 1, NULL);
     int rc = net_sendto(g_sock, &g_dest, &r, sizeof(r));
     sceKernelSignalSema(send_sema, 1);
-    if (rc < 0)
+    return rc;
+}
+
+static int ping_once(int poll, uint32_t token, unsigned *rtt)
+{
+    static uint8_t buf[sizeof(ps_chunk_hdr_t) + PS_CHUNK_PAYLOAD + 64];
+    unsigned t0 = now_us();
+    if (send_ping(token) < 0)
         return -1;
     for (;;) {
         int n = net_recv_dgram(g_sock, buf, sizeof(buf));
@@ -484,6 +498,24 @@ static int ping_phase(void)
     return 0;
 }
 
+static void live_pong(const uint8_t *buf)
+{
+    ps_pong_t pong;
+    memcpy(&pong, buf, sizeof(pong));
+    if (pong.magic != PS_MAGIC_PONG || !(pong.token & LIVE_PING_TAG))
+        return;
+    unsigned rtt = (now_us() - pong.token) & ~LIVE_PING_TAG;
+    if (rtt > 2000 * 1000)
+        return; /* pong de outra conexão */
+    live_avg_us = live_avg_us ? (live_avg_us * 3 + rtt) / 4 : rtt;
+    live_hist[live_n++ % 8] = rtt;
+    unsigned m = ~0u;
+    for (int i = 0; i < 8 && i < live_n; i++)
+        if (live_hist[i] < m)
+            m = live_hist[i];
+    live_min_us = m;
+}
+
 static int net_thread_udp(void)
 {
     static uint8_t pkt[sizeof(ps_chunk_hdr_t) + PS_CHUNK_PAYLOAD + 64];
@@ -506,10 +538,16 @@ static int net_thread_udp(void)
     if (ping_phase() < 0)
         return -1;
     now = last_req = last_done = link_free = now_us();
+    unsigned next_ping = now + LIVE_PING_EVERY_US;
     ASK(PS_REQ_HELLO | PS_REQ_FRAME);
 
     while (*g_running && !stopping) {
         now = now_us();
+        if ((int)(now - next_ping) >= 0) {
+            next_ping = now + LIVE_PING_EVERY_US;
+            if (send_ping(now | LIVE_PING_TAG) < 0)
+                return -1;
+        }
         int timeout = 100 * 1000; /* teto: reavalia pelo menos a cada 100 ms */
         int acted = 0;
 
@@ -564,6 +602,10 @@ static int net_thread_udp(void)
         if (n == 0) {
             if (wait_rx(timeout) < 0)
                 return -1;
+            continue;
+        }
+        if (n == (int)sizeof(ps_pong_t)) {
+            live_pong(pkt);
             continue;
         }
         if (n < (int)sizeof(ps_chunk_hdr_t))
@@ -724,6 +766,8 @@ int stream_start(int sock, int udp, const struct sockaddr_in *dest, int prefetch
     g_rxwait = rxwait;
     rx_poll = 0;
     ping_sel_us = ping_poll_us = 0;
+    live_avg_us = live_min_us = 0;
+    live_n = 0;
     if (udp)
         g_dest = *dest;
     g_prefetch = prefetch;
@@ -773,11 +817,13 @@ void stream_release(ps_frame_t *frame, const ps_ack_t *ack)
         sceKernelSignalSema(want_sema, 1);
 }
 
-void stream_ping(unsigned *select_us, unsigned *poll_us, int *polling)
+void stream_ping(unsigned *select_us, unsigned *poll_us, int *polling, unsigned *live_us, unsigned *live_min_us_out)
 {
     *select_us = ping_sel_us;
     *poll_us = ping_poll_us;
     *polling = rx_poll;
+    *live_us = live_avg_us;
+    *live_min_us_out = live_min_us;
 }
 
 void stream_set_h264(int on)
