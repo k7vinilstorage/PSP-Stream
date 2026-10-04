@@ -677,6 +677,19 @@ tela, e não há valor que ajude.
 Na mesma rodada: cenas leves (1,4-3,7 KB) deram 25-38 fps com 29-46 ms; cenas
 pesadas (9-12 KB), 25-37 fps com 53-75 ms (rede 25-36 ms por frame).
 
+**Sunshine em Flatpak** usa a mesma captura pelo portal (o Flatpak não permite
+a KMS). No código dele (`src/platform/linux/pipewire.cpp`): ele pede
+`max-framerate` de 0/1 a 1000/1 com preferência pela taxa pedida (60). Como o
+GNOME 50 oferece no máximo 59,998, ele desliga o próprio ritmo e manda cada
+frame quando chega, ou seja, ~40 fps no mesmo PC. Só repete a imagem depois
+de 1 s sem nada novo.
+
+**Captura KMS (`--source kms`):** lê o plano principal da placa de vídeo, sem
+o compositor, como a captura KMS do Sunshine. O auxiliar
+`tools/kms/pspstream-kms` (com `CAP_SYS_ADMIN`) exporta o framebuffer como
+DMA-BUF a cada troca de buffer, e o servidor reduz no OpenGL. A medir no PC
+do usuário.
+
 **Minecraft nesta rodada** (q90, sinal 50-100%): frames de 6-11 KB dão 29-39
 fps e 35-65 ms. Nas cenas de 13-15,6 KB, 24-28 fps e 70-84 ms (p95 88-133
 ms): aí a rede limita, e o decode sobe para 6-7 ms.

@@ -182,6 +182,7 @@ Para o PSP recusar H.264, use `h264=0` no `server.txt`.
 | opção | o que faz |
 |---|---|
 | `--source portal` | tela no Wayland (padrão) |
+| `--source kms` | direto da placa de vídeo: 60 fps no GNOME 50, sem cursor (ver abaixo) |
 | `--source test` | padrão animado com relógio (testes sem captura de tela) |
 | `--source static --image arq.png` | uma imagem fixa (benchmark reproduzível) |
 | `--source x11` / `--source gst --gst-src "..."` | sessão X11 / pipeline GStreamer próprio |
@@ -211,6 +212,33 @@ A cada 2 s, o servidor mostra uma linha de estatística:
 "Latência" vai da captura no PC até o frame aparecer no PSP. Ela é medida só
 com o relógio do servidor, sem sincronizar relógios (ver
 [PROTOCOL.md](docs/PROTOCOL.md)).
+
+### Captura KMS: 60 fps no GNOME 50 (experimental)
+
+No GNOME 50, a captura pelo portal fica em ~40 fps por causa de um limitador
+do próprio GNOME ([MEASUREMENTS.md](docs/MEASUREMENTS.md)). A captura KMS lê a
+imagem que a placa de vídeo está mostrando, sem passar pelo GNOME, como a
+captura KMS do Sunshine. Ela precisa de um auxiliar com permissão de
+administrador (`CAP_SYS_ADMIN`):
+
+```sh
+sudo dnf install gcc libdrm-devel
+make -C tools/kms          # compila tools/kms/pspstream-kms
+make -C tools/kms cap      # sudo setcap cap_sys_admin+ep (refaça depois de cada make)
+python3 server/pspstream.py --source kms
+```
+
+- Só o auxiliar tem a permissão, e ele faz uma coisa só: exporta o buffer da
+  tela como DMA-BUF para o servidor. A redução para 480x272 é no servidor, sem
+  privilégio, no OpenGL (o mesmo caminho do `--dmabuf`).
+- O cursor do mouse não aparece: ele fica num plano separado da placa. Em
+  jogo não faz falta.
+- Captura o monitor inteiro. Com mais de um monitor, `--kms-monitor 1` escolhe
+  o segundo (o log mostra quantos há).
+- Se o repositório estiver numa partição montada com `nosuid`, a permissão é
+  ignorada e o servidor avisa "sem permissão para ler a tela".
+- Testado aqui só sem placa de vídeo (protocolo, mensagens de erro e montagem
+  do pipeline). O primeiro teste de verdade é no seu PC.
 
 ### Qualidade x latência: como foi ajustado
 
@@ -339,11 +367,14 @@ server/                servidor (Python 3)
   pspstream.py         sessões TCP, linha de comando, benchmark
   gst_source.py        pipeline GStreamer (captura -> 480x272 -> JPEG)
   portal.py            xdg-desktop-portal ScreenCast (Wayland)
+  kms.py               captura KMS (--source kms): DMA-BUF do auxiliar -> OpenGL
+  h264.py              encoder H.264 (todo frame IDR, openh264)
   adaptive.py          qualidade adaptativa
   inject.py            uinput (teclado/mouse)
   keymap.json          perfis de controles
   stats.py, sources.py, jpeginfo.py, protocol.py
 tools/                 fake_client.py, emu_test.sh, emu_input_test.py, bench_sizes.py, make_testcard.sh
+  kms/                 pspstream-kms.c: auxiliar com CAP_SYS_ADMIN que exporta a tela (make; make cap)
 docs/                  PROTOCOL.md, MEASUREMENTS.md
 tests/                 testes do servidor
 ```

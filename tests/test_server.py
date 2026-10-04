@@ -382,6 +382,100 @@ class DmabufCaptureTest(unittest.TestCase):
         self.assertIn("--dmabuf não funcionou", logs.output[0])
 
 
+class KmsCaptureTest(unittest.TestCase):
+    """--source kms. Sem placa de vídeo aqui: o auxiliar de verdade é testado no
+    caminho de erro, e o protocolo e os buffers com um auxiliar falso (memfd)."""
+
+    def setUp(self):
+        try:
+            import kms
+        except (ImportError, ValueError):
+            self.skipTest("sem GStreamer")
+        self.kms = kms
+        self.fake = [sys.executable, str(ROOT / "tests/fake_kms_helper.py")]
+
+    def build_helper(self):
+        import shutil
+        import subprocess
+        if not shutil.which("cc") or subprocess.run(["pkg-config", "--exists", "libdrm"]).returncode:
+            self.skipTest("sem compilador C ou libdrm")
+        r = subprocess.run(["make", "-s", "-C", str(ROOT / "tools/kms")], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("warning", r.stderr)
+        return ROOT / "tools/kms/pspstream-kms"
+
+    def test_real_helper_reports_errors(self):
+        helper = self.build_helper()
+        with self.assertRaisesRegex(self.kms.KmsError, "precisa ser /dev/dri/cardN"):
+            self.kms.KmsHelper(helper, card="/etc/passwd")
+        if not Path("/dev/dri").exists():
+            with self.assertRaisesRegex(self.kms.KmsError, "nenhum monitor ligado"):
+                self.kms.KmsHelper(helper)
+
+    def test_missing_helper_explains_build(self):
+        with self.assertRaisesRegex(self.kms.KmsError, "make -C tools/kms"):
+            self.kms.KmsHelper(ROOT / "tools/kms/nao-existe")
+
+    def test_protocol_and_buffer(self):
+        from gi.repository import GstAllocators, GstVideo
+        helper = self.kms.KmsHelper(self.fake[1], argv_prefix=self.fake[:1])
+        try:
+            self.assertEqual((helper.hello.width, helper.hello.height), (64, 32))
+            reply, fds = helper.next_frame(100)
+            self.assertEqual(reply.status, self.kms.ST_FRAME)
+            self.assertEqual(len(fds), 2)
+            buf = self.kms.make_buffer(reply, fds, GstAllocators.DmaBufAllocator.new())
+        finally:
+            helper.close()
+        self.assertEqual(buf.n_memory(), 1)  # os dois planos estão no mesmo buffer
+        meta = GstVideo.buffer_get_video_meta(buf)
+        self.assertEqual(meta.n_planes, 2)
+        self.assertEqual(list(meta.offset)[:2], [0, 64 * 4 * 32])
+        caps = self.kms.caps_for(reply).to_string()
+        self.assertIn("memory:DMABuf", caps)
+        self.assertIn("drm-format=(string)XR24:0x0100000000000002", caps)
+        self.assertEqual(helper.proc.returncode, 0)
+
+    def test_permission_error_at_startup(self):
+        import os
+        os.environ["FAKE_KMS_NOPERM"] = "1"
+        try:
+            with self.assertRaisesRegex(self.kms.KmsError, "sem permissão"):
+                self.kms.KmsSource(480, 272, 60, 60, helper=self.fake[1], argv_prefix=self.fake[:1])
+        finally:
+            del os.environ["FAKE_KMS_NOPERM"]
+
+    def test_source_feeds_appsrc(self):
+        from gi.repository import Gst
+        if not Gst.ElementFactory.find("glupload"):
+            self.skipTest("sem os elementos OpenGL do GStreamer")
+        src = self.kms.KmsSource(480, 272, 60, 60, codec="jpeg", helper=self.fake[1], argv_prefix=self.fake[:1])
+        pushed, caps = [], []
+
+        class FakeAppsrc:
+            def set_property(self, name, value):
+                caps.append(value.to_string())
+
+            def emit(self, signal, buf):
+                pushed.append(buf)
+                if len(pushed) >= 5:
+                    src._stop.set()
+
+        src.appsrc = FakeAppsrc()  # o upload de memfd para o OpenGL não existe aqui
+        t = threading.Thread(target=src._capture)
+        t.start()
+        t.join(5)
+        src.helper.close()
+        self.assertFalse(t.is_alive())
+        self.assertIsNone(src.failed)
+        self.assertEqual(len(pushed), 5)
+        self.assertEqual(len(caps), 1)  # o formato não mudou: caps uma vez só
+        factories = set()
+        src.pipeline.iterate_elements().foreach(lambda e: factories.add(e.get_factory().get_name()))
+        self.assertTrue({"appsrc", "glupload", "glcolorscale", "gldownload"} <= factories, factories)
+        self.assertNotIn("pipewiresrc", factories)
+
+
 class H264QualityTest(unittest.TestCase):
     def test_qp_mapping(self):
         try:

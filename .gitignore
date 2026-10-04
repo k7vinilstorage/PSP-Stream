@@ -19,3 +19,4 @@ __pycache__/
 # testes locais
 /tmp/
 *.log
+tools/kms/pspstream-kms

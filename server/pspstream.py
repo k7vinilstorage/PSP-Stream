@@ -368,6 +368,11 @@ def build_source(args, portal=None):
 
         return StaticSource(reencode(args.quality), reencode, args.quality)
 
+    if args.source == "kms":
+        from kms import KmsSource
+        return KmsSource(w, h, args.fps, args.quality, args.scale, not args.stretch, args.codec,
+                         args.kms_card, args.kms_monitor)
+
     from gst_source import SOURCES, GstSource
     keepalive, gpu_from = portal, None
     if args.source == "portal":
@@ -447,9 +452,14 @@ def parse_args(argv=None):
                    help="marcação dos pacotes do servidor para a fila de prioridade do Wi-Fi (WMM): "
                         "ef = voz (padrão), cs5/af41 = vídeo, 0 = nenhuma")
     p.add_argument("--bind", default="0.0.0.0", help="endereço local (padrão %(default)s)")
-    p.add_argument("--source", choices=["portal", "test", "x11", "gst", "static"], default="portal",
-                   help="portal = tela no Wayland (padrão); test = padrão animado com relógio; "
-                        "x11 = sessão X11; gst = pipeline próprio (--gst-src); static = uma imagem")
+    p.add_argument("--source", choices=["portal", "kms", "test", "x11", "gst", "static"], default="portal",
+                   help="portal = tela no Wayland (padrão); kms = direto da placa de vídeo, sem o limite de "
+                        "~40 fps do GNOME 50 (precisa de make -C tools/kms e make -C tools/kms cap); "
+                        "test = padrão animado com relógio; x11 = sessão X11; gst = pipeline próprio "
+                        "(--gst-src); static = uma imagem")
+    p.add_argument("--kms-monitor", type=int, default=0, metavar="N",
+                   help="kms: qual monitor ligado (0 = o primeiro; o log mostra quantos há)")
+    p.add_argument("--kms-card", metavar="/dev/dri/cardN", help="kms: placa de vídeo (padrão: procura em todas)")
     p.add_argument("--image", default=str(here.parent / "assets" / "testcard.jpg"),
                    help="imagem do modo static (padrão: assets/testcard.jpg)")
     p.add_argument("--gst-src", help="elementos GStreamer da fonte para --source gst")
