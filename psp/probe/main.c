@@ -35,7 +35,7 @@
 PSP_MODULE_INFO("PSPStreamH264", 0, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
 /* Heap pequeno: o mpeg.prx carregado pelo sceUtility vai para a memória de usuário. */
-PSP_HEAP_SIZE_KB(4096);
+PSP_HEAP_SIZE_KB(6144);
 
 /* clips.bin, embutido pelo bin2o */
 extern unsigned char clips[];
@@ -240,89 +240,156 @@ static int load_clips(clip_t *out, int max)
 static const char *g_argv0;
 static void write_report(const char *argv0);
 
-/* skip >= 0: não entrega esse AU (simula um frame perdido na rede). */
-static int run(const clip_t *cl, const char *label, int to_vram, int skip, uint8_t *stage, u32 *ram_fb)
+enum {
+    MODE_PLAIN, /* uma chamada por AU; lê o número depois de cada uma */
+    MODE_GROUP, /* o clipe tem `group` AUs por frame (o frame + cópias); lê no último */
+    MODE_EMPTY, /* depois de cada AU, `group - 1` chamadas com um AU só com o AUD */
+    MODE_STOP,  /* depois de cada AU, sceMpegAvcDecodeStop (solta o que está preso) */
+};
+
+typedef struct {
+    const char *label;
+    int mode;
+    int group;  /* chamadas por frame mostrado */
+    int to_vram;
+    int skip;   /* AU não entregue (simula perda); -1 = nenhum */
+} pass_t;
+
+static u32 *g_stop_bufs[4]; /* sceMpegAvcDecodeStop escreve até 4 imagens */
+
+static int run(const clip_t *cl, const pass_t *ps, uint8_t *stage, u32 *ram_fb)
 {
     /* cinza: os blocos do número ficam ilegíveis até o decoder escrever algo */
-    memset(to_vram ? (void *)VRAM_UNCACHED : (void *)((u32)ram_fb | 0x40000000), 0x80, FB_SIZE);
+    memset(ps->to_vram ? (void *)VRAM_UNCACHED : (void *)((u32)ram_fb | 0x40000000), 0x80, FB_SIZE);
     avc_t a;
     const char *step = "";
     int r = avc_open(&a, &step);
     if (r != 0) {
-        say("%s: falhou em %s (%08x)", label, step, r);
+        say("%s: falhou em %s (%08x)", ps->label, step, r);
         avc_close(&a);
+        write_report(g_argv0);
         return -1;
     }
-    int ok = 0, pictures = 0, held_first = -1, errors = 0, first_err = 0, first_err_at = -1;
-    int delay_min = 99, delay_max = -99, unreadable = 0, no_picture = 0;
-    unsigned t_sum = 0, t_max = 0, t_min = ~0u, t_idr = 0, bytes = 0;
+    static const uint8_t aud_only[64] __attribute__((aligned(64))) = {0, 0, 0, 1, 0x09, 0xF0};
+    int calls = 0, ok = 0, shown = 0, errors = 0, first_err = 0, first_err_at = -1, no_picture = 0;
+    int delay_min = 99, delay_max = -99, unreadable = 0, readable = 0, held_first = -1, stop_imgs = 0;
+    unsigned t_sum = 0, t_max = 0, t_min = ~0u, t_frame = 0, bytes = 0, extra_sum = 0, extra_n = 0;
     const uint8_t *src = cl->data;
-    for (int i = 0; i < cl->frames; i++) {
+    void *dest = ps->to_vram ? (void *)VRAM : (void *)ram_fb;
+    const u32 *fb = ps->to_vram ? VRAM_UNCACHED : (const u32 *)((u32)ram_fb | 0x40000000);
+    for (int i = 0; i < cl->frames && errors < 5; i++) {
         int size = clip_size(cl, i);
         if (size <= 0 || size > MAX_AU)
             break;
         memcpy(stage, src, size);
         src += size;
-        if (i == skip)
+        if (i == ps->skip)
             continue;
         bytes += size;
-        void *dest = to_vram ? (void *)VRAM : (void *)ram_fb;
         SceInt32 status = 0;
         unsigned t0 = now_us();
         r = avc_decode(&a, stage, size, dest, &status);
         unsigned dt = now_us() - t0;
+        calls++;
         if (r != 0) {
             if (!errors++) {
                 first_err = r;
                 first_err_at = i;
             }
-            if (errors >= 5)
-                break;
             continue;
         }
         ok++;
         if (!status)
             no_picture++;
-        if (i == 0)
-            t_idr = dt;
-        else {
-            t_sum += dt;
-            if (dt > t_max)
-                t_max = dt;
-            if (dt < t_min)
-                t_min = dt;
+        int last = 1;       /* esta chamada fecha um frame mostrado? */
+        int expect = i;     /* número que deveria aparecer agora */
+        const u32 *out = fb;
+        if (ps->mode == MODE_GROUP) {
+            last = i % ps->group == ps->group - 1;
+            expect = i / ps->group;
+            if (i % ps->group) {
+                extra_sum += dt;
+                extra_n++;
+            }
+        } else if (ps->mode == MODE_EMPTY) {
+            for (int k = 1; k < ps->group && r == 0; k++) {
+                SceInt32 st = 0;
+                unsigned te = now_us();
+                r = avc_decode(&a, (void *)aud_only, 6, dest, &st);
+                unsigned de = now_us() - te;
+                calls++;
+                dt += de;
+                extra_sum += de;
+                extra_n++;
+                if (r == 0)
+                    ok++;
+                else if (!errors++) {
+                    first_err = r;
+                    first_err_at = i;
+                }
+            }
+        } else if (ps->mode == MODE_STOP) {
+            SceInt32 n = 0;
+            unsigned ts = now_us();
+            r = sceMpegAvcDecodeStop(&a.mpeg, 512, g_stop_bufs, &n);
+            unsigned ds = now_us() - ts;
+            dt += ds;
+            extra_sum += ds;
+            extra_n++;
+            if (r != 0 && !errors++) {
+                first_err = r;
+                first_err_at = i;
+            }
+            if (r == 0 && n > 0 && n <= 4) {
+                stop_imgs += n;
+                out = (const u32 *)((u32)g_stop_bufs[n - 1] | 0x40000000);
+            }
         }
-        /* o Media Engine escreveu por DMA: lê sem cache */
-        const u32 *fb = to_vram ? VRAM_UNCACHED : (const u32 *)((u32)ram_fb | 0x40000000);
-        int idx = read_marker(fb);
+        t_frame += dt;
+        if (!last)
+            continue;
+        shown++;
+        if (shown > 1) { /* o 1º (IDR, decoder começando) fica fora da média */
+            t_sum += t_frame;
+            if (t_frame > t_max)
+                t_max = t_frame;
+            if (t_frame < t_min)
+                t_min = t_frame;
+        }
+        t_frame = 0;
+        int idx = read_marker(out);
         if (idx < 0) {
             unreadable++;
         } else {
             if (held_first < 0)
-                held_first = i; /* primeiro frame legível saiu depois de entregar o AU i */
-            pictures++;
-            int d = i - idx;
+                held_first = expect;
+            readable++;
+            int d = expect - idx;
             if (d < delay_min)
                 delay_min = d;
             if (d > delay_max)
                 delay_max = d;
         }
-        if (!to_vram)
-            memcpy(VRAM_UNCACHED, fb, FB_SIZE); /* mostra o progresso */
+        if (out != VRAM_UNCACHED)
+            memcpy(VRAM_UNCACHED, out, FB_SIZE); /* mostra o progresso */
     }
-    say("%s: %d/%d AUs ok, %.1f KB/frame", label, ok, cl->frames, bytes / 1024.0f / cl->frames);
+    say("%s: %d/%d chamadas ok, %.1f KB por frame", ps->label, ok, calls, bytes / 1024.0f / (shown ? shown : 1));
     if (errors)
-        say("  erro %08x no frame %d (%d erros)", first_err, first_err_at, errors);
+        say("  erro %08x no AU %d (%d erros)", first_err, first_err_at, errors);
     if (no_picture)
         say("  %d chamadas sem imagem (status 0)", no_picture);
-    if (ok > 1)
-        say("  decode %.2f ms (min %.2f, max %.2f); IDR %.2f ms", t_sum / 1000.0f / (ok - 1), t_min / 1000.0f,
-            t_max / 1000.0f, t_idr / 1000.0f);
-    if (pictures)
-        say("  frames segurados: %d a %d (1o legivel apos AU %d)", delay_min, delay_max, held_first);
+    if (shown > 1)
+        say("  por frame mostrado %.2f ms (min %.2f, max %.2f)", t_sum / 1000.0f / (shown - 1), t_min / 1000.0f,
+            t_max / 1000.0f);
+    if (extra_n)
+        say("  chamadas extras: %.2f ms cada (%d)", extra_sum / 1000.0f / extra_n, extra_n);
+    if (ps->mode == MODE_STOP)
+        say("  Stop soltou %d imagens", stop_imgs);
+    if (readable)
+        say("  frames de atraso: %d a %d (1o legivel no frame %d)", delay_min, delay_max, held_first);
     else
         say("  nenhum frame legivel saiu (%d ilegiveis)", unreadable);
-    if (unreadable && pictures)
+    if (unreadable && readable)
         say("  %d frames ilegiveis", unreadable);
     avc_close(&a);
     write_report(g_argv0); /* a cada passo: se o próximo travar o PSP, este fica gravado */
@@ -376,7 +443,7 @@ int main(int argc, char *argv[])
     pspDebugScreenInitEx(VRAM, PSP_DISPLAY_PIXEL_FORMAT_8888, 1);
 
     g_argv0 = argc > 0 ? argv[0] : "";
-    say("PSPStream - teste do decoder H.264 (v1)");
+    say("PSPStream - teste do decoder H.264 (v2)");
     /* Como os jogos fazem nos firmwares novos (0x300 = codecs do ME, 0x303 =
      * mpeg.prx); o sceUtilityLoadAvModule antigo fica de reserva. 0x80020139 =
      * já carregado. */
@@ -399,12 +466,24 @@ int main(int argc, char *argv[])
     } else {
         sceKernelDelayThread(500 * 1000);
         pspDebugScreenClear();
-        for (int i = 0; i < n; i++)
-            run(&cl[i], cl[i].name, 0, -1, stage, ram_fb);
-        run(&cl[0], "direto na VRAM", 1, -1, stage, ram_fb);
-        /* sem o AU 20 os seguintes referenciam um frame que não existe: a imagem
-         * fica errada até o próximo IDR, mas o decoder não pode travar */
-        run(&cl[0], "sem o frame 20", 0, 20, stage, ram_fb);
+        /* Na v1 (PSP-3000, 6.61): decode de 3-4 ms, mas o decoder segura 2
+         * frames, com ou sem VUI pedindo 0. Aqui: dá para soltar o frame na hora? */
+        static const pass_t passes[] = {
+            {"1 chamada por frame", MODE_PLAIN, 1, 0, -1},
+            {"frame + 2 copias", MODE_GROUP, 3, 0, -1},
+            {"frame + 2 AUs vazios", MODE_EMPTY, 3, 0, -1},
+            {"frame + Stop", MODE_STOP, 1, 0, -1}, /* por último: o mais arriscado */
+        };
+        static const int clip_of[] = {0, 2, 0, 0};
+        for (int k = 0; k < 4; k++)
+            g_stop_bufs[k] = memalign(64, FB_SIZE);
+        for (unsigned p = 0; p < sizeof(passes) / sizeof(passes[0]); p++) {
+            if (clip_of[p] >= n || (passes[p].mode == MODE_STOP && !g_stop_bufs[3])) {
+                say("%s: clipe ou memoria indisponivel", passes[p].label);
+                continue;
+            }
+            run(&cl[clip_of[p]], &passes[p], stage, ram_fb);
+        }
     }
 
     /* resultado por cima da última imagem */

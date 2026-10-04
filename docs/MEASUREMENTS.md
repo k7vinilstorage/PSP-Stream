@@ -235,6 +235,27 @@ travariam o PSP apareceram no emulador e foram corrigidos: o
 `SceMpegRingbuffer` do pspsdk tem 44 bytes e a biblioteca escreve 48, e uma
 leitura de u32 desalinhada.
 
+#### Resultado no PSP-3000 (6.61 ARK-4), teste v1 [PSP]
+
+| passo | AUs ok | decode por frame (RGBA incluso) | frames segurados |
+|---|---|---|---|
+| baseline/CAVLC na RAM | 60/60 | 4,05 ms (3,02-4,13) | **2** |
+| main/CABAC na RAM | 60/60 | 4,17 ms (3,10-4,26) | **2** |
+| baseline direto na VRAM | 60/60 | 3,55 ms (3,00-3,61) | **2** |
+| baseline sem o frame 20 | 59/60, sem erro nem travada | 4,05 ms | 2 a 8 (imagem errada até o próximo IDR, como esperado) |
+
+- **Funciona** chamado de um app comum, e é rápido: metade do `sceJpeg`
+  (7,9 ms), inclusive gravando direto na VRAM. CABAC custa só ~3% a mais.
+- **Mas o frame N só sai depois de entregar o N+2**: as duas primeiras
+  chamadas voltam sem imagem, e depois sai sempre o de 2 AUs atrás. O SPS já
+  diz `max_num_reorder_frames=0` e `max_dec_frame_buffering=1`, então não é
+  reordenação pedida pelo stream: é uma profundidade fixa de pipeline do
+  decoder. Com um frame por chamada, a 20 fps, seriam +100 ms de latência.
+- Se o atraso é contado em chamadas, dá para empurrar o frame com chamadas
+  baratas. A v2 do teste compara três jeitos: o frame + 2 cópias (P sem
+  mudança, ~300 bytes no clipe), o frame + 2 AUs só com o AUD, e o frame +
+  `sceMpegAvcDecodeStop`.
+
 ## 1. Tamanho de frame [PC]
 
 Mesmo pipeline do servidor (`videoscale` -> I420 -> `jpegenc`), saída 480x272

@@ -12,7 +12,7 @@ preciso rodar isto para mudar os clipes.
 
 Formato do clips.bin (little-endian):
     "H264PRB1", u32 clipes
-    por clipe: char nome[24], u32 frames, u32 bytes, u32 tamanho[frames], dados,
+    por clipe: char nome[24], u32 AUs, u32 bytes, u32 tamanho[AUs], dados,
                zeros até o próximo múltiplo de 4
 Os dados são Annex B (start codes); cada AU começa com um AUD.
 """
@@ -35,15 +35,25 @@ MARKER = ",".join(
 COMMON = "ref=1:bframes=0:threads=1:sliced-threads=0:rc-lookahead=0:sync-lookahead=0:aud=1:" \
          "keyint=60:min-keyint=60:scenecut=0:weightp=0:repeat-headers=1"
 
+BASELINE = ["-profile:v", "baseline", "-x264-params", COMMON + ":cabac=0"]
+
+# (nome, repetições de cada frame, argumentos do x264)
+# dup3: cada frame vai 3 vezes. O x264 codifica as cópias como P sem nenhuma
+# mudança (dezenas de bytes). O PSP v1 segura 2 frames por chamada de decode:
+# entregando o frame e duas cópias, ele deveria sair na 3ª chamada.
 CLIPS = [
-    ("baseline_cavlc", ["-profile:v", "baseline", "-x264-params", COMMON + ":cabac=0"]),
-    ("main_cabac", ["-profile:v", "main", "-x264-params", COMMON + ":cabac=1"]),
+    ("baseline_cavlc", 1, BASELINE),
+    ("main_cabac", 1, ["-profile:v", "main", "-x264-params", COMMON + ":cabac=1"]),
+    ("baseline_dup3", 3, ["-profile:v", "baseline", "-x264-params",
+                          COMMON + ":cabac=0:keyint=600:min-keyint=600"]),
 ]
 
 
-def encode(args) -> bytes:
+def encode(repeat, args) -> bytes:
+    # o número é desenhado antes de repetir: as 3 cópias levam o mesmo número
+    vf = MARKER if repeat == 1 else f"{MARKER},fps={30 * repeat}"
     cmd = ["ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i", "testsrc2=size=480x272:rate=30",
-           "-frames:v", str(FRAMES), "-vf", MARKER, "-pix_fmt", "yuv420p", "-c:v", "libx264",
+           "-vf", vf, "-frames:v", str(FRAMES * repeat), "-pix_fmt", "yuv420p", "-c:v", "libx264",
            "-tune", "zerolatency", "-crf", "24", "-level", "3.0", *args, "-f", "h264", "-"]
     return subprocess.run(cmd, check=True, capture_output=True).stdout
 
@@ -63,10 +73,13 @@ def split_aus(stream: bytes) -> list[bytes]:
 
 def main() -> int:
     out = bytearray(b"H264PRB1" + struct.pack("<I", len(CLIPS)))
-    for name, args in CLIPS:
-        aus = split_aus(encode(args))
-        if len(aus) != FRAMES:
-            raise ValueError(f"{name}: {len(aus)} AUs, esperava {FRAMES}")
+    for name, repeat, args in CLIPS:
+        aus = split_aus(encode(repeat, args))
+        if len(aus) != FRAMES * repeat:
+            raise ValueError(f"{name}: {len(aus)} AUs, esperava {FRAMES * repeat}")
+        if repeat > 1:
+            dups = [len(a) for i, a in enumerate(aus) if i % repeat]
+            print(f"  cópias: {sum(dups) / len(dups):.0f} bytes em média, máx. {max(dups)}")
         data = b"".join(aus)
         out += name.encode().ljust(24, b"\0")
         out += struct.pack(f"<II{len(aus)}I", len(aus), len(data), *(len(a) for a in aus))
