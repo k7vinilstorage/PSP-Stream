@@ -578,6 +578,8 @@ def main(argv=None) -> int:
             log.info("codec: H.264 (todo frame IDR, decoder de hardware do PSP)")
         else:
             log.info("codec: H.264 com frames P (codificado na hora de enviar; EBOOT v0.9+, senão só IDR)")
+            log.warning("--codec h264p é experimental: no primeiro teste no PSP-3000 o PSP desligou. "
+                        "Rode antes o psp/probe (v4) para achar a causa (README, \"Teste do decoder H.264\")")
     if args.dmabuf and args.source != "portal":
         log.warning("--dmabuf só vale para --source portal; ignorado")
         args.dmabuf = False

@@ -123,8 +123,10 @@ class H264PEncoder:
     frames já codificados: este encoder só recebe os que vão ser enviados.
     Um frame perdido quebra a corrente, e o PSP pede um IDR (PS_REQ_IDR)."""
 
-    def __init__(self, width: int, height: int, quality: int, qp_change_min_s: float = QP_CHANGE_MIN_S):
+    def __init__(self, width: int, height: int, quality: int, qp_change_min_s: float = QP_CHANGE_MIN_S,
+                 copies: int = COPIES):
         self.width, self.height = width, height
+        self.copies = copies
         self.quality = quality       # pedida (adaptativo)
         self.qp_change_min_s = qp_change_min_s
         self._qp = None              # em uso
@@ -203,7 +205,7 @@ class H264PEncoder:
             if is_idr(first):
                 self._last_idr = time.monotonic()
             parts = [AUD, first]
-            for _ in range(COPIES):
+            for _ in range(self.copies):
                 parts += [AUD, self._encode_one(i420)]
             return b"".join(parts)
 
@@ -225,6 +227,23 @@ def nal_types(au: bytes):
 
 def is_idr(au: bytes) -> bool:
     return 5 in nal_types(au)
+
+
+def set_sps_level(data: bytes, level_idc: int) -> bytes:
+    """Troca o level_idc dos SPS (3º byte depois do cabeçalho da NAL). Os bytes
+    antes dele (profile 66, flags 0xC0 no openh264) não são zero, então não há
+    byte de prevenção de emulação no caminho."""
+    out = bytearray(data)
+    i = 0
+    while True:
+        j = out.find(b"\x00\x00\x01", i)
+        if j < 0 or j + 7 > len(out):
+            return bytes(out)
+        if out[j + 3] & 0x1F == 7:
+            if 0 in out[j + 4:j + 6]:
+                raise ValueError("SPS com zero antes do level_idc")
+            out[j + 6] = level_idc
+        i = j + 3
 
 
 def image_to_i420(path: str, width: int, height: int, keep_aspect: bool = True, scale: str = "bilinear") -> bytes:

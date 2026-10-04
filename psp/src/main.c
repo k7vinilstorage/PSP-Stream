@@ -372,6 +372,10 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
             net_ap_info(&ap);
             stream_set_wifi(ap.strength, ap.power_save == 1 ? PS_WIFI_POWER_SAVE : 0);
             t_wifi = now_us();
+            /* como um player de vídeo: sem isso, o modo de espera automático
+             * (Ajustes de economia de energia) suspende o PSP no meio do stream
+             * se nenhum botão for apertado, e a tela também escurece */
+            scePowerTick(PSP_POWER_TICK_ALL);
         }
 
         ps_frame_t *f = stream_take(100 * 1000);

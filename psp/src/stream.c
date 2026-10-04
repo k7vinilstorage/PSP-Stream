@@ -249,20 +249,25 @@ static int is_aud(const uint8_t *p, int len)
     return len >= 5 && p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 1 && (p[4] & 0x1F) == 9;
 }
 
-/* Slot livre para receber (sempre há um: no máx. 2 prontos + 1 decodificando). */
+/* Slot livre para receber (sempre há um: no máx. 2 prontos + 1 decodificando).
+ * -1 só se algum slot vazou (bug): o chamador descarta o frame. */
 static int claim_slot(void)
 {
     lock();
     int idx = 0;
     while (idx < NUM_SLOTS && state[idx] != SLOT_FREE)
         idx++;
-    if (idx == NUM_SLOTS) { /* não deveria acontecer: tira o pronto mais velho */
+    if (idx == NUM_SLOTS && ready_n > 0) { /* não deveria acontecer: tira o pronto mais velho */
         idx = ready_q[0];
         ready_n--;
         memmove(ready_q, ready_q + 1, ready_n * sizeof(ready_q[0]));
         dropped++;
         if (pmode)
             need_idr(slots[idx].frame_no + 1);
+    } else if (idx == NUM_SLOTS) { /* nem pronto para tirar: um slot vazou (bug) */
+        dropped++;
+        unlock();
+        return -1;
     }
     state[idx] = SLOT_RECV;
     unlock();
@@ -323,6 +328,8 @@ static int net_thread_tcp(void)
 
     while (*g_running && !stopping) {
         int idx = claim_slot();
+        if (idx < 0)
+            return -3; /* bug: sem slot; a conexão recomeça */
         ps_frame_hdr_t hdr;
         if (net_recv_all(g_sock, &hdr, sizeof(hdr)) < 0)
             return -1;
@@ -822,6 +829,14 @@ static int net_thread_udp(void)
             a = &as[1];
             memset(a, 0, sizeof(*a));
             a->idx = claim_slot();
+            if (a->idx < 0) { /* bug: sem slot; descarta o frame */
+                if (h.frame_no > done)
+                    done = h.frame_no;
+                if (pmode)
+                    need_idr_locked(h.frame_no + 1);
+                lost++;
+                continue;
+            }
             a->frame_no = h.frame_no;
             a->count = h.count;
             a->hdr = h.hdr;

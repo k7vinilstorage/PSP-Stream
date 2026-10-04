@@ -788,9 +788,25 @@ saíram sem nenhum defeito na imagem. Os tempos não valem: com frames P o PSP
 fica ocioso esperando a rede, e o relógio emulado corre ~30x o real (400
 frames em ~1,5 s de verdade aparecem como dezenas de segundos no overlay).
 
-**No PSP (a medir):** `dec` no overlay (esperado ~12 ms, com `h264p`), FPS e
-latência no log do servidor contra o `--codec h264` na mesma cena, o contador
-`idr` (IDRs pedidos) e `repet` (pedidos repetidos).
+**Primeiro teste no PSP-3000 [PSP]: o PSP desligou.** Sem mais detalhes
+ainda. O caminho de decode é o da v2 (3 chamadas sem Stop, cada AU com o
+AUD, de um buffer alinhado), mas o stream é outro: o openh264 escreve
+`level_idc` 41 (o x264 da v2: 30), POC tipo 0 com 16 bits e `frame_num` de
+15 bits (x264: POC tipo 2, 4 bits). No modo intra isso nunca pesou, porque
+cada frame é IDR + Stop. A sonda v4 (`psp/probe`) separa cada diferença num
+passo e grava antes de cada um, então um desligamento aponta o passo; no
+emulador os 6 passos rodam sem erro, o que não diz nada sobre o hardware.
+
+Outras causas possíveis que a sonda não cobre:
+- **Modo de espera automático:** o app não chamava `scePowerTick`, então o
+  PSP podia suspender no meio do stream sem botão apertado (parece
+  desligado; ao ligar de novo, volta para onde estava). Agora chama a cada
+  2 s.
+- **Bateria fraca:** 3 decodes por frame gastam mais.
+
+**No PSP (a medir, depois da v4):** `dec` no overlay (esperado ~12 ms, com
+`h264p`), FPS e latência no log do servidor contra o `--codec h264` na mesma
+cena, o contador `idr` (IDRs pedidos) e `repet` (pedidos repetidos).
 
 ## 1. Tamanho de frame [PC]
 

@@ -182,6 +182,11 @@ Para o PSP recusar H.264, use `h264=0` no `server.txt`.
 
 ### H.264 com frames P (experimental, v0.9)
 
+> **No primeiro teste no PSP-3000, o PSP desligou com `--codec h264p`.** A
+> causa ainda não foi achada. Não use até o teste do decoder v4 (abaixo, em
+> "Teste do decoder H.264 de hardware") apontar o que foi. O `--codec h264`
+> (padrão) não usa esse caminho.
+
 ```sh
 python3 server/pspstream.py --source kms --codec h264p
 ```
@@ -191,8 +196,8 @@ que mudou desde o anterior: num jogo com a câmera andando, ~5-15% dos bytes
 de um IDR (medido no PC, ver [MEASUREMENTS.md](docs/MEASUREMENTS.md)); com a
 tela parada, ~100 bytes. Como a rede era o gargalo (~450 KB/s no 802.11b),
 isso deve trazer o FPS para perto dos 60 da captura e tirar ~10-30 ms de
-rede por frame. **Testado só no emulador e com o cliente falso; falta o
-PSP de verdade.**
+rede por frame. Testado no emulador e com o cliente falso; no PSP de
+verdade, desligou (acima).
 
 O preço:
 
@@ -345,7 +350,25 @@ cd psp/probe && make
 Leva alguns segundos. O resultado aparece na tela e fica em
 `PSP/GAME/PSPStreamH264/resultado_h264.txt` (gravado a cada passo: se o PSP
 travar, o arquivo mostra até onde foi). Os clipes vêm de
-`tools/h264_probe_clips.py` (ffmpeg com libx264).
+`tools/h264_probe_clips.py` (ffmpeg com libx264 e o openh264enc do servidor).
+
+**v4: por que o `--codec h264p` desligou o PSP.** A v2 tinha decodificado
+"frame + 2 cópias" sem problema, com clipes do x264. O stream usa o
+openh264, que difere em três pontos: nível 4.1 em vez de 3.0, POC tipo 0 e
+`frame_num` de 15 bits. A v4 roda 6 passos, do mais seguro para o mais
+arriscado:
+
+1. x264 + 2 cópias, nível 3.0 (o da v2, controle)
+2. x264 + 2 cópias, nível 4.1
+3. openh264, todo frame IDR + Stop (o `--codec h264`, controle)
+4. openh264 com frames P, 1 chamada por frame, nível 3.0
+5. openh264 + 2 cópias, nível 3.0
+6. openh264 + 2 cópias, nível 4.1 (o que o stream mandou)
+
+Antes de cada passo, o relatório é gravado com "iniciando". Se o PSP
+desligar, ligue e rode a sonda de novo: o passo que desligou é pulado
+(fica em `travou_h264.txt`) e os outros rodam. Mande o `resultado_h264.txt`
+e o `travou_h264.txt`.
 
 ## 5. Testar sem o PSP
 
