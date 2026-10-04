@@ -21,7 +21,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-FRAMES = 60
 OUT = Path(__file__).resolve().parent.parent / "psp" / "probe" / "clips.bin"
 
 # Conteúdo com movimento (testsrc2) + o número do frame em binário.
@@ -37,23 +36,26 @@ COMMON = "ref=1:bframes=0:threads=1:sliced-threads=0:rc-lookahead=0:sync-lookahe
 
 BASELINE = ["-profile:v", "baseline", "-x264-params", COMMON + ":cabac=0"]
 
-# (nome, repetições de cada frame, argumentos do x264)
-# dup3: cada frame vai 3 vezes. O x264 codifica as cópias como P sem nenhuma
-# mudança (dezenas de bytes). O PSP v1 segura 2 frames por chamada de decode:
-# entregando o frame e duas cópias, ele deveria sair na 3ª chamada.
+# (nome, frames, repetições de cada frame, argumentos do x264)
+# - baseline_cavlc: referência (I + P), o decoder segura 2 frames.
+# - *_intra: todo frame é IDR. No teste v2, sceMpegAvcDecodeStop soltou o
+#   frame na hora (1,1 ms), mas zerou as referências e os P seguintes saíram
+#   errados. Sem P, o Stop não teria o que quebrar.
+# - baseline_dup3 (v2, fora do clips.bin atual): cada frame 3 vezes; atraso 0,
+#   mas 3 chamadas de ~4 ms por frame.
+INTRA = ":keyint=1:min-keyint=1"
 CLIPS = [
-    ("baseline_cavlc", 1, BASELINE),
-    ("main_cabac", 1, ["-profile:v", "main", "-x264-params", COMMON + ":cabac=1"]),
-    ("baseline_dup3", 3, ["-profile:v", "baseline", "-x264-params",
-                          COMMON + ":cabac=0:keyint=600:min-keyint=600"]),
+    ("baseline_cavlc", 60, 1, BASELINE),
+    ("baseline_intra", 30, 1, ["-profile:v", "baseline", "-x264-params", COMMON + ":cabac=0" + INTRA]),
+    ("main_intra", 30, 1, ["-profile:v", "main", "-x264-params", COMMON + ":cabac=1" + INTRA]),
 ]
 
 
-def encode(repeat, args) -> bytes:
+def encode(frames, repeat, args) -> bytes:
     # o número é desenhado antes de repetir: as 3 cópias levam o mesmo número
     vf = MARKER if repeat == 1 else f"{MARKER},fps={30 * repeat}"
     cmd = ["ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i", "testsrc2=size=480x272:rate=30",
-           "-vf", vf, "-frames:v", str(FRAMES * repeat), "-pix_fmt", "yuv420p", "-c:v", "libx264",
+           "-vf", vf, "-frames:v", str(frames * repeat), "-pix_fmt", "yuv420p", "-c:v", "libx264",
            "-tune", "zerolatency", "-crf", "24", "-level", "3.0", *args, "-f", "h264", "-"]
     return subprocess.run(cmd, check=True, capture_output=True).stdout
 
@@ -73,10 +75,10 @@ def split_aus(stream: bytes) -> list[bytes]:
 
 def main() -> int:
     out = bytearray(b"H264PRB1" + struct.pack("<I", len(CLIPS)))
-    for name, repeat, args in CLIPS:
-        aus = split_aus(encode(repeat, args))
-        if len(aus) != FRAMES * repeat:
-            raise ValueError(f"{name}: {len(aus)} AUs, esperava {FRAMES * repeat}")
+    for name, frames, repeat, args in CLIPS:
+        aus = split_aus(encode(frames, repeat, args))
+        if len(aus) != frames * repeat:
+            raise ValueError(f"{name}: {len(aus)} AUs, esperava {frames * repeat}")
         if repeat > 1:
             dups = [len(a) for i, a in enumerate(aus) if i % repeat]
             print(f"  cópias: {sum(dups) / len(dups):.0f} bytes em média, máx. {max(dups)}")

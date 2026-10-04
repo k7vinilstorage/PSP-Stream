@@ -256,6 +256,40 @@ leitura de u32 desalinhada.
   mudança, ~300 bytes no clipe), o frame + 2 AUs só com o AUD, e o frame +
   `sceMpegAvcDecodeStop`.
 
+#### Teste v2: soltando os 2 frames presos [PSP]
+
+| jeito | chamadas ok | tempo por frame mostrado | atraso |
+|---|---|---|---|
+| 1 chamada por frame | 60/60 | 4,05 ms | 2 frames |
+| **frame + 2 cópias** | 180/180 | **12,1 ms** (cada cópia ~4,0 ms) | **0** |
+| frame + 2 AUs só com AUD | erro `80628002` | (26 ms por chamada com erro) | 2 |
+| frame + `sceMpegAvcDecodeStop` | 60/60; o Stop solta 1 imagem, 1,12 ms | 4,2 + 1,1 ms | 0 no 1º frame, **até 58 depois** |
+
+- As cópias funcionam, mas cada chamada custa ~4 ms mesmo sem nada para
+  decodificar: 12 ms por frame, contra 7,9 ms do JPEG.
+- O Stop solta a imagem na hora e é barato, mas zera as referências. O 1º
+  frame (IDR) saiu certo, e os P seguintes saíram errados. **Com todo frame
+  IDR, o Stop não teria o que quebrar.**
+
+#### H.264 só com IDR (intra) x JPEG, mesma qualidade [PC]
+
+Os mesmos 12 frames (2 de desktop, 10 de jogos) reduzidos para 480x272.
+JPEG do `jpegenc` (o do servidor) e x264 baseline com `keyint=1`, no menor
+tamanho com SSIM igual ou maior:
+
+| JPEG | KB (JPEG) | KB (H.264 intra, mesma SSIM) |
+|---|---|---|
+| q50 | 13,7 | **6,8 (49%)** |
+| q70 | 18,5 | **8,4 (46%)** |
+
+**Metade dos bytes, e cada frame continua independente** (como no MJPEG: uma
+perda estraga só aquele frame, e o servidor pode pular frames à vontade). Se
+"IDR + Stop" sair na hora no PSP, são ~5,3 ms de decode (menos que os 7,9 ms
+do JPEG) com metade dos bytes na rede. Pelo modelo de custo por frame
+(~21 ms fixos + tamanho / ~400 KB/s), na q50 seriam ~38 ms em vez de ~55 ms
+por frame. A v3 do teste confere isso no PSP: intra com e sem Stop, CABAC,
+um frame pulado e o Stop gravando direto na VRAM.
+
 ## 1. Tamanho de frame [PC]
 
 Mesmo pipeline do servidor (`videoscale` -> I420 -> `jpegenc`), saída 480x272

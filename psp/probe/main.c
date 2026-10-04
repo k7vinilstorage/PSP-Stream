@@ -329,9 +329,10 @@ static int run(const clip_t *cl, const pass_t *ps, uint8_t *stage, u32 *ram_fb)
                 }
             }
         } else if (ps->mode == MODE_STOP) {
+            static u32 *vram_bufs[4] = {VRAM, VRAM, VRAM, VRAM};
             SceInt32 n = 0;
             unsigned ts = now_us();
-            r = sceMpegAvcDecodeStop(&a.mpeg, 512, g_stop_bufs, &n);
+            r = sceMpegAvcDecodeStop(&a.mpeg, 512, ps->to_vram ? vram_bufs : g_stop_bufs, &n);
             unsigned ds = now_us() - ts;
             dt += ds;
             extra_sum += ds;
@@ -342,7 +343,7 @@ static int run(const clip_t *cl, const pass_t *ps, uint8_t *stage, u32 *ram_fb)
             }
             if (r == 0 && n > 0 && n <= 4) {
                 stop_imgs += n;
-                out = (const u32 *)((u32)g_stop_bufs[n - 1] | 0x40000000);
+                out = ps->to_vram ? VRAM_UNCACHED : (const u32 *)((u32)g_stop_bufs[n - 1] | 0x40000000);
             }
         }
         t_frame += dt;
@@ -443,7 +444,7 @@ int main(int argc, char *argv[])
     pspDebugScreenInitEx(VRAM, PSP_DISPLAY_PIXEL_FORMAT_8888, 1);
 
     g_argv0 = argc > 0 ? argv[0] : "";
-    say("PSPStream - teste do decoder H.264 (v2)");
+    say("PSPStream - teste do decoder H.264 (v3)");
     /* Como os jogos fazem nos firmwares novos (0x300 = codecs do ME, 0x303 =
      * mpeg.prx); o sceUtilityLoadAvModule antigo fica de reserva. 0x80020139 =
      * já carregado. */
@@ -466,17 +467,23 @@ int main(int argc, char *argv[])
     } else {
         sceKernelDelayThread(500 * 1000);
         pspDebugScreenClear();
-        /* Na v1 (PSP-3000, 6.61): decode de 3-4 ms, mas o decoder segura 2
-         * frames, com ou sem VUI pedindo 0. Aqui: dá para soltar o frame na hora? */
+        /* v1/v2 (PSP-3000, 6.61): decode de ~4 ms, mas o decoder segura 2
+         * frames. 2 cópias depois do frame: atraso 0, 12 ms. Stop: solta na hora
+         * (1,1 ms), mas zera as referências e os P seguintes saem errados.
+         * v3: só IDR (sem P) + Stop. No PC, o H.264 intra tem metade dos bytes do
+         * JPEG na mesma SSIM. */
         static const pass_t passes[] = {
-            {"1 chamada por frame", MODE_PLAIN, 1, 0, -1},
-            {"frame + 2 copias", MODE_GROUP, 3, 0, -1},
-            {"frame + 2 AUs vazios", MODE_EMPTY, 3, 0, -1},
-            {"frame + Stop", MODE_STOP, 1, 0, -1}, /* por último: o mais arriscado */
+            {"intra, 1 chamada", MODE_PLAIN, 1, 0, -1},
+            {"intra + Stop", MODE_STOP, 1, 0, -1},
+            {"intra CABAC + Stop", MODE_STOP, 1, 0, -1},
+            {"intra + Stop sem o frame 10", MODE_STOP, 1, 0, 10},
+            {"intra + Stop na VRAM", MODE_STOP, 1, 1, -1},
+            {"IPPP, 1 chamada (v1)", MODE_PLAIN, 1, 0, -1},
         };
-        static const int clip_of[] = {0, 2, 0, 0};
+        static const int clip_of[] = {1, 1, 2, 1, 1, 0};
         for (int k = 0; k < 4; k++)
             g_stop_bufs[k] = memalign(64, FB_SIZE);
+        _Static_assert(sizeof(passes) / sizeof(passes[0]) == sizeof(clip_of) / sizeof(clip_of[0]), "um clipe por passo");
         for (unsigned p = 0; p < sizeof(passes) / sizeof(passes[0]); p++) {
             if (clip_of[p] >= n || (passes[p].mode == MODE_STOP && !g_stop_bufs[3])) {
                 say("%s: clipe ou memoria indisponivel", passes[p].label);
