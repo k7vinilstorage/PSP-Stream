@@ -24,7 +24,7 @@ LIBS = -lturbojpeg -lpspjpeg -lpsppower
 EXTRA_TARGETS = EBOOT.PBP
 PSP_EBOOT_TITLE = PSPStream
 
-PSPSDK = $(shell psp-config --pspsdk-path)
+include pspdev.mk
 include $(PSPSDK)/lib/build.mak
 
 -include $(OBJS:.o=.d)

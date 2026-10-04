@@ -14,7 +14,7 @@ LIBS = -lpspmpeg -lpspmpegbase -lpsppower
 EXTRA_TARGETS = EBOOT.PBP
 PSP_EBOOT_TITLE = PSPStream teste H.264
 
-PSPSDK = $(shell psp-config --pspsdk-path)
+include ../pspdev.mk
 include $(PSPSDK)/lib/build.mak
 
 clips.o: clips.bin

@@ -102,6 +102,11 @@ echo 'export PSPDEV="$HOME/pspdev"; export PATH="$PATH:$PSPDEV/bin"' >> ~/.bashr
 source ~/.bashrc && psp-config --pspdev-path
 ```
 
+No zsh, ponha a mesma linha no `~/.zshrc`, porque o zsh não lê o `~/.bashrc`.
+Mesmo sem o `export`, os Makefiles acham o pspdev em `~/pspdev` ou
+`/usr/local/pspdev` (`psp/pspdev.mk`). Em outro lugar, use
+`make PSPDEV=/caminho/do/pspdev`.
+
 ### Compilar
 
 ```sh
