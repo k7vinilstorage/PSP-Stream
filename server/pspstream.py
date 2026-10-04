@@ -372,9 +372,10 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description="PSPStream: transmite a tela do PC para o PSP (MJPEG).")
     p.add_argument("--port", type=int, default=protocol.DEFAULT_PORT,
                    help="porta TCP e UDP (padrão %(default)s)")
-    p.add_argument("--codec", choices=["jpeg", "h264"], default="jpeg",
-                   help="jpeg (padrão) ou h264: todo frame IDR, decodificado pelo hardware do PSP; "
-                        "~40%% dos bytes do JPEG na mesma qualidade (precisa do openh264enc e do EBOOT v0.5)")
+    p.add_argument("--codec", choices=["auto", "jpeg", "h264"], default="auto",
+                   help="h264: todo frame IDR, decodificado pelo hardware do PSP (EBOOT v0.5+); no PSP-3000, "
+                        "23-30%% dos bytes do JPEG e 1,5-3x o FPS na mesma qualidade. auto (padrão) = h264 se "
+                        "o openh264enc estiver instalado, senão jpeg")
     p.add_argument("--udp-pace", type=float, default=0, metavar="KB/s",
                    help="UDP: limitar a taxa de envio dos pedaços (0 = sem limite, padrão)")
     p.add_argument("--no-hdr-cache", dest="hdr_cache", action="store_false",
@@ -436,12 +437,19 @@ def main(argv=None) -> int:
     sys.setswitchinterval(0.001)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
-    if args.codec == "h264":
+    want = args.codec
+    if want in ("auto", "h264"):
         try:
             import h264
             ok = h264.available()
         except (ImportError, ValueError):
             ok = False
+        if want == "auto":
+            args.codec = "h264" if ok and tuple(args.size) == (480, 272) else "jpeg"
+            if args.codec == "jpeg":
+                log.info("codec: JPEG (%s)", "sem o openh264enc: sudo dnf install gstreamer1-plugin-openh264"
+                         if not ok else "--size diferente de 480x272")
+    if args.codec == "h264":
         if not ok:
             log.error("--codec h264 precisa do openh264enc do GStreamer. No Fedora: "
                       "sudo dnf install gstreamer1-plugin-openh264 (repositório fedora-cisco-openh264)")

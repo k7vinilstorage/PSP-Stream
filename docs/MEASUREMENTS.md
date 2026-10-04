@@ -356,6 +356,31 @@ do stream: 6,3 ms (select) / 5,8 ms (consulta).
 - A "vazão na rajada" de q30 (62 KB/s) não vale: com 2 pedaços por frame, a
   conta tem um pedaço só.
 
+#### v0.5: tela de verdade e pedido antecipado [PSP]
+
+**Portal (tela do Fedora), `--codec h264`, qualidade adaptativa:** em q90 (o
+máximo), 2,2-3,1 KB por frame, 16-27 fps (média ~21), latência média 22-41
+ms (p95 30-118 ms), fonte a ~38 fps. Com JPEG, o mesmo adaptativo ficava
+perto de q55 com ~46 ms. Agora a qualidade máxima sai com latência menor
+que a média de antes.
+
+**`early_kb=8` (estático, H.264):** q30 32,3 fps, q50 31,8, q70 25,8, q90
+31,8. Sem ele: 27,1 / 28,7 / 28,6 / 22,1. Ganho de 10-44% (fora a q70,
+dentro da variação de ~20% entre rodadas) e latência 0-8 ms maior. Se o
+custo fixo por frame fosse só espera, o pedido antecipado dobraria o FPS.
+Não dobrou.
+
+**O custo fixo, por eliminação:** o servidor reage em 0,1-0,2 ms. O ping
+com a rede parada leva 6 ms. Mas pedido -> 1º pedaço leva 15-35 ms durante
+o stream (e 30-54 ms com o portal, que inclui ~12 ms de espera por frame
+novo). O que muda entre os dois: o ping vai em rajada (16 seguidos), e o
+stream é pedido/resposta com pausas de 20-30 ms. É o padrão em que o power
+save de uma placa Wi-Fi atrapalha: ela cochila nas pausas e o roteador
+segura o pedido seguinte até ela acordar. O servidor detecta o power save
+do PC ligado. Streams contínuos (Moonlight, por exemplo) não têm pausas e
+não sentem isso. **Teste que decide:** `sudo iw dev wlp0s20f3 set
+power_save off` (volta no reboot) e o mesmo bench.
+
 ## 1. Tamanho de frame [PC]
 
 Mesmo pipeline do servidor (`videoscale` -> I420 -> `jpegenc`), saída 480x272

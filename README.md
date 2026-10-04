@@ -161,11 +161,12 @@ Na primeira vez, o GNOME/KDE abre um diálogo para escolher o monitor ou a
 janela. A escolha fica salva em `~/.config/pspstream/portal_token`; use
 `--forget` para escolher de novo. Depois, abra o PSPStream no PSP.
 
-### H.264 (experimental, v0.5)
+### H.264 (padrão desde a v0.5)
 
 ```sh
 sudo dnf install gstreamer1-plugin-openh264   # repositório fedora-cisco-openh264, já ativo no Fedora Workstation
-python3 server/pspstream.py --codec h264
+python3 server/pspstream.py                   # --codec auto: H.264 se o openh264enc existir, senão JPEG
+python3 server/pspstream.py --codec jpeg      # força o MJPEG
 ```
 
 Todo frame vai como IDR (quadro completo), decodificado pelo hardware do PSP
@@ -194,7 +195,7 @@ Para o PSP recusar H.264, use `h264=0` no `server.txt`.
 | `--input-timeout 0.5` | solta tudo se o PSP sumir por 0,5 s com tecla segurada (evita tecla presa) |
 | `--udp-pace KB/s` | UDP: limitar a taxa de envio dos pedaços (padrão: sem limite; teste 450 se a perda crescer com frames grandes) |
 | `--no-hdr-cache` | UDP: mandar o cabeçalho JPEG (~620 bytes) em todo frame. O padrão manda só quando a qualidade muda; a opção existe para comparar |
-| `--codec h264` | H.264 só com quadros completos, decodificado pelo hardware do PSP (ver acima) |
+| `--codec auto` | H.264 só com quadros completos, decodificado pelo hardware do PSP, se o openh264enc existir (padrão); `jpeg` força o MJPEG |
 | `--dscp ef` | marca os pacotes para a fila de voz do Wi-Fi (WMM) na placa do PC e no roteador; `0` desliga |
 | `--bench 30,50,70,90` | varre qualidades com o PSP conectado e salva uma tabela |
 
