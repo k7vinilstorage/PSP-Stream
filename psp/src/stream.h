@@ -27,9 +27,13 @@ struct sockaddr_in;
 /* Inicia a thread de rede, que pede e recebe frames sem parar.
  * udp = 1: sock é UDP e dest é o servidor; udp = 0: sock é TCP conectado.
  * early_bytes (só UDP): pede o próximo frame quando faltarem tantos bytes do
- * atual (0 = só depois de receber inteiro). */
-int stream_start(int sock, int udp, const struct sockaddr_in *dest, int prefetch, int early_bytes,
+ * atual (0 = só depois de receber inteiro). rxwait: RXWAIT_* (só UDP). */
+int stream_start(int sock, int udp, const struct sockaddr_in *dest, int prefetch, int early_bytes, int rxwait,
                  volatile int *running);
+
+/* UDP: ida e volta pura medida no início (us, 0 = não medido) e se a thread
+ * de rede espera consultando o socket (1) ou com select() (0). */
+void stream_ping(unsigned *select_us, unsigned *poll_us, int *polling);
 
 /* Pega o frame pronto mais novo, esperando até timeout_us. NULL se não há. */
 ps_frame_t *stream_take(unsigned timeout_us);

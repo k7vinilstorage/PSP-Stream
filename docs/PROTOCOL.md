@@ -1,4 +1,4 @@
-# Protocolo PSPStream v2
+# Protocolo PSPStream v3
 
 TCP **ou** UDP, porta padrão **5123** (o servidor atende os dois ao mesmo
 tempo; o PSP escolhe com `transport=` no `server.txt`). Todos os inteiros são **little-endian** (PSP e PC
@@ -29,15 +29,15 @@ PSP                                   PC
 - Pedir antes de decodificar ("prefetch") sobrepõe rede e decode. Nesse modo,
   quem limita o FPS é o mais lento dos dois, não a soma.
 
-## PSP -> PC: pedido (36 bytes)
+## PSP -> PC: pedido (44 bytes)
 
 | offset | tipo | campo | descrição |
 |---|---|---|---|
-| 0 | char[4] | magic | `"PSC2"` (v2; um EBOOT antigo, `"PSC1"`, é recusado com aviso no log) |
+| 0 | char[4] | magic | `"PSC3"` (v3; um EBOOT antigo, `"PSC1"`/`"PSC2"`, é recusado com aviso no log) |
 | 4 | u32 | buttons | máscara `PSP_CTRL_*` (Marco 4) |
 | 8 | u8 | lx | analógico X, 0..255 (128 = centro) |
 | 9 | u8 | ly | analógico Y |
-| 10 | u16 | flags | `0x1` FRAME = quero o próximo frame; `0x2` HELLO = primeira mensagem; `0x4` NACK e `0x8` BYE (só UDP, abaixo) |
+| 10 | u16 | flags | `0x1` FRAME = quero o próximo frame; `0x2` HELLO = primeira mensagem; `0x4` NACK, `0x8` BYE e `0x10` PING (só UDP, abaixo) |
 | 12 | u32 | ack_frame | último frame **exibido** (0 = nenhum ainda) |
 | 16 | u32 | echo_ts | `send_ts` desse frame, devolvido como veio |
 | 20 | u16 | net_t | 0,1 ms: pedido enviado -> frame recebido por inteiro |
@@ -47,8 +47,11 @@ PSP                                   PC
 | 28 | u16 | first_t | 0,1 ms: pedido -> primeiro pedaço/byte do frame (ida e volta + reação do servidor) |
 | 30 | u16 | burst_t | 0,1 ms: primeiro -> último pedaço (dá a vazão real do enlace) |
 | 32 | u8 | signal | sinal do Wi-Fi do PSP, % |
-| 33 | u8 | wflags | `0x1` = "Economia de energia WLAN" ligada no XMB |
+| 33 | u8 | wflags | `0x1` = "Economia de energia WLAN" ligada no XMB; `0x2` = esperando pacotes por consulta, não `select()` |
 | 34 | u16 | lost | UDP: frames abandonados incompletos desde o início do stream |
+| 36 | u32 | hdr_have | UDP: id do cabeçalho JPEG guardado no PSP (0 = nenhum) |
+| 40 | u16 | ping_select | 0,1 ms: ida e volta pura medida no início, esperando com `select()` |
+| 42 | u16 | ping_poll | 0,1 ms: o mesmo, consultando o socket a cada 0,5 ms (0 = não medido) |
 
 `first_t` e `burst_t` separam o tempo de rede em ida e volta (fixo por frame)
 e transferência (proporcional ao tamanho). Cada parte tem um remédio
@@ -89,25 +92,42 @@ duas telas (ver README).
 
 O modelo é o mesmo (pull, um frame em trânsito). Muda o enquadramento:
 
-**PC -> PSP:** cada frame vai em pedaços de até 1400 bytes de JPEG, um por
-datagrama (20 + 1400 + 28 de IP/UDP = 1448 bytes, cabe nos 1500 do Wi-Fi):
+**PC -> PSP:** cada frame vai em pedaços de até 1400 bytes, um por
+datagrama (24 + 1400 + 28 de IP/UDP = 1452 bytes, cabe nos 1500 do Wi-Fi):
 
 | offset | tipo | campo | descrição |
 |---|---|---|---|
-| 0 | char[4] | magic | `"PSU1"` |
+| 0 | char[4] | magic | `"PSU2"` |
 | 4 | u32 | frame_no | |
-| 8 | u32 | size | tamanho total do JPEG |
+| 8 | u32 | size | tamanho total do payload |
 | 12 | u32 | send_ts | como no TCP |
-| 16 | u16 | chunk | índice deste pedaço (bytes `chunk*1400 ...`) |
+| 16 | u16 | chunk | índice deste pedaço (bytes `chunk*1400 ...` do payload) |
 | 18 | u16 | count | total de pedaços (`ceil(size/1400)`, máx. 256) |
+| 20 | u32 | hdr | bits 0-30: id do cabeçalho deste JPEG (CRC32); bit 31: o payload veio **sem** ele |
 
-**PSP -> PC:** o mesmo pedido de 36 bytes, um por datagrama. Com a flag
+**Cabeçalho JPEG uma vez só.** O "cabeçalho" vai do SOI até o fim do
+segmento SOS (tabelas de quantização e Huffman, ~620 bytes no `jpegenc`). Ele
+é igual em todo frame da mesma qualidade e tamanho. O PSP guarda os dois
+últimos que recebeu inteiros e informa o mais novo em `hdr_have`. Se o
+cabeçalho do frame tem esse id, o servidor manda só o resto (bit 31) e o PSP
+copia o cabeçalho de volta no início do buffer. Quando a qualidade muda, o
+primeiro frame vai inteiro. Como o id é um CRC do conteúdo, um cabeçalho
+guardado vale mesmo depois de reiniciar o servidor ou o PSP.
+
+**Ping.** Antes do HELLO, o PSP manda 16 pedidos com a flag `PING` (0x10) e
+`echo_ts` = um token. O servidor responde na hora, sem passar pela sessão,
+com 8 bytes: `"PSO1"` + o token. Metade dos pings espera a resposta com
+`select()` e metade consultando o socket a cada 0,5 ms. As medianas vão em
+`ping_select`/`ping_poll` de todo pedido. Com `rxwait=auto`, o PSP passa a
+esperar por consulta se isso for mais de 1 ms mais rápido.
+
+**PSP -> PC:** o mesmo pedido de 44 bytes, um por datagrama. Com a flag
 `NACK` (0x4), vem logo depois:
 
 | offset | tipo | campo | descrição |
 |---|---|---|---|
-| 36 | u32 | frame_no | frame incompleto |
-| 40 | u32[8] | missing | bit `i` = pedaço `i` faltando |
+| 44 | u32 | frame_no | frame incompleto |
+| 48 | u32[8] | missing | bit `i` = pedaço `i` faltando |
 
 O servidor reenvia só esses pedaços. Ele guarda os últimos 4 frames enviados.
 `BYE` (0x8) avisa que o app do PSP está saindo: o servidor solta as teclas e

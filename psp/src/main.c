@@ -269,8 +269,13 @@ static void draw_overlay(const ui_t *ui, const stats_t *s)
         display_text(0, 0, 0xFF00FF00, "%4.1f fps %5.1f KB %4.0f KB/s", s->fps, s->kb, s->kbps);
         display_text(0, 1, 0xFF00FF00, "dec %4.1f ms (%s) rede %4.1f ms %s drop %u", s->dec_ms, decoder_name(),
                      s->net_ms, ui->udp ? "udp" : "tcp", stream_dropped());
-        if (ui->udp)
-            display_text(0, 2, 0xFF00FF00, "perdidos %u  nack %u", stream_lost(), stream_nacks());
+        if (ui->udp) {
+            unsigned sel, poll;
+            int polling;
+            stream_ping(&sel, &poll, &polling);
+            display_text(0, 2, 0xFF00FF00, "perdidos %u  nack %u  ping %.1f/%.1f ms (%s)", stream_lost(),
+                         stream_nacks(), sel / 1000.0f, poll / 1000.0f, polling ? "poll" : "select");
+        }
     }
     if (ui->toast_until && (int)(ui->toast_until - now_us()) > 0)
         display_text(0, 33, 0xFF00FFFF, "%s", ui->toast);
@@ -313,7 +318,7 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
 {
     input_udp = ui->udp;
     ui->switch_transport = 0;
-    if (stream_start(sock, ui->udp, dest, ui->prefetch, cfg->early_kb * 1024, &g_running) < 0) {
+    if (stream_start(sock, ui->udp, dest, ui->prefetch, cfg->early_kb * 1024, cfg->rxwait, &g_running) < 0) {
         status("Erro ao iniciar a thread de rede");
         return -1;
     }
@@ -426,7 +431,7 @@ int main(int argc, char *argv[])
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
     display_init();
-    status("PSPStream v0.3.1");
+    status("PSPStream v0.4");
 
     char dir[192], err[128];
     app_dir(argc > 0 ? argv[0] : NULL, dir, sizeof(dir));

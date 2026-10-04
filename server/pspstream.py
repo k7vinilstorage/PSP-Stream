@@ -58,6 +58,7 @@ class Session:
         self.frame_no = 0
         self.hello_seen = False
         self.wifi = None  # (sinal %, flags) informados pelo PSP
+        self.ping = None  # (select, polling, usando polling) medidos pelo PSP no início
 
     def run(self) -> None:
         log.info("PSP conectado via %s: %s:%d", self.transport.name.upper(), *self.transport.addr)
@@ -73,8 +74,10 @@ class Session:
             self.close()
             if self.injector:
                 self.injector.release_all()
-            log.info("PSP desconectado (%d frames, %.1f MB enviados)",
-                     self.stats.total_frames, self.stats.total_bytes / 1e6)
+            saved = getattr(self.transport, "hdr_saved", 0)
+            log.info("PSP desconectado (%d frames, %.1f MB enviados%s)",
+                     self.stats.total_frames, self.stats.total_bytes / 1e6,
+                     f", {saved / 1024:.0f} KB de cabeçalho JPEG economizados" if saved else "")
 
     def close(self) -> None:
         with self.cond:
@@ -99,6 +102,11 @@ class Session:
             self.injector.update(req.buttons, req.lx, req.ly)
         if req.signal:
             self._wifi(req.signal, req.wflags)
+        ping = (req.ping_select, req.ping_poll, req.wflags & protocol.WIFI_RX_POLL)
+        if ping[:2] != (0, 0) and ping != self.ping:
+            self.ping = ping
+            log.info("ida e volta pura PSP <-> PC (pacote pequeno, rede parada): %s",
+                     format_ping(*ping))
         if req.ack_frame:
             self.stats.on_ack(req, now_ms())
         if req.flags & REQ_FRAME:
@@ -163,8 +171,8 @@ class Session:
             send_ms = now_ms()
             age_ms = (time.monotonic() - ready_t) * 1000 if not self.source.repeat else 0.0
             wait_ms = (time.monotonic() - arrived) * 1000
-            self.transport.send_frame(self.frame_no, jpeg, send_ms)
-            self.stats.on_send(self.frame_no, send_ms, age_ms, len(jpeg), wait_ms, self.source.capture_ms, resend)
+            sent = self.transport.send_frame(self.frame_no, jpeg, send_ms)
+            self.stats.on_send(self.frame_no, send_ms, age_ms, sent, wait_ms, self.source.capture_ms, resend)
             self.stats.maybe_report(self.source.quality)
 
     def _bench(self) -> None:
@@ -203,10 +211,37 @@ class Session:
         table.append("")
         table.append(f"Wi-Fi do PSP: sinal {wifi[0]}%, economia de energia WLAN "
                      f"{'LIGADA' if wifi[1] & protocol.WIFI_POWER_SAVE else 'desligada'}")
+        if self.ping:
+            table.append(f"Ida e volta pura (ping no início do stream): {format_ping(*self.ping)}")
+        if isinstance(self.transport, UdpTransport):
+            table.append(f"Cache do cabeçalho JPEG: {'ligado' if self.transport.hdr_cache else 'desligado'}; "
+                         f"DSCP: {self.args.dscp}")
         out = Path(f"bench_{time.strftime('%Y%m%d_%H%M%S')}.md")
         out.write_text(f"Fonte: {self.args.source} {self.args.size[0]}x{self.args.size[1]}, "
                        f"transporte: {self.transport.name.upper()}\n\n" + "\n".join(table) + "\n")
         log.info("benchmark concluído, tabela salva em %s:\n%s", out, "\n".join(table))
+
+
+def format_ping(select_t: int, poll_t: int, polling: int) -> str:
+    """Valores do PSP em 0,1 ms."""
+    parts = []
+    if select_t:
+        parts.append(f"{select_t / 10:.1f} ms esperando com select()")
+    if poll_t:
+        parts.append(f"{poll_t / 10:.1f} ms consultando o socket")
+    return ", ".join(parts) + f"; PSP usando {'consulta' if polling else 'select()'}"
+
+
+DSCP = {"ef": 0xB8, "cs5": 0xA0, "af41": 0x88, "0": 0}
+
+
+def set_dscp(sock: socket.socket, name: str) -> None:
+    """Marca os pacotes do servidor (WMM): com EF, a placa Wi-Fi do PC e o
+    roteador usam a fila de voz, que disputa o ar com prioridade."""
+    try:
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, DSCP[name])
+    except OSError as exc:
+        log.debug("DSCP não aplicado: %s", exc)
 
 
 class Server:
@@ -247,6 +282,12 @@ class Server:
                 req, nack = parse_datagram(data)
             except (ValueError, Exception):  # lixo na porta: ignora
                 continue
+            if req.flags & protocol.REQ_PING:  # responde já, sem passar pela sessão
+                try:
+                    sock.sendto(protocol.pack_pong(req.echo_ts), addr)
+                except OSError:
+                    pass
+                continue
             with self.lock:
                 cur = self.current[0] if self.current else None
             same = cur is not None and cur.alive and isinstance(cur.transport, UdpTransport) \
@@ -256,7 +297,7 @@ class Server:
                 # datagramas atrasados de um cliente antigo são ignorados.
                 if req.flags & protocol.REQ_BYE or not (req.flags & REQ_HELLO or cur is None or not cur.alive):
                     continue
-                cur = self.replace(UdpTransport(sock, addr, self.args.udp_pace))
+                cur = self.replace(UdpTransport(sock, addr, self.args.udp_pace, self.args.hdr_cache))
             try:
                 cur.transport.feed(req, nack)
             except Exception:  # um datagrama ruim não pode derrubar a thread do UDP
@@ -318,6 +359,12 @@ def parse_args(argv=None):
                    help="porta TCP e UDP (padrão %(default)s)")
     p.add_argument("--udp-pace", type=float, default=0, metavar="KB/s",
                    help="UDP: limitar a taxa de envio dos pedaços (0 = sem limite, padrão)")
+    p.add_argument("--no-hdr-cache", dest="hdr_cache", action="store_false",
+                   help="UDP: mandar o cabeçalho JPEG em todo frame (para comparar; o padrão manda só "
+                        "quando muda)")
+    p.add_argument("--dscp", choices=list(DSCP), default="ef",
+                   help="marcação dos pacotes do servidor para a fila de prioridade do Wi-Fi (WMM): "
+                        "ef = voz (padrão), cs5/af41 = vídeo, 0 = nenhuma")
     p.add_argument("--bind", default="0.0.0.0", help="endereço local (padrão %(default)s)")
     p.add_argument("--source", choices=["portal", "test", "x11", "gst", "static"], default="portal",
                    help="portal = tela no Wayland (padrão); test = padrão animado com relógio; "
@@ -393,6 +440,7 @@ def main(argv=None) -> int:
     srv = socket.create_server((args.bind, args.port))
     udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1 << 20)
+    set_dscp(udp, args.dscp)
     udp.bind((args.bind, args.port))
     server = Server(source, args, injector)
     threading.Thread(target=server.serve_udp, args=(udp,), name="udp", daemon=True).start()
@@ -410,6 +458,7 @@ def main(argv=None) -> int:
             except socket.timeout:
                 continue
             conn.settimeout(None)
+            set_dscp(conn, args.dscp)
             server.replace(TcpTransport(conn, addr))
     except KeyboardInterrupt:
         log.info("encerrando")

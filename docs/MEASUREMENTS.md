@@ -117,14 +117,18 @@ fixa. Isso decide o que vale a pena:
 
 | ideia | ataca | medido aqui [PC] | ganho estimado na q50 |
 |---|---|---|---|
-| enviar o cabeçalho JPEG (623 bytes) só uma vez | parte proporcional | 3-8% do frame | ~2-4% de FPS |
+| enviar o cabeçalho JPEG (623 bytes) só uma vez (**feito, v0.4**) | parte proporcional | 6,0% do frame em q30, 4,5% em q50, 3,3% em q70 (jogos + desktop) | ~3-5% de FPS |
 | tabelas Huffman otimizadas | parte proporcional | 4-6% do frame | ~2-3% de FPS |
 | 400x228 + ampliação no PSP (sceGu) | parte proporcional | 67% dos bytes | ~+20% de FPS, imagem mais macia |
 | 360x204 + ampliação | parte proporcional | 59% dos bytes | ~+25% de FPS |
 | redução multithread no PC (feito) | captura no PC | 4,0 -> 2,5 ms/frame em 2240x1400 | -1,5 ms de latência |
 | NACK rápido + espera de uma ida e volta (feito) | perdas | piso de 6 ms **piorou no PSP**; corrigido (abaixo) | p95 menor com perda |
 | pedido antecipado | parte fixa | **piorou no PSP** | desligado |
-| **descobrir os ~25 ms fixos** | parte fixa | **medir com `first_t`** | até ~2x de FPS se for algo corrigível |
+| **descobrir os ~25 ms fixos** | parte fixa | `first_t` (v2) + ping no início (v0.4) | até ~2x de FPS se for algo corrigível |
+| reação do servidor (pedido -> 1º pedaço enviado) | parte fixa | **0,6 ms** (mediana; p95 1,2-2,4 ms) em localhost, fonte estática e ao vivo | nada a ganhar: não é o servidor |
+| esperar pacotes consultando o socket em vez de `select()` (`rxwait=auto`, v0.4) | parte fixa | o PSP mede os dois ao conectar | depende de quanto o `select()` do PSP demora para acordar |
+| DSCP EF / fila de voz do WMM (`--dscp`, v0.4) | parte fixa (fila na placa do PC e no roteador) | não medido | provavelmente pequeno numa rede doméstica vazia |
+| H.264 no Media Engine do PSP em vez de MJPEG | parte proporcional | não medido (ver abaixo) | 2-3x menos bytes na mesma qualidade |
 
 Por que a parte fixa vem primeiro: num Wi-Fi normal, a ida e volta leva 2-5
 ms, não 25. Suspeitos, cada um com um remédio:
@@ -133,6 +137,8 @@ ms, não 25. Suspeitos, cada um com um remédio:
    o PSP acordar). O servidor agora loga o estado que o PSP reporta.
 2. **PC no Wi-Fi**, sobretudo com o power save da placa ligado (padrão do
    NetworkManager em muitos notebooks). O servidor agora avisa na partida.
+   O usuário descartou esse suspeito: a mesma rede segura streaming pesado
+   (Moonlight) entre PCs sem problema.
 3. **Pilha de rede do PSP** entregando com atraso: aparece como `first_t`
    alto mesmo com os dois acima descartados.
 4. Enlace a 5,5/2 Mbps (sinal ruim, interferência): aparece como "vazão na

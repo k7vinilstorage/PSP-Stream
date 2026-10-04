@@ -13,6 +13,7 @@
  *   input=1          (1 = controles do PSP viram teclado/mouse no PC)
  *   transport=udp    (udp | tcp)
  *   early_kb=0       (UDP, experimental: pede o próximo frame quando faltar isso do atual)
+ *   rxwait=auto      (UDP: auto | select | poll; auto mede os dois no início e fica com o mais rápido)
  */
 #include "config.h"
 #include "decode.h"
@@ -60,6 +61,8 @@ static void set_key(ps_config_t *cfg, const char *key, const char *value)
         cfg->udp = strcmp(value, "tcp") != 0;
     else if (!strcmp(key, "early_kb"))
         cfg->early_kb = v;
+    else if (!strcmp(key, "rxwait"))
+        cfg->rxwait = !strcmp(value, "select") ? RXWAIT_SELECT : !strcmp(value, "poll") ? RXWAIT_POLL : RXWAIT_AUTO;
     else if (!strcmp(key, "exit_after"))
         cfg->exit_after = v;
 }

@@ -24,10 +24,11 @@ class ProtocolTest(unittest.TestCase):
     def test_request_roundtrip(self):
         req = protocol.Request(buttons=0x4010, lx=12, ly=250, flags=protocol.REQ_FRAME, ack_frame=7,
                                echo_ts=0xFFFFFFF0, net_t=123, local_t=45, since_t=6, decode_t=108,
-                               first_t=210, burst_t=260, signal=87, wflags=protocol.WIFI_POWER_SAVE, lost=3)
+                               first_t=210, burst_t=260, signal=87, wflags=protocol.WIFI_POWER_SAVE, lost=3,
+                               hdr_have=0x7ABCDEF1, ping_select=52, ping_poll=31)
         data = req.pack()
-        self.assertEqual(len(data), 36)
-        self.assertEqual(data[:4], b"PSC2")
+        self.assertEqual(len(data), 44)
+        self.assertEqual(data[:4], b"PSC3")
         self.assertEqual(protocol.Request.unpack(data), req)
 
     def test_frame_header(self):
@@ -37,21 +38,23 @@ class ProtocolTest(unittest.TestCase):
 
     def test_bad_magic(self):
         with self.assertRaises(ValueError):
-            protocol.Request.unpack(b"XXXX" + bytes(32))
+            protocol.Request.unpack(b"XXXX" + bytes(40))
 
     def test_old_eboot_rejected_clearly(self):
-        with self.assertRaisesRegex(ValueError, "versão antiga"):
-            protocol.Request.unpack(b"PSC1" + bytes(32))
+        for magic in (b"PSC1", b"PSC2"):
+            with self.assertRaisesRegex(ValueError, "versão antiga"):
+                protocol.Request.unpack(magic + bytes(40))
 
     def test_matches_c_header(self):
         header = (ROOT / "psp/src/protocol.h").read_text()
         self.assertIn(f"#define PS_DEFAULT_PORT {protocol.DEFAULT_PORT}", header)
         self.assertIn("#define PS_MAX_JPEG (256 * 1024)", header)
         self.assertEqual(protocol.MAX_JPEG, 256 * 1024)
-        self.assertIn('0x32435350u /* "PSC2"', header)
-        self.assertEqual(int.from_bytes(protocol.MAGIC_REQ, "little"), 0x32435350)
-        self.assertIn('_Static_assert(sizeof(ps_req_t) == 36', header)
+        self.assertIn('0x33435350u /* "PSC3"', header)
+        self.assertEqual(int.from_bytes(protocol.MAGIC_REQ, "little"), 0x33435350)
+        self.assertIn(f'_Static_assert(sizeof(ps_req_t) == {protocol.REQ_STRUCT.size}', header)
         self.assertIn(f"#define PS_WIFI_POWER_SAVE 0x{protocol.WIFI_POWER_SAVE:02x}", header)
+        self.assertIn(f"#define PS_WIFI_RX_POLL 0x{protocol.WIFI_RX_POLL:02x}", header)
         self.assertEqual(int.from_bytes(protocol.MAGIC_FRAME, "little"), 0x31465350)
 
 
@@ -62,11 +65,11 @@ class UdpChunkTest(unittest.TestCase):
         self.assertEqual(count, 5)
         rebuilt = bytearray(len(jpeg))
         for i in reversed(range(count)):  # fora de ordem de propósito
-            frame_no, size, ts, idx, n, payload = protocol.unpack_chunk(protocol.pack_chunk(9, jpeg, 77, i))
-            self.assertEqual((frame_no, size, ts, idx, n), (9, len(jpeg), 77, i, count))
+            frame_no, size, ts, idx, n, hdr, payload = protocol.unpack_chunk(protocol.pack_chunk(9, jpeg, 77, i, 5))
+            self.assertEqual((frame_no, size, ts, idx, n, hdr), (9, len(jpeg), 77, i, count, 5))
             rebuilt[idx * protocol.CHUNK_PAYLOAD: idx * protocol.CHUNK_PAYLOAD + len(payload)] = payload
         self.assertEqual(bytes(rebuilt), jpeg)
-        self.assertEqual(len(protocol.pack_chunk(9, jpeg, 77, 4)), 20 + 288)
+        self.assertEqual(len(protocol.pack_chunk(9, jpeg, 77, 4)), protocol.CHUNK_HDR_STRUCT.size + 288)
 
     def test_datagram_fits_802_11(self):
         jpeg = bytes(protocol.MAX_JPEG)
@@ -77,10 +80,26 @@ class UdpChunkTest(unittest.TestCase):
         self.assertEqual(protocol.unpack_nack(protocol.pack_nack(3, [0, 5, 31, 32, 200, 255])),
                          (3, [0, 5, 31, 32, 200, 255]))
 
+    def test_jpeg_header_split(self):
+        # O que o servidor tira e o PSP põe de volta: SOI até o fim do SOS.
+        card = (ROOT / "assets/testcard.jpg").read_bytes()
+        n = protocol.jpeg_header_len(card)
+        self.assertGreater(n, 100)
+        self.assertEqual(card[n - 14:n - 12], b"\xff\xda")  # SOS de 3 componentes: 12 bytes + marcador
+        self.assertEqual(protocol.jpeg_header_len(b"not a jpeg"), 0)
+        hid = protocol.jpeg_header_id(card[:n])
+        self.assertTrue(0 < hid <= 0x7FFFFFFF)
+
     def test_matches_c_header(self):
         header = (ROOT / "psp/src/protocol.h").read_text()
-        self.assertIn('0x31555350u /* "PSU1" */', header)
-        self.assertEqual(int.from_bytes(protocol.MAGIC_CHUNK, "little"), 0x31555350)
+        self.assertIn('0x32555350u /* "PSU2" */', header)
+        self.assertEqual(int.from_bytes(protocol.MAGIC_CHUNK, "little"), 0x32555350)
+        self.assertIn('0x314F5350u /* "PSO1" */', header)
+        self.assertEqual(int.from_bytes(protocol.MAGIC_PONG, "little"), 0x314F5350)
+        self.assertIn(f"_Static_assert(sizeof(ps_chunk_hdr_t) == {protocol.CHUNK_HDR_STRUCT.size}", header)
+        self.assertIn(f"#define PS_HDR_STRIPPED 0x{protocol.HDR_STRIPPED:08x}u", header)
+        self.assertIn(f"#define PS_MAX_JPEG_HEADER {protocol.MAX_JPEG_HEADER}", header)
+        self.assertIn(f"#define PS_REQ_PING 0x{protocol.REQ_PING:04x}", header)
         self.assertIn(f"#define PS_CHUNK_PAYLOAD {protocol.CHUNK_PAYLOAD}", header)
         self.assertIn(f"#define PS_MAX_CHUNKS {protocol.MAX_CHUNKS}", header)
         self.assertIn(f"#define PS_REQ_BYE 0x{protocol.REQ_BYE:04x}", header)
@@ -89,15 +108,16 @@ class UdpChunkTest(unittest.TestCase):
 class UdpEndToEndTest(unittest.TestCase):
     """Servidor UDP de verdade + cliente falso (mesma lógica do PSP) com perda."""
 
-    def run_stream(self, early_kb, loss=0.05, seconds=2.0, rtt_ms=0):
+    def run_stream(self, early_kb, loss=0.05, seconds=2.0, rtt_ms=0, source=None, hdr_cache=True):
         import pspstream
         from sources import StaticSource
         import fake_client
 
         card = (ROOT / "assets/testcard.jpg").read_bytes()
         args = argparse.Namespace(adaptive=False, bench=None, stats_interval=60, target_fps=30, q_min=25,
-                                  q_max=90, udp_pace=0, source="static", size=(480, 272))
-        server = pspstream.Server(StaticSource(card), args, None)
+                                  q_max=90, udp_pace=0, source="static", size=(480, 272), hdr_cache=hdr_cache,
+                                  dscp="ef")
+        server = pspstream.Server(source or StaticSource(card), args, None)
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -128,6 +148,41 @@ class UdpEndToEndTest(unittest.TestCase):
         self.assertLessEqual(summary["dup_chunks"], max(3, summary["lost_chunks"] // 5), summary)
         self.assertLessEqual(summary["lost"], 2, summary)
         self.assertEqual(jpeg, card)
+
+    def test_header_cache(self):
+        # Depois do primeiro frame, o cabeçalho JPEG não vai mais; o PSP o põe de
+        # volta e o JPEG fica idêntico ao original.
+        summary, jpeg, card = self.run_stream(early_kb=0, loss=0.02)
+        self.assertEqual(jpeg, card)
+        self.assertGreaterEqual(summary["stripped"], summary["frames"] - 2, summary)
+        self.assertGreater(summary["ping_ms"], 0)
+        off, _, _ = self.run_stream(early_kb=0, loss=0.02, hdr_cache=False)
+        self.assertEqual(off["stripped"], 0)
+
+    def test_header_cache_follows_quality(self):
+        # Qualidade mudando (adaptativo): cada cabeçalho novo vem inteiro uma
+        # vez; com o cabeçalho errado, o JPEG sairia com outras tabelas.
+        from sources import FrameSource
+        card = (ROOT / "assets/testcard.jpg").read_bytes()
+        # segundo cabeçalho: a mesma imagem com um comentário (COM) a mais
+        variants = [card, card[:2] + b"\xff\xfe\x00\x06test" + card[2:]]
+
+        class Alternating(FrameSource):
+            repeat = True
+
+            def __init__(self):
+                super().__init__()
+                self.k = 0
+                self.publish(variants[0])
+
+            def latest(self):
+                self.k += 1
+                seq, _, ready = super().latest()
+                return seq, variants[self.k // 5 % 2], ready
+
+        summary, jpeg, _ = self.run_stream(early_kb=0, loss=0.02, source=Alternating())
+        self.assertIn(jpeg, variants)
+        self.assertGreater(summary["stripped"], summary["frames"] // 2, summary)
 
     def test_early_request_keeps_streaming(self):
         # Com pedido antecipado, uma perda no fim do frame N vira pulo para o

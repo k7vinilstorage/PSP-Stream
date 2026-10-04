@@ -18,6 +18,15 @@
  *    frame e pedimos outro. Pedido sem resposta é reenviado a cada
  *    REQ_RETRY_US (o servidor ignora duplicados).
  *
+ * Cabeçalho JPEG (UDP): as tabelas no início de cada JPEG (~620 bytes) só
+ * mudam com a qualidade. Guardamos as duas últimas e dizemos ao servidor qual
+ * temos (hdr_have); ele manda só os dados comprimidos, e o cabeçalho é
+ * copiado de volta no slot antes do primeiro pedaço.
+ *
+ * Ida e volta pura (UDP): no início, pings pequenos com a rede parada, metade
+ * esperando com select() e metade consultando o socket a cada 0,5 ms. Mostra
+ * a parte fixa da rede sem frame no meio e escolhe a espera mais rápida.
+ *
  * Pedido antecipado (UDP, experimental, desligado por padrão): quando faltam
  * `early` bytes do frame atual, já pedimos o próximo, para esconder a ida e
  * volta do pedido. No PSP-3000 não aumentou o FPS e piorou a latência (o
@@ -25,6 +34,7 @@
  * quando um mais novo completa, o mais velho incompleto é abandonado.
  */
 #include "stream.h"
+#include "config.h"
 #include "net.h"
 #include "protocol.h"
 
@@ -77,6 +87,23 @@ static volatile int wifi_signal, wifi_flags;
 static int gap_avg = 3000, gap_dev = 3000;   /* entre pedaços seguidos de um frame */
 static int rtt_avg = 30000, rtt_dev = 10000; /* pedido -> primeiro pedaço */
 
+/* Cabeçalhos JPEG guardados; hdrs[0] é o mais recente. Os ids são CRC32 do
+ * conteúdo, então valem entre conexões e servidores. */
+typedef struct {
+    uint32_t id; /* 0 = vazio */
+    int len;
+    uint8_t data[PS_MAX_JPEG_HEADER];
+} hdr_entry_t;
+static hdr_entry_t hdrs[2];
+static volatile uint32_t hdr_have;
+
+#define POLL_US 500            /* espera por consulta: dorme isso entre tentativas */
+#define PINGS 16               /* metade com select(), metade por consulta */
+#define PING_TIMEOUT_US (300 * 1000)
+static int g_rxwait;
+static volatile int rx_poll;
+static volatile unsigned ping_sel_us, ping_poll_us;
+
 static volatile uint32_t in_buttons;
 static volatile uint8_t in_lx = 128, in_ly = 128;
 
@@ -128,8 +155,11 @@ static int send_req(uint16_t flags, const ps_nack_t *nack)
         r->burst_t = a.burst_t;
     }
     r->signal = wifi_signal;
-    r->wflags = wifi_flags;
+    r->wflags = wifi_flags | (rx_poll ? PS_WIFI_RX_POLL : 0);
     r->lost = lost > 0xFFFF ? 0xFFFF : lost;
+    r->hdr_have = hdr_have;
+    r->ping_select = clamp_u16(ping_sel_us / 100);
+    r->ping_poll = clamp_u16(ping_poll_us / 100);
     int len = sizeof(ps_req_t);
     if (nack) {
         msg.n = *nack;
@@ -230,6 +260,8 @@ typedef struct {
     int idx;           /* slot; -1 = vazio */
     uint32_t frame_no;
     int count, got, nacks;
+    int base;          /* bytes de cabeçalho copiados do cache antes do payload */
+    uint32_t hdr;      /* campo hdr do pedaço */
     int nack_last;     /* maior pedaço pedido no último NACK (o último do reenvio) */
     int asked_next;    /* já pediu o próximo antecipado */
     unsigned last_rx;  /* último pedaço recebido */
@@ -292,6 +324,165 @@ static int send_nack(asm_t *a)
     return send_req(0, &nk);
 }
 
+/* Bytes do início do JPEG até o fim do SOS (mesma regra do servidor). 0 se não achar. */
+static int jpeg_header_len(const uint8_t *p, int n)
+{
+    if (n < 4 || p[0] != 0xFF || p[1] != 0xD8)
+        return 0;
+    int i = 2;
+    while (i + 4 <= n) {
+        if (p[i] != 0xFF)
+            return 0;
+        int m = p[i + 1];
+        if (m == 0xFF) {
+            i++;
+            continue;
+        }
+        if (m == 0x01 || (m >= 0xD0 && m <= 0xD7)) {
+            i += 2;
+            continue;
+        }
+        int end = i + 2 + (p[i + 2] << 8 | p[i + 3]);
+        if (m == 0xDA)
+            return end <= PS_MAX_JPEG_HEADER && end < n ? end : 0;
+        i = end;
+    }
+    return 0;
+}
+
+/* CRC-32 (o mesmo do zlib.crc32 do servidor); só roda quando o cabeçalho muda. */
+static uint32_t crc32_of(const uint8_t *p, int n)
+{
+    uint32_t c = 0xFFFFFFFFu;
+    while (n-- > 0) {
+        c ^= *p++;
+        for (int k = 0; k < 8; k++)
+            c = c >> 1 ^ (0xEDB88320u & -(c & 1));
+    }
+    return ~c;
+}
+
+static const hdr_entry_t *hdr_find(uint32_t id)
+{
+    for (int k = 0; k < 2; k++)
+        if (hdrs[k].id == id && hdrs[k].len > 0)
+            return &hdrs[k];
+    return NULL;
+}
+
+/* Frame completo que veio com cabeçalho: guarda para os próximos. */
+static void hdr_learn(uint32_t id, const uint8_t *jpeg, int size)
+{
+    if (!id || hdrs[0].id == id)
+        return;
+    if (hdrs[1].id == id) { /* voltou para a qualidade anterior */
+        hdr_entry_t t = hdrs[0];
+        hdrs[0] = hdrs[1];
+        hdrs[1] = t;
+    } else {
+        int len = jpeg_header_len(jpeg, size);
+        uint32_t crc = len ? crc32_of(jpeg, len) & PS_HDR_ID_MASK : 0;
+        if (!len || (crc ? crc : 1) != id)
+            return; /* cortaríamos o cabeçalho num lugar diferente do servidor: não guarda */
+        hdrs[1] = hdrs[0];
+        hdrs[0].id = id;
+        hdrs[0].len = len;
+        memcpy(hdrs[0].data, jpeg, len);
+    }
+    hdr_have = id;
+}
+
+static int wait_rx(int timeout_us)
+{
+    if (rx_poll) {
+        sceKernelDelayThread(timeout_us < POLL_US ? timeout_us : POLL_US);
+        return 0;
+    }
+    return net_wait_readable(g_sock, timeout_us) < 0 ? -1 : 0;
+}
+
+/* Um ping: 1 = respondido (rtt em us), 0 = sem resposta, -1 = erro de rede. */
+static int ping_once(int poll, uint32_t token, unsigned *rtt)
+{
+    static uint8_t buf[sizeof(ps_chunk_hdr_t) + PS_CHUNK_PAYLOAD + 64];
+    ps_req_t r;
+    memset(&r, 0, sizeof(r));
+    r.magic = PS_MAGIC_REQ;
+    r.buttons = in_buttons;
+    r.lx = in_lx;
+    r.ly = in_ly;
+    r.flags = PS_REQ_PING;
+    r.echo_ts = token;
+    unsigned t0 = now_us();
+    sceKernelWaitSema(send_sema, 1, NULL);
+    int rc = net_sendto(g_sock, &g_dest, &r, sizeof(r));
+    sceKernelSignalSema(send_sema, 1);
+    if (rc < 0)
+        return -1;
+    for (;;) {
+        int n = net_recv_dgram(g_sock, buf, sizeof(buf));
+        if (n < 0)
+            return -1;
+        if (n == sizeof(ps_pong_t)) {
+            ps_pong_t pong;
+            memcpy(&pong, buf, sizeof(pong));
+            if (pong.magic == PS_MAGIC_PONG && pong.token == token) {
+                *rtt = now_us() - t0;
+                return 1;
+            }
+        }
+        if (n > 0)
+            continue; /* pedaço velho de uma conexão anterior */
+        int left = PING_TIMEOUT_US - (int)(now_us() - t0);
+        if (left <= 0 || !*g_running || stopping)
+            return 0;
+        if (poll)
+            sceKernelDelayThread(left < POLL_US ? left : POLL_US);
+        else if (net_wait_readable(g_sock, left) < 0)
+            return -1;
+    }
+}
+
+static unsigned median(unsigned *v, int n)
+{
+    for (int i = 1; i < n; i++) /* n <= 8: inserção */
+        for (int j = i; j > 0 && v[j - 1] > v[j]; j--) {
+            unsigned t = v[j];
+            v[j] = v[j - 1];
+            v[j - 1] = t;
+        }
+    return n ? v[n / 2] : 0;
+}
+
+/* Mede a ida e volta pura com select() e por consulta, e escolhe a espera. */
+static int ping_phase(void)
+{
+    unsigned rtt[2][PINGS / 2];
+    int got[2] = {0, 0}, misses = 0;
+    for (int i = 0; i < PINGS && misses < 3 && *g_running && !stopping; i++) {
+        int poll = i & 1;
+        unsigned t;
+        int r = ping_once(poll, now_us() ^ (uint32_t)i << 28, &t);
+        if (r < 0)
+            return -1;
+        if (r == 0) {
+            misses++; /* servidor antigo ou ping perdido */
+            continue;
+        }
+        misses = 0;
+        rtt[poll][got[poll]++] = t;
+        sceKernelDelayThread(5 * 1000);
+    }
+    ping_sel_us = median(rtt[0], got[0]);
+    ping_poll_us = median(rtt[1], got[1]);
+    if (g_rxwait == RXWAIT_AUTO)
+        /* a consulta acorda a CPU 2000x/s: só vale se select() demorar 1 ms a mais */
+        rx_poll = got[0] && got[1] && ping_poll_us + 1000 < ping_sel_us;
+    else
+        rx_poll = g_rxwait == RXWAIT_POLL;
+    return 0;
+}
+
 static int net_thread_udp(void)
 {
     static uint8_t pkt[sizeof(ps_chunk_hdr_t) + PS_CHUNK_PAYLOAD + 64];
@@ -311,6 +502,9 @@ static int net_thread_udp(void)
             return -1;                                                                                                \
     } while (0)
 
+    if (ping_phase() < 0)
+        return -1;
+    now = last_req = last_done = link_free = now_us();
     ASK(PS_REQ_HELLO | PS_REQ_FRAME);
 
     while (*g_running && !stopping) {
@@ -367,7 +561,7 @@ static int net_thread_udp(void)
         if (n < 0)
             return -1;
         if (n == 0) {
-            if (net_wait_readable(g_sock, timeout) < 0)
+            if (wait_rx(timeout) < 0)
                 return -1;
             continue;
         }
@@ -408,11 +602,31 @@ static int net_thread_udp(void)
                 as[0] = as[1];
                 as[1].idx = -1;
             }
+            const hdr_entry_t *cached = NULL;
+            if (h.hdr & PS_HDR_STRIPPED) {
+                cached = hdr_find(h.hdr & PS_HDR_ID_MASK);
+                if (!cached || cached->len + h.size > PS_MAX_JPEG) {
+                    /* sem o cabeçalho (não deveria acontecer): pula o frame; o
+                     * próximo pedido diz qual temos, e ele vem inteiro */
+                    if (h.frame_no > done)
+                        done = h.frame_no;
+                    if (pending > 0) {
+                        req_q[0] = req_q[1];
+                        pending--;
+                    }
+                    continue;
+                }
+            }
             a = &as[1];
             memset(a, 0, sizeof(*a));
             a->idx = claim_slot();
             a->frame_no = h.frame_no;
             a->count = h.count;
+            a->hdr = h.hdr;
+            if (cached) {
+                a->base = cached->len;
+                memcpy(slots[a->idx].data, cached->data, cached->len);
+            }
             a->last_rx = a->t_first = now_us();
             if (pending > 0) { /* responde ao pedido mais antigo */
                 a->t_req = req_q[0];
@@ -424,7 +638,7 @@ static int net_thread_udp(void)
             } else {
                 a->t_req = now_us();
             }
-            slots[a->idx].size = h.size;
+            slots[a->idx].size = a->base + h.size;
             slots[a->idx].frame_no = h.frame_no;
             slots[a->idx].send_ts = h.send_ts;
         }
@@ -437,7 +651,7 @@ static int net_thread_udp(void)
                     est_update(&gap_avg, &gap_dev, (int)dt);
             }
             a->have[h.chunk / 32] |= 1u << (h.chunk % 32);
-            memcpy(slots[a->idx].data + h.chunk * PS_CHUNK_PAYLOAD, pkt + sizeof(h), plen);
+            memcpy(slots[a->idx].data + a->base + h.chunk * PS_CHUNK_PAYLOAD, pkt + sizeof(h), plen);
             a->got++;
         }
         a->last_rx = t_rx;
@@ -453,6 +667,8 @@ static int net_thread_udp(void)
             int asked = a->asked_next;
             if (a->frame_no > done)
                 done = a->frame_no;
+            if (!(a->hdr & PS_HDR_STRIPPED))
+                hdr_learn(a->hdr & PS_HDR_ID_MASK, f->data, f->size);
             publish_slot(a->idx);
             a->idx = -1;
             /* um mais velho ainda incompleto perdeu a vez */
@@ -480,7 +696,7 @@ static int net_thread_udp(void)
                 a->deadline = d;
         }
         if (a->idx >= 0 && a->got < a->count && g_prefetch && g_early > 0 && !a->asked_next && pending == 0 &&
-            (int)slots[a->idx].size - a->got * PS_CHUNK_PAYLOAD <= g_early) {
+            (int)slots[a->idx].size - a->base - a->got * PS_CHUNK_PAYLOAD <= g_early) {
             a->asked_next = 1; /* pedido antecipado */
             ASK(PS_REQ_FRAME);
         }
@@ -498,12 +714,15 @@ static int net_thread(SceSize args, void *argp)
     return 0;
 }
 
-int stream_start(int sock, int udp, const struct sockaddr_in *dest, int prefetch, int early_bytes,
+int stream_start(int sock, int udp, const struct sockaddr_in *dest, int prefetch, int early_bytes, int rxwait,
                  volatile int *running)
 {
     g_sock = sock;
     g_udp = udp;
     g_early = early_bytes;
+    g_rxwait = rxwait;
+    rx_poll = 0;
+    ping_sel_us = ping_poll_us = 0;
     if (udp)
         g_dest = *dest;
     g_prefetch = prefetch;
@@ -551,6 +770,13 @@ void stream_release(ps_frame_t *frame, const ps_ack_t *ack)
     unlock();
     if (!g_prefetch)
         sceKernelSignalSema(want_sema, 1);
+}
+
+void stream_ping(unsigned *select_us, unsigned *poll_us, int *polling)
+{
+    *select_us = ping_sel_us;
+    *poll_us = ping_poll_us;
+    *polling = rx_poll;
 }
 
 void stream_set_wifi(int signal, int flags)

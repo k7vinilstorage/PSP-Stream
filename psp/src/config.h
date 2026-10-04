@@ -14,8 +14,12 @@ typedef struct {
     int input;        /* 1 = envia os controles para o PC (Marco 4) */
     int udp;          /* transporte: 0 = TCP, 1 = UDP */
     int early_kb;     /* UDP: pede o próximo frame quando faltar isso do atual (0 = desligado) */
+    int rxwait;       /* UDP: RXWAIT_AUTO, RXWAIT_SELECT ou RXWAIT_POLL */
     int exit_after;   /* testes: sai depois de exibir N frames (0 = nunca) */
 } ps_config_t;
+
+/* Como a thread de rede espera pacotes (UDP). */
+enum { RXWAIT_AUTO, RXWAIT_SELECT, RXWAIT_POLL };
 
 /* Lê `dir`/server.txt. Devolve 0 se ok; senão escreve o motivo em err. */
 int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen);

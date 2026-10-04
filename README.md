@@ -140,6 +140,7 @@ overlay=1            # FPS, KB/frame, KB/s, decode, rede, descartes
 input=1              # controles do PSP -> PC
 transport=udp        # udp (padrão) | tcp; SELECT+START+L troca com o stream rodando
 early_kb=0           # UDP, experimental (no PSP-3000 piorou a latência; ver MEASUREMENTS.md)
+rxwait=auto          # UDP: auto | select | poll (auto mede os dois ao conectar e usa o mais rápido)
 rcvbuf=64            # buffer de recepção do socket (KB)
 bench=0              # 1 = mede o decode hw x sw no próprio PSP ao conectar
 ```
@@ -171,6 +172,8 @@ janela. A escolha fica salva em `~/.config/pspstream/portal_token`; use
 | `--input-dry-run` | só mostrar no log as teclas que seriam injetadas |
 | `--input-timeout 0.5` | solta tudo se o PSP sumir por 0,5 s com tecla segurada (evita tecla presa) |
 | `--udp-pace KB/s` | UDP: limitar a taxa de envio dos pedaços (padrão: sem limite; teste 450 se a perda crescer com frames grandes) |
+| `--no-hdr-cache` | UDP: mandar o cabeçalho JPEG (~620 bytes) em todo frame. O padrão manda só quando a qualidade muda; a opção existe para comparar |
+| `--dscp ef` | marca os pacotes para a fila de voz do Wi-Fi (WMM) na placa do PC e no roteador; `0` desliga |
 | `--bench 30,50,70,90` | varre qualidades com o PSP conectado e salva uma tabela |
 
 A cada 2 s, o servidor mostra uma linha de estatística:
@@ -323,6 +326,15 @@ tests/                 testes do servidor
   disputa o ar com o frame que ainda está chegando, e o frame seguinte só
   espera na fila do roteador. Ficou como opção `early_kb` (padrão 0) para
   outras redes.
+- **Cabeçalho JPEG enviado uma vez (UDP).** As tabelas no início de cada
+  JPEG (623 bytes no `jpegenc`) só mudam com a qualidade. O PSP guarda as
+  duas últimas e diz ao servidor qual tem; o servidor manda só os dados
+  comprimidos. São 6% do frame em q30 e 4,5% em q50 (medido no PC).
+- **Ida e volta pura no início do stream.** O PSP manda 16 pings pequenos
+  antes de pedir frames, metade esperando com `select()` e metade
+  consultando o socket a cada 0,5 ms. O overlay e o log do servidor mostram
+  os dois tempos, e `rxwait=auto` fica com a espera mais rápida. Isso separa
+  a parte fixa da rede (pacote pequeno, rede parada) do resto.
 - **Escrita direta no framebuffer em vez de sceGu.** Os dois decoders
   escrevem direto na VRAM (stride 512), sem cópias. O sceGu só valeria a pena
   para ampliar um stream menor (240x136, por exemplo) com filtro, o que ainda

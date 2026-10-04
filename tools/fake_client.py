@@ -87,6 +87,10 @@ class FakePSP:
         self.nacks = 0
         self.lost_chunks = 0  # descartados pela perda simulada (--loss)
         self.dup_chunks = 0   # chegaram repetidos ou atrasados: ar desperdiçado
+        self.hdrs = []        # cabeçalhos JPEG guardados [(id, bytes)], o mais novo primeiro
+        self.hdr_have = 0
+        self.stripped = 0     # frames que vieram sem o cabeçalho
+        self.ping_us = 0
         self.cond = threading.Condition()
         self.ready = None          # frame mais novo ainda não decodificado
         self.last_ack = None       # (frame_no, send_ts, shown_at, net_t, local_t, decode_t)
@@ -106,6 +110,8 @@ class FakePSP:
             r.since_t = clamp_u16((time.monotonic() - a[2]) * 10000)
             r.net_t, r.local_t, r.decode_t = a[3], a[4], a[5]
             r.first_t, r.burst_t = a[6], a[7]
+        r.hdr_have = self.hdr_have
+        r.ping_select = clamp_u16(self.ping_us / 100)
         data = r.pack() + nack
         if self.args.rtt_ms and self.udp:
             # simula o atraso fixo por pedido (subida no Wi-Fi + reação do servidor)
@@ -132,6 +138,36 @@ class FakePSP:
         if self.args.no_prefetch:
             self.want.wait()
             self.want.clear()
+
+    def ping_phase(self, count=8):
+        """Ida e volta pura antes de pedir frames, como o PSP (só com select)."""
+        rtts = []
+        for i in range(count):
+            token = (int(time.monotonic() * 1e6) ^ i << 28) & 0xFFFFFFFF
+            t0 = time.monotonic()
+            data = Request(flags=protocol.REQ_PING, echo_ts=token).pack()
+            if self.args.rtt_ms:  # mesmo atraso simulado dos pedidos
+                threading.Timer(self.args.rtt_ms / 1000, self._raw_send, args=(data,)).start()
+            else:
+                self._raw_send(data)
+            while True:
+                left = 0.3 - (time.monotonic() - t0)
+                if left <= 0 or not select.select([self.sock], [], [], left)[0]:
+                    break
+                data = self.sock.recv(2048)
+                if data == protocol.pack_pong(token):
+                    rtts.append(time.monotonic() - t0)
+                    break
+        if rtts:
+            self.ping_us = sorted(rtts)[len(rtts) // 2] * 1e6
+
+    def hdr_learn(self, hid, jpeg):
+        if not hid or (self.hdrs and self.hdrs[0][0] == hid):
+            return
+        n = protocol.jpeg_header_len(jpeg)
+        if n:
+            self.hdrs = [(hid, jpeg[:n])] + [h for h in self.hdrs if h[0] != hid][:1]
+            self.hdr_have = hid
 
     def net_loop_udp(self):
         """Mesma lógica do stream.c do PSP: até dois frames em remontagem,
@@ -163,6 +199,8 @@ class FakePSP:
                 a["deadline"] = a["t_nack"] + rtt.timeout(RTO_MIN_S, RTO_MAX_S)
                 self.send_req(protocol.REQ_NACK, protocol.pack_nack(a["no"], missing))
 
+            self.ping_phase()
+            last_req = last_done = link_free = time.monotonic()
             ask(REQ_FRAME | REQ_HELLO)
             while self.running:
                 now = time.monotonic()
@@ -202,7 +240,7 @@ class FakePSP:
                     continue  # pacote "perdido no Wi-Fi"
                 self.throttle.consume(len(data))
                 try:
-                    no, fsize, fts, idx, fcount, payload = protocol.unpack_chunk(data)
+                    no, fsize, fts, idx, fcount, hdr, payload = protocol.unpack_chunk(data)
                 except (ValueError, Exception):
                     continue
                 if fsize > protocol.MAX_JPEG or fcount != protocol.chunk_count(fsize) or idx >= fcount:
@@ -221,10 +259,19 @@ class FakePSP:
                         done = max(done, asm[0]["no"])
                         asm.pop(0)
                         self.lost += 1
+                    head = b""
+                    if hdr & protocol.HDR_STRIPPED:
+                        head = next((h for i, h in self.hdrs if i == hdr & ~protocol.HDR_STRIPPED), None)
+                        if head is None:  # sem o cabeçalho: pula o frame (o próximo vem inteiro)
+                            done = max(done, no)
+                            if req_q:
+                                req_q.pop(0)
+                            continue
+                        self.stripped += 1
                     t_first = time.monotonic()
                     a = {"no": no, "count": fcount, "have": set(), "nacks": 0, "asked": False,
-                         "last_rx": t_first, "t_first": t_first, "buf": bytearray(fsize), "ts": fts,
-                         "t_req": t_first, "deadline": 0.0}
+                         "last_rx": t_first, "t_first": t_first, "buf": bytearray(head) + bytearray(fsize),
+                         "ts": fts, "t_req": t_first, "deadline": 0.0, "base": len(head), "hdr": hdr}
                     if req_q:
                         a["t_req"] = req_q.pop(0)
                         if t_first - a["t_req"] < RTT_SAMPLE_MAX_S:
@@ -235,7 +282,8 @@ class FakePSP:
                     if a["have"] and not a["nacks"] and t_rx - a["last_rx"] < 0.1:
                         gap.update(t_rx - a["last_rx"])
                     a["have"].add(idx)
-                    a["buf"][idx * P: idx * P + len(payload)] = payload
+                    off = a["base"] + idx * P
+                    a["buf"][off: off + len(payload)] = payload
                 else:
                     self.dup_chunks += 1
                 a["last_rx"] = t_rx
@@ -245,6 +293,8 @@ class FakePSP:
                     link_free = last_done = t
                     done = max(done, no)
                     asm.remove(a)
+                    if not a["hdr"] & protocol.HDR_STRIPPED:
+                        self.hdr_learn(a["hdr"], bytes(a["buf"]))
                     for older in [x for x in asm if x["no"] < no]:
                         asm.remove(older)
                         self.lost += 1
@@ -260,7 +310,7 @@ class FakePSP:
                     if (len(a["have"]) == 1 and not a["nacks"]) or d > a["deadline"]:
                         a["deadline"] = d
                 if (not self.args.no_prefetch and early > 0 and not a["asked"] and not req_q
-                      and len(a["buf"]) - len(a["have"]) * P <= early):
+                      and len(a["buf"]) - a["base"] - len(a["have"]) * P <= early):
                     a["asked"] = True  # pedido antecipado
                     ask(REQ_FRAME)
         except (OSError, ValueError) as exc:
@@ -347,6 +397,8 @@ class FakePSP:
             "nacks": self.nacks,
             "lost_chunks": self.lost_chunks,
             "dup_chunks": self.dup_chunks,
+            "stripped": self.stripped,
+            "ping_ms": round(self.ping_us / 1000, 2),
         }, jpeg
 
 

@@ -30,6 +30,10 @@ transport=udp
 # é half duplex e o frame seguinte só fica na fila do roteador. 0 = desligado.
 early_kb=0
 
+# UDP: como esperar pacotes. auto = ao conectar, mede a ida e volta com select()
+# e consultando o socket a cada 0,5 ms, e usa o mais rápido. select | poll = forçar.
+rxwait=auto
+
 # Buffer de recepção do socket em KB. Para experimentar: 32, 64, 128
 rcvbuf=64
 
