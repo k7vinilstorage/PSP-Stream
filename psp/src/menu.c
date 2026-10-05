@@ -56,7 +56,7 @@ static const char *const help[IT_COUNT] = {
     "Troca de imagem no vblank: sem rasgo, +0 a 16 ms",
     "Mostra FPS, KB e tempos no canto da tela",
     "Botoes do PSP viram controle/teclado no PC",
-    "Rede e decode em paralelo (recomendado)",
+    "auto = sim, menos com frames P (la: um frame por vez, liso)",
     "Pede o proximo frame antes do fim do atual (auto = medido)",
     "auto mede select e consulta no inicio e usa o mais rapido",
     "Grava o server.txt e conecta (START faz o mesmo)",
@@ -194,8 +194,10 @@ static void change(ps_config_t *cfg, int item, int dir)
     case IT_INPUT:
         cfg->input = !cfg->input;
         break;
-    case IT_PREFETCH:
-        cfg->prefetch = !cfg->prefetch;
+    case IT_PREFETCH: /* auto -> sim -> nao */
+        cfg->prefetch = cfg->prefetch == PREFETCH_AUTO ? (dir > 0 ? 1 : 0)
+                      : cfg->prefetch               ? (dir > 0 ? 0 : PREFETCH_AUTO)
+                                                    : (dir > 0 ? PREFETCH_AUTO : 1);
         break;
     case IT_EARLY: {
         int k = 0;
@@ -251,7 +253,7 @@ static void value_text(const ps_config_t *cfg, int item, char *out, int len)
         snprintf(out, len, "%s", yes(cfg->input));
         break;
     case IT_PREFETCH:
-        snprintf(out, len, "%s", yes(cfg->prefetch));
+        snprintf(out, len, "%s", cfg->prefetch == PREFETCH_AUTO ? "auto (nao com frames P)" : yes(cfg->prefetch));
         break;
     case IT_EARLY:
         if (cfg->early_kb < 0)

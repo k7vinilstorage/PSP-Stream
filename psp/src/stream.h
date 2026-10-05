@@ -68,7 +68,10 @@ void stream_set_input(uint32_t buttons, uint8_t lx, uint8_t ly);
 /* Envia só os controles agora, sem pedir frame (Marco 4: menor latência de entrada). */
 int stream_send_input(void);
 
-void stream_set_prefetch(int on);
+/* prefetch: 1, 0 ou PREFETCH_AUTO (config.h: sim, menos com frames P). */
+void stream_set_prefetch(int mode);
+/* O prefetch está valendo agora? (com auto, depende de o stream ter frames P) */
+int stream_prefetch_on(void);
 
 /* != 0 quando a thread de rede parou (conexão caiu). */
 int stream_error(void);

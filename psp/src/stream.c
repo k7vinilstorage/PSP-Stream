@@ -6,7 +6,10 @@
  * sempre pega o mais novo.
  *
  * Com prefetch, o próximo pedido sai assim que um frame chega, antes do
- * decode: rede e decode trabalham ao mesmo tempo.
+ * decode: rede e decode trabalham ao mesmo tempo. Sem prefetch, o próximo é
+ * pedido só depois de exibir o atual. prefetch=auto (padrão): sem prefetch
+ * com frames P (um frame por vez, ritmo regular: o que ficou liso no PSP),
+ * com prefetch no resto.
  *
  * Frames P (H.264 IPPP, o pacote começa com um AUD): cada frame é referência
  * do seguinte, então nenhum é descartado. Os prontos ficam numa fila, em
@@ -100,7 +103,7 @@ static SceUID net_thid = -1;
 static int g_sock = -1;
 static int g_udp;
 static struct sockaddr_in g_dest;
-static volatile int g_prefetch;
+static volatile int g_prefetch; /* 1, 0 ou PREFETCH_AUTO */
 static int g_early; /* bytes que faltam no frame atual para pedir o próximo (0 = desligado, < 0 = auto) */
 static volatile int early_cur; /* valor em uso (auto muda com a vazão) */
 static volatile int *g_running;
@@ -242,10 +245,13 @@ static int send_new_req(uint32_t *want)
     return send_req(PS_REQ_FRAME, &nk);
 }
 
+/* definida no fim do arquivo (depende de pmode, que o stream descobre) */
+static int prefetch_on(void);
+
 static void wait_want(void)
 {
     /* Sem prefetch: espera o decode terminar antes de pedir o próximo. */
-    while (*g_running && !stopping && !g_prefetch) {
+    while (*g_running && !stopping && !prefetch_on()) {
         SceUInt timeout = 100 * 1000;
         if (sceKernelWaitSema(want_sema, 1, &timeout) == 0)
             return;
@@ -376,7 +382,7 @@ static int net_thread_tcp(void)
         pmode = is_aud(f->data, f->size);
         publish_slot(idx);
 
-        if (!g_prefetch)
+        if (!prefetch_on())
             wait_want();
         else if ((deferred = defer_ask()))
             continue;
@@ -990,7 +996,7 @@ static int net_thread_udp(void)
             if (a->held) {
                 /* frames P: o próximo só é pedido quando o mais velho se
                  * resolver, senão um terceiro frame chegaria sem espaço */
-            } else if (!g_prefetch) {
+            } else if (!prefetch_on()) {
                 wait_want();
                 ASK(PS_REQ_FRAME);
             } else if (!asked && pending == 0 && !defer_ask()) {
@@ -1014,7 +1020,7 @@ static int net_thread_udp(void)
          * esperando o decode (quem pede é a thread de decode). */
         asm_t *older = (a == &as[1]) ? &as[0] : &as[1];
         int blocked = pmode && ((older->idx >= 0 && older->frame_no < a->frame_no) || ready_n > 0);
-        if (a->idx >= 0 && a->got < a->count && a->got == a->hi && !blocked && g_prefetch && g_early &&
+        if (a->idx >= 0 && a->got < a->count && a->got == a->hi && !blocked && prefetch_on() && g_early &&
             !a->asked_next && pending == 0 &&
             (int)slots[a->idx].size - a->base - a->got * PS_CHUNK_PAYLOAD <= early_threshold()) {
             a->asked_next = 1; /* pedido antecipado */
@@ -1113,7 +1119,7 @@ void stream_release(ps_frame_t *frame, const ps_ack_t *ack)
     if (ack)
         last_ack = *ack;
     unlock();
-    if (!g_prefetch)
+    if (!prefetch_on())
         sceKernelSignalSema(want_sema, 1);
 }
 
@@ -1180,10 +1186,20 @@ int stream_send_input(void)
     return send_req(0, NULL);
 }
 
-void stream_set_prefetch(int on)
+static int prefetch_on(void)
 {
-    g_prefetch = on;
-    if (on)
+    return g_prefetch == PREFETCH_AUTO ? !pmode : g_prefetch;
+}
+
+int stream_prefetch_on(void)
+{
+    return prefetch_on();
+}
+
+void stream_set_prefetch(int mode)
+{
+    g_prefetch = mode;
+    if (prefetch_on()) /* a thread de rede pode estar esperando o decode (wait_want) */
         sceKernelSignalSema(want_sema, 1);
 }
 

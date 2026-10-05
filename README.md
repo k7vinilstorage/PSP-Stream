@@ -30,9 +30,10 @@ fila na rede, e a latência fica perto de um frame. Detalhes em
   MJPEG, para EBOOTs antigos.
 - **Captura a 60 fps** no GNOME 50 pela KMS (direto da placa de vídeo), ou
   pelo portal do Wayland (GNOME, KDE).
-- **UDP com recuperação de perdas** (NACK, pedido repetido, IDR só quando
-  precisa), **qualidade adaptativa** à vazão do Wi-Fi e **pedido antecipado**,
-  para não ficar tempo morto entre frames.
+- **UDP com recuperação de perdas** (NACK, pedido repetido, último pedaço de
+  cada frame P em dobro, IDR só quando precisa), **qualidade adaptativa** à
+  vazão do Wi-Fi e **pedido antecipado**, para não ficar tempo morto entre
+  frames.
 - **Controles**: teclado e mouse virtuais ou um **controle de Xbox 360
   virtual**, como no Sunshine.
 - **Tela de configuração no PSP**: IP (ou "Procurar o PC na rede"), perfil de
@@ -153,8 +154,9 @@ para a contagem), com **SELECT + START + R** durante o stream e com
 - **Perfil de Wi-Fi**: mostra o nome salvo no XMB.
 - **Procurar o PC na rede**: liga o Wi-Fi e manda um ping em broadcast; o
   servidor responde e o IP dele entra no lugar.
-- Transporte, H.264, frames P, decoder, vsync, overlay, controles e os
-  ajustes de rede: as mesmas opções do `server.txt` (abaixo).
+- Transporte, H.264, frames P, decoder, vsync, overlay, controles, prefetch
+  (auto/sim/não) e os ajustes de rede: as mesmas opções do `server.txt`
+  (abaixo).
 - **START** grava o `server.txt` e conecta; **O** conecta sem gravar. Ao
   gravar, os comentários do arquivo antigo somem.
 
@@ -167,7 +169,7 @@ Segure **SELECT + START** e aperte:
 | triângulo | liga/desliga o overlay |
 | quadrado | decoder do JPEG hardware/software |
 | círculo | vsync |
-| X | prefetch |
+| X | prefetch: inverte o que está valendo (com `prefetch=auto`, desligado nos frames P) |
 | L | troca o transporte TCP/UDP (reconecta) |
 | R | abre a tela de configuração |
 
@@ -180,8 +182,12 @@ sozinho antes do START chega ao PC.
  41.3 fps   1.2 KB  52 KB/s
 dec 10.6 ms (h264p) rede 9.8 ms udp drop 0
 perdidos 0 nack 1 repet 0 idr 0 ping 7.1 ms (min 5.2, ini 6.3 sel)
-pede o proximo faltando 2.5 KB (auto)
+pede o proximo depois de exibir (sem prefetch, auto)
 ```
+
+A última linha diz quando o próximo frame é pedido: depois de exibir o atual
+(sem prefetch, o padrão com frames P) ou quando faltam tantos KB do atual
+(com prefetch: JPEG e H.264 só com quadros completos).
 
 `h264p` = H.264 com frames P (`h264`: só quadros completos; `hw`/`sw`:
 JPEG). `idr` conta os quadros completos pedidos depois de uma perda, e
@@ -202,13 +208,22 @@ decoder=auto         # JPEG: auto (hardware com reserva em software) | hw | sw
 vsync=1              # 1 = sem rasgo na imagem (+0 a 16 ms); 0 = troca imediata
 overlay=1            # FPS, KB/frame, tempos
 input=1              # controles do PSP -> PC
-prefetch=1           # rede e decode em paralelo
+prefetch=auto        # auto (padrão) = sim, menos com frames P; 1 = sempre; 0 = nunca (ver abaixo)
 early_kb=auto        # UDP: pede o próximo frame quando faltar isso do atual (auto = ida e volta x vazão; 0 = no fim)
 rxwait=auto          # UDP: auto | select | poll
 rcvbuf=64            # buffer de recepção do socket (KB)
 bench=0              # 1 = mede o decode JPEG hw x sw no próprio PSP ao conectar
 menu_wait=3          # s com a tela de configuração aberta antes de conectar sozinho (0 = direto)
 ```
+
+**Prefetch** é pedir o próximo frame antes de decodificar o atual, para rede
+e decode trabalharem juntos. No JPEG e no H.264 só com quadros completos ele
+rende 1,2-1,7x de FPS (medido no PSP-3000). Com frames P, o stream ficou
+**liso com o prefetch desligado** (Hollow Knight, PSP-3000): o próximo frame
+só é pedido depois de exibir o atual, um por vez, num ritmo regular. Por isso
+o padrão `auto` desliga o prefetch só com frames P. Na simulação, isso troca
+~60 fps com tropeços por ~30 fps constantes; quem preferir os 60 fps usa
+`prefetch=1` (ou SELECT + START + X durante o stream).
 
 ## Controles
 
@@ -312,6 +327,7 @@ PSP-3000 e Fedora 44 com Wi-Fi 802.11b; detalhes e o histórico em
 | H.264, Minecraft pelo portal (fonte ~38 fps) | 35-37 | 30-38 ms | 5-9 |
 | H.264 + captura KMS, cenas leves / jogo | 43-56 / 40-42 | 32-38 / 55-66 ms | 4 / 8-9 |
 | H.264 com frames P (v0.9), Hollow Knight + KMS (relato) | quase 60, com engasgos de vez em quando | não medida | 1,2-2,5 (70-150 KB/s, contra 400-450 KB/s do H.264 só quadros completos) |
+| H.264 com frames P (v1.0, sem prefetch), Hollow Knight + KMS (relato) | **liso** ("excelente") | não medida | |
 
 - Decode no PSP: JPEG 7,9 ms (hardware); H.264 só quadros completos 3,7 ms;
   frame P + 2 cópias 10,6 ms.
@@ -322,7 +338,8 @@ PSP-3000 e Fedora 44 com Wi-Fi 802.11b; detalhes e o histórico em
   roda em paralelo com a chegada do próximo. Os engasgos do h264p vinham das
   perdas no Wi-Fi (cada P precisa do anterior, então uma perda parava o
   stream até o reenvio); a v1.0 manda o último pedaço em dobro e repete o
-  pedido, e a linha do servidor mostra o que sobrou e por quê.
+  pedido, e a linha do servidor mostra o que sobrou e por quê. Com o
+  prefetch desligado (padrão com frames P), o stream ficou liso no PSP-3000.
 
 ## Solução de problemas
 
@@ -330,7 +347,8 @@ PSP-3000 e Fedora 44 com Wi-Fi 802.11b; detalhes e o histórico em
 |---|---|
 | "Sem resposta do PC" / "Procurar" não acha | o servidor está rodando? Libere 5123/udp e 5123/tcp no firewall. PC e PSP na mesma rede |
 | latência alta, FPS oscilando | desligue a Economia de energia WLAN do PSP; deixe o PC no 5 GHz ou no cabo (o servidor avisa se ele divide o canal de 2,4 GHz com o PSP); roteador em modo misto b/g/n |
-| engasgos de vez em quando (h264p) | veja os engasgos e a causa na linha do servidor (acima). `perda`/`pedido atrasado`: Wi-Fi (distância, canal de 2,4 GHz cheio, micro-ondas, Bluetooth); `captura`: o PC; `IDR` frequente: perdas seguidas. `--codec h264` aguenta perdas melhor (cada quadro é independente), com 2-3x mais banda |
+| engasgos de vez em quando (h264p) | confira se o prefetch está desligado (última linha do overlay: "depois de exibir"; `prefetch=auto` ou `0`). Depois, veja os engasgos e a causa na linha do servidor (acima). `perda`/`pedido atrasado`: Wi-Fi (distância, canal de 2,4 GHz cheio, micro-ondas, Bluetooth); `captura`: o PC; `IDR` frequente: perdas seguidas. `--codec h264` aguenta perdas melhor (cada quadro é independente), com 2-3x mais banda |
+| h264p liso, mas quer mais FPS | `prefetch=1`: ~60 fps em vez de ~30, com mais chance de tropeço quando o Wi-Fi oscila |
 | captura em ~38-40 fps no GNOME 50 | use `--source kms` |
 | KMS: "sem permissão para ler a tela" | `make -C tools/kms cap` de novo (depois de cada `make`); partições montadas com `nosuid` ignoram a permissão |
 | controles não chegam | o log diz "controles desativados": configure o `/dev/uinput` (acima) |
@@ -349,10 +367,12 @@ python3 tools/fake_client.py --transport udp --h264p --seconds 10 --kbps 450 --d
 ```
 
 `tools/fake_client.py` imita as threads do PSP (fila em ordem, NACK, IDR,
-pedido antecipado e repetido) e confere que nenhum frame P é decodificado
-sem o anterior; `--kbps`, `--rtt-ms`, `--loss`, `--loss-up`,
-`--loss-burst-ms` (rajadas de interferência) e `--decode-ms` simulam o Wi-Fi
-e o PSP, e o resumo conta os engasgos. Os números dele são simulados.
+pedido antecipado e repetido, `--prefetch auto|on|off` como no `server.txt`)
+e confere que nenhum frame P é decodificado sem o anterior; `--kbps`,
+`--rtt-ms`, `--loss`, `--loss-up`, `--loss-burst-ms` (rajadas de
+interferência) e `--decode-ms` simulam o Wi-Fi e o PSP, e o resumo conta os
+engasgos. `FAKE_TRACE=1` mostra cada pedido, pedaço, perda e NACK. Os
+números dele são simulados.
 
 **PPSSPPHeadless** (compile o PPSSPP com `cmake -DHEADLESS=ON`; o H.264
 precisa de `tools/ppsspp-pmp-fix.patch`):
@@ -433,6 +453,15 @@ tests/                 testes do servidor
   falta do atual leva uma ida e volta para chegar (ping do início x vazão,
   ~2-3 KB no PSP-3000). Valores fixos maiores, que pareciam bons na
   simulação, criavam fila no roteador no PSP real.
+- **Frames P sem prefetch (`prefetch=auto`).** Com frames P, o próximo frame
+  só é pedido depois de exibir o atual: um frame por vez, sem fila e num
+  ritmo regular. Foi o que deixou o stream liso no PSP-3000; com prefetch o
+  FPS é maior, mas qualquer oscilação do Wi-Fi aparece na tela.
+- **Perdas nos frames P.** Cada P precisa do anterior, então perder um
+  pacote para o stream até o reenvio. O servidor manda o último pedaço de
+  cada frame P de novo 6 ms depois (perder o último só era notado pelo
+  silêncio), e o PSP repete o pedido de frame novo depois de 6 ms, com o
+  número do frame para o servidor reconhecer a cópia.
 - **GStreamer em vez de ffmpeg** para a captura: o portal entrega PipeWire,
   que o GStreamer lê nativamente, e tudo roda dentro do processo.
 - **Escrita direta no framebuffer** (stride 512), sem sceGu: os decoders

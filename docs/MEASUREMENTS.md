@@ -12,6 +12,7 @@ Cada número aqui tem uma origem, e elas não se misturam:
 | **[SIM]** | `tools/fake_client.py` com Wi-Fi e decode simulados | não: é um modelo do pipeline |
 | **[EMU]** | PPSSPPHeadless | não: o tempo emulado não é o tempo do hardware |
 | **[PSP]** | PSP-3000 real (ARK-4) + Fedora 44, medido pelo usuário | sim |
+| **[PSP relato]** | o que o usuário viu jogando no PSP-3000, sem números anotados | sim, mas é qualitativo |
 
 ## 0. Números reais do PSP [PSP]
 
@@ -822,9 +823,9 @@ desligou:
 - **Suspeito (descartado na v4.1):** sem IDR periódico, `frame_num` (15 bits) e o POC
   (16 bits, +2 por AU) do openh264 dão a volta no AU 32768. Com 3 AUs por
   frame mostrado, a ~60 fps, isso acontece em ~3 min. Vídeo de PSP nunca
-  chega lá: cada IDR zera os dois. O servidor agora manda um IDR a cada 1800
-  frames (30 s a 60 fps), e a v4.1 testa a volta (passo 7, 12000 frames)
-  e a volta de uma perda pelo IDR sem Stop (passo 8).
+  chega lá: cada IDR zera os dois. O servidor passou a mandar um IDR a cada
+  1800 frames (30 s a 60 fps; tirado na v1.0), e a v4.1 testa a volta
+  (passo 7, 12000 frames) e a volta de uma perda pelo IDR sem Stop (passo 8).
 
 #### Teste v4.1 no PSP-3000: IDR no meio dos P desliga o PSP [PSP]
 
@@ -969,6 +970,40 @@ pacote), e o simulador foi corrigido antes das medidas acima.
 a lógica (601 frames P por UDP e 301 por TCP sem erro; o relógio dele pula o
 tempo ocioso). O que sobra no PSP real (rajadas longas, IDR depois de perdas
 seguidas) aparece na linha de engasgos do servidor.
+
+#### Frames P sem prefetch (v1.0) [PSP relato + SIM]
+
+**Relato do PSP-3000** (Hollow Knight, KMS, EBOOT e servidor com as mudanças
+acima): ficou excelente, e para isso o **prefetch precisa estar desligado**.
+FPS e latência desse teste ainda não foram anotados.
+
+Com prefetch, o próximo frame é pedido quando o decode pega o atual e chega
+enquanto ele decodifica: a rede e o decode andam juntos, e o FPS fica perto
+de 60. Mas cada frame depende da ida e volta daquele instante, então uma
+oscilação do Wi-Fi vira um frame que fica 2 ou 3 vblanks na tela entre
+outros que ficam 1. Sem prefetch, o próximo só é pedido depois de exibir o
+atual: um frame por vez, sem nada chegando durante o decode e sem fila. O
+ciclo (ida e volta + espera pela captura + encode + transferência + 10,6 ms
+de decode) passa dos 16,7 ms de um frame, então o stream acerta o passo em
+um frame a cada 2 da captura, sempre igual.
+
+Simulação (mesmo cenário da tabela acima, 16 s, `fake_client --prefetch`):
+
+| | FPS | p99 do intervalo entre frames | do frame pronto no PC à tela (sem a captura) |
+|---|---|---|---|
+| prefetch, sem perda | 58-60 | 37-38 ms | ~29 ms |
+| sem prefetch, sem perda | ~30, constante | 47 ms (quase todos 33 ms) | ~41 ms |
+| prefetch, 1% de perda | 58,7 | 38,5 ms | |
+| sem prefetch, 1% de perda | 29,7 | 47,9 ms | |
+
+No emulador, os dois modos decodificam certo (601 frames P por UDP, 301 por
+TCP; o relógio dele pula o tempo ocioso, então os tempos não valem).
+
+**v1.0: `prefetch=auto` é o padrão.** Sem prefetch com frames P, com prefetch
+no JPEG e no H.264 só com quadros completos, onde ele rende 1,2-1,7x de FPS
+(medido acima) e cada frame é independente. `prefetch=1` volta aos ~60 fps
+com frames P; SELECT + START + X inverte durante o stream, e o overlay diz
+quando o próximo é pedido.
 
 ## 1. Tamanho de frame [PC]
 

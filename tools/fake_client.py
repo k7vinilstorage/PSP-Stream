@@ -170,6 +170,11 @@ class FakePSP:
             return
         self._raw_send(data)
 
+    def prefetch_on(self):
+        """prefetch=auto no PSP (padrão): sem prefetch com frames P, com no resto."""
+        mode = "off" if getattr(self.args, "no_prefetch", False) else getattr(self.args, "prefetch", "auto")
+        return mode == "on" or (mode == "auto" and not self.pmode)
+
     def lose(self, rate, where="descida"):
         """Perda simulada de um pacote. Com --loss-burst-ms, cada perda abre uma
         rajada em que tudo some (pedidos e pedaços), como interferência no ar."""
@@ -225,10 +230,10 @@ class FakePSP:
                 self.ready.clear()
             self.ready.append(frame)
             self.cond.notify_all()
-            defer = ask and self.pmode and not self.args.no_prefetch
+            defer = ask and self.pmode and self.prefetch_on()
             if defer:
                 self.ask_deferred = True
-        if self.args.no_prefetch:
+        if not self.prefetch_on():
             self.want.wait()
             self.want.clear()
         return ask and not defer
@@ -489,13 +494,13 @@ class FakePSP:
                     for older in [x for x in asm if x["no"] < no]:
                         asm.remove(older)  # JPEG / só IDR: o mais velho incompleto perdeu a vez
                         self.lost += 1
-                    want = self.args.no_prefetch or (not asked and not req_q)
+                    want = not self.prefetch_on() or (not asked and not req_q)
                     if held:  # o mais novo esperava este; o pedido do seguinte fica por conta dele
                         self.publish(a["frame"])
                         h = held[0]
                         done = max(done, h["no"])
                         asm.remove(h)
-                        want = self.args.no_prefetch or (not h["asked"] and not req_q)
+                        want = not self.prefetch_on() or (not h["asked"] and not req_q)
                         if self.publish(h["frame"], ask=want):
                             ask(REQ_FRAME)
                     elif self.publish(a["frame"], ask=want):
@@ -511,7 +516,7 @@ class FakePSP:
                 # com buraco, não antecipa: o próximo entraria na fila na frente do reenvio
                 # (frames P: nem com buraco num mais velho, nem com frame esperando o decode)
                 blocked = self.pmode and (any(x["no"] < no for x in asm) or self.ready)
-                if (not self.args.no_prefetch and (auto or fixed) and not a["asked"] and not req_q
+                if (self.prefetch_on() and (auto or fixed) and not a["asked"] and not req_q
                       and not blocked and len(a["have"]) == a["hi"]
                       and len(a["buf"]) - a["base"] - len(a["have"]) * P <= early_bytes()):
                     a["asked"] = True  # pedido antecipado
@@ -666,8 +671,10 @@ def main(argv=None):
                         "0 = só no fim do frame, N = quando faltarem N KB")
     p.add_argument("--kbps", type=float, default=0, help="limitar a vazão (KB/s), ex.: 400")
     p.add_argument("--decode-ms", type=float, default=0, help="simular o tempo de decode do PSP")
+    p.add_argument("--prefetch", choices=["auto", "on", "off"], default="auto",
+                   help="como o prefetch= do server.txt: auto (padrão) = sem prefetch com frames P, com no resto")
     p.add_argument("--no-prefetch", action="store_true",
-                   help="só pedir o próximo frame depois de 'decodificar' o atual")
+                   help="o mesmo que --prefetch off: só pedir o próximo frame depois de 'decodificar' o atual")
     p.add_argument("--save", help="salvar o último JPEG exibido neste arquivo")
     p.add_argument("--input-demo", action="store_true",
                    help="enviar uma sequência de teste: X, cima, analógico p/ direita e p/ cima")

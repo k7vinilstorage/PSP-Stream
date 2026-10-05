@@ -27,7 +27,10 @@ PSP                                   PC
 - O frameskip é automático. Se o Wi-Fi ou o decode ficarem lentos, o PSP pede
   menos vezes e recebe sempre o frame mais atual.
 - Pedir antes de decodificar ("prefetch") sobrepõe rede e decode. Nesse modo,
-  quem limita o FPS é o mais lento dos dois, não a soma.
+  quem limita o FPS é o mais lento dos dois, não a soma. Com `prefetch=auto`
+  (padrão), o PSP faz isso no JPEG e no H.264 só com quadros completos; com
+  frames P, pede o próximo só depois de exibir o atual (ritmo regular, o que
+  ficou liso no PSP-3000).
 
 ## PSP -> PC: pedido (52 bytes)
 
@@ -96,8 +99,9 @@ Regras, porque cada P depende do anterior:
   codificado), e numera em sequência.
 - O PSP decodifica todos, em ordem: prontos ficam numa fila, e um frame
   completo que chega antes de um mais velho incompleto espera o reenvio dele.
-  O próximo é pedido quando o decode pega o último da fila (sem prefetch de
-  vários frames).
+  Com prefetch, o próximo é pedido quando o decode pega o último da fila
+  (nunca vários frames adiantados); sem prefetch (o padrão com frames P),
+  depois de exibir o atual.
 - Buraco na numeração, frame abandonado depois de 3 NACKs ou erro de decode:
   os P seguintes ficam sem referência. O PSP pula esses P e manda `IDR`
   (0x20) em todo pedido até decodificar um IDR. O servidor ignora pedidos de

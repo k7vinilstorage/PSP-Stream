@@ -6,7 +6,7 @@
  *   wifi_profile=1
  *   decoder=auto     (auto | hw | sw)
  *   vsync=1
- *   prefetch=1
+ *   prefetch=auto    (auto = sim, menos com frames P | 1 | 0)
  *   overlay=1
  *   rcvbuf=64        (KB)
  *   bench=0          (1 = mede decode hw x sw no primeiro frame)
@@ -51,7 +51,7 @@ static void set_key(ps_config_t *cfg, const char *key, const char *value)
     else if (!strcmp(key, "vsync"))
         cfg->vsync = v;
     else if (!strcmp(key, "prefetch"))
-        cfg->prefetch = v;
+        cfg->prefetch = !strcmp(value, "auto") ? PREFETCH_AUTO : v != 0;
     else if (!strcmp(key, "overlay"))
         cfg->overlay = v;
     else if (!strcmp(key, "rcvbuf"))
@@ -85,7 +85,7 @@ int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen)
     cfg->wifi_profile = 1;
     cfg->decoder = DEC_AUTO;
     cfg->vsync = 1;
-    cfg->prefetch = 1;
+    cfg->prefetch = PREFETCH_AUTO;
     cfg->overlay = 1;
     cfg->rcvbuf_kb = 64;
     cfg->input = 1;
@@ -174,7 +174,7 @@ int config_save(const ps_config_t *cfg, const char *dir, char *err, int errlen)
     fprintf(f, "vsync=%s\n", onoff(cfg->vsync));
     fprintf(f, "overlay=%s\n", onoff(cfg->overlay));
     fprintf(f, "input=%s\n", onoff(cfg->input));
-    fprintf(f, "prefetch=%s\n", onoff(cfg->prefetch));
+    fprintf(f, "prefetch=%s\n", cfg->prefetch == PREFETCH_AUTO ? "auto" : onoff(cfg->prefetch));
     fprintf(f, "early_kb=%s\n", early);
     fprintf(f, "rxwait=%s\n", cfg->rxwait == RXWAIT_SELECT ? "select" : cfg->rxwait == RXWAIT_POLL ? "poll" : "auto");
     fprintf(f, "rcvbuf=%d\n", cfg->rcvbuf_kb);

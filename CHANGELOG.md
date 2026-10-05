@@ -34,11 +34,18 @@ Primeira versão.
     openh264 passou na sonda v4.1.
   Na simulação com 1-2% de perda, os engasgos (>= 50 ms entre frames) caíram
   de 4-12 para 0-3 a cada 16 s; a cópia do último pedaço custa ~40 KB/s.
+- **`prefetch=auto` (padrão):** sem prefetch com frames P, com prefetch no
+  resto. Com frames P e o prefetch desligado, o próximo frame só é pedido
+  depois de exibir o atual: um por vez, num ritmo regular, e foi o que deixou
+  o Hollow Knight liso no PSP-3000. No JPEG e no H.264 só com quadros
+  completos, o prefetch continua (1,2-1,7x de FPS, medido). `prefetch=1` ou
+  `0` força; SELECT + START + X inverte o que está valendo; a tela de
+  configuração tem auto/sim/não; o overlay diz quando o próximo é pedido.
 - A linha de estatística do servidor mostra os **engasgos com a causa
   provável** (perda, IDR, pedido atrasado, captura) e os IDR.
-- `fake_client`: rajadas de perda (`--loss-burst-ms`) e contagem de
-  engasgos; corrigida a contagem do pedido feito pelo "decode", que criava
-  engasgos falsos na simulação.
+- `fake_client`: rajadas de perda (`--loss-burst-ms`), contagem de
+  engasgos, `--prefetch auto|on|off`, `FAKE_TRACE=1`; corrigida a contagem do
+  pedido feito pelo "decode", que criava engasgos falsos na simulação.
 - `--version`; documentação reorganizada para quem instala pela primeira
   vez; este histórico.
 

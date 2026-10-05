@@ -8,7 +8,7 @@
  *
  * Atalhos locais (segure SELECT + START e aperte):
  *   triângulo = overlay    quadrado = decoder hw/sw
- *   círculo   = vsync      X        = prefetch
+ *   círculo   = vsync      X        = prefetch (liga/desliga o que está valendo)
  *   L         = transporte TCP/UDP (reconecta)
  *   R         = tela de configuração (menu.c)
  */
@@ -261,8 +261,8 @@ static void apply_menu(ui_t *ui, unsigned seen[ACT_COUNT])
                 snprintf(msg, sizeof(msg), "vsync: %s", ui->vsync ? "on" : "off");
                 toast(ui, msg);
                 break;
-            case ACT_PREFETCH:
-                ui->prefetch = !ui->prefetch;
+            case ACT_PREFETCH: /* inverte o que está valendo (com auto, depende dos frames P) */
+                ui->prefetch = !stream_prefetch_on();
                 stream_set_prefetch(ui->prefetch);
                 snprintf(msg, sizeof(msg), "prefetch: %s", ui->prefetch ? "on" : "off");
                 toast(ui, msg);
@@ -292,7 +292,10 @@ static void draw_overlay(const ui_t *ui, const stats_t *s)
                          stream_lost(), stream_nacks(), stream_retries(), stream_idr_requests(), live / 1000.0f,
                          live_min / 1000.0f, (polling ? poll : sel) / 1000.0f, polling ? "poll" : "sel");
             unsigned early = stream_early();
-            if (early)
+            if (!stream_prefetch_on())
+                display_text(0, 3, 0xFF00FF00, "pede o proximo depois de exibir (sem prefetch%s)",
+                             ui->prefetch == PREFETCH_AUTO ? ", auto" : "");
+            else if (early)
                 display_text(0, 3, 0xFF00FF00, "pede o proximo faltando %.1f KB%s", early / 1024.0f,
                              ui->early_auto ? " (auto)" : "");
             else

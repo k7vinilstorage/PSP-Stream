@@ -119,7 +119,7 @@ class UdpEndToEndTest(unittest.TestCase):
     """Servidor UDP de verdade + cliente falso (mesma lógica do PSP) com perda."""
 
     def run_stream(self, early_kb, loss=0.05, seconds=2.0, rtt_ms=0, source=None, hdr_cache=True,
-                   codec="jpeg", h264p=False, decode_ms=5, p_redundancy_ms=6, req_dup=True):
+                   codec="jpeg", h264p=False, decode_ms=5, p_redundancy_ms=6, req_dup=True, prefetch="auto"):
         import pspstream
         from sources import StaticSource
         import fake_client
@@ -135,7 +135,8 @@ class UdpEndToEndTest(unittest.TestCase):
         threading.Thread(target=server.serve_udp, args=(sock,), daemon=True).start()
         try:
             client_args = argparse.Namespace(host="127.0.0.1", port=port, transport="udp", loss=loss, kbps=2000,
-                                             decode_ms=decode_ms, no_prefetch=False, frames=0, seconds=seconds,
+                                             decode_ms=decode_ms, no_prefetch=False, prefetch=prefetch, frames=0,
+                                             seconds=seconds,
                                              input_demo=False, rtt_ms=rtt_ms, early_kb=early_kb, loss_up=0,
                                              h264p=h264p, loss_burst_ms=0, no_req_dup=not req_dup,
                                              old_retry=False, req_dup_ms=6)
@@ -248,13 +249,16 @@ class UdpEndToEndTest(unittest.TestCase):
 
     def test_h264p_redundancy_under_loss(self):
         # v1.0: último pedaço em dobro (servidor) e pedido em dobro (PSP): a
-        # corrente continua inteira.
-        summary, _, _ = self.h264p_with_loss()
-        self.assertGreater(summary["frames"], 30, summary)
-        self.assertEqual(summary["broken"], 0, summary)
-        self.assertLessEqual(summary["idr_requests"], 2, summary)
-        self.assertGreater(summary["req_dups"], 0, summary)
-        self.assertGreater(self.session.transport.redundant_chunks, 0)
+        # corrente continua inteira, com o prefetch=auto (desligado nos frames
+        # P, o padrão) e ligado.
+        for prefetch in ("auto", "on"):
+            with self.subTest(prefetch=prefetch):
+                summary, _, _ = self.h264p_with_loss(prefetch=prefetch)
+                self.assertGreater(summary["frames"], 30, summary)
+                self.assertEqual(summary["broken"], 0, summary)
+                self.assertLessEqual(summary["idr_requests"], 2, summary)
+                self.assertGreater(summary["req_dups"], 0, summary)
+                self.assertGreater(self.session.transport.redundant_chunks, 0)
 
     def test_h264p_old_eboot_gets_intra(self):
         # EBOOT sem PS_CAP_H264P (v0.5-v0.8): todo frame IDR, sem AUD
