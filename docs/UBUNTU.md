@@ -3,12 +3,15 @@
 Vale para o Ubuntu 22.04 e 24.04 (e mais novos), e para quem vem do Ubuntu
 ou do Debian: Debian 12+, Linux Mint 21+, Pop!_OS, Zorin, elementary OS.
 
-O que foi testado num Ubuntu 24.04: os pacotes (pelo próprio `apt`), o
-`--check`, os testes automáticos (também com o Python 3.10 do 22.04), o
-servidor com a fonte de teste, o EBOOT compilado com o pspdev do Ubuntu e
-rodando no emulador. A captura da tela de verdade, o som e os controles
-foram testados num PSP-3000 com o Fedora; no Ubuntu, são os mesmos
-componentes (GStreamer, PipeWire, uinput).
+O que foi testado no Ubuntu (sem tela: contêineres e o CI):
+- o pacote `.deb` instalado pelo `apt` no 22.04 e no 24.04 limpos, com um
+  stream para o PSP de teste em JPEG e em H.264 com frames P e a interface web;
+- o `--check` e os testes automáticos (também com o Python 3.10 do 22.04);
+- o EBOOT compilado com o pspdev do Ubuntu e rodando no emulador.
+
+A captura da tela de verdade, o som e os controles foram testados num
+PSP-3000 com o Fedora; no Ubuntu, são os mesmos componentes (GStreamer,
+PipeWire, uinput).
 
 ## Resumo
 
