@@ -987,6 +987,10 @@ atual: um frame por vez, sem nada chegando durante o decode e sem fila, e o
 ritmo depende só do ciclo pedido -> frame -> decode, que no PSP-3000 coube
 em ~16,7 ms.
 
+(**v1.1:** esse "sem prefetch" de ~60 fps era, por acaso, o pedido feito
+quando o decode começa, por um sinal velho num semáforo; sem ele, o
+`prefetch=0` dá ~45 fps. Ver a seção "45 ou 60 fps conforme a história".)
+
 **A simulação errou aqui** [SIM, não bateu com o PSP]: ela previa ~30 fps
 sem prefetch. No modelo, o ciclo (6 ms fixos de ida e volta + espera pela
 captura do clipe + encode + transferência a 450 KB/s + 10,6 ms de decode)
@@ -1013,12 +1017,53 @@ no JPEG e no H.264 só com quadros completos, onde ele rende 1,2-1,7x de FPS
 START + X inverte durante o stream, e o overlay diz quando o próximo é
 pedido.
 
+#### Prefetch com frames P: 45 ou 60 fps conforme a história (v1.1) [PSP relato + SIM]
+
+**Relato:** no Hollow Knight, com `prefetch=0`, perto de 45 fps; ligando e
+desligando o prefetch (SELECT + START + X), vai para 60 fps e fica.
+
+**Dois erros, achados com isso:**
+
+- **`prefetch=0` dependia de um sinal velho.** Sem prefetch, a thread de
+  rede esperava o "decode terminou" num semáforo binário. Um sinal sobrava
+  quando dois frames eram publicados de uma vez (um frame completo que
+  esperava o reenvio de um mais velho), ou ao ligar o prefetch (que sinaliza
+  para destravar a espera). Com o sinal sobrando, cada pedido saía um frame
+  antes: quando o decode pegava o frame atual, não depois de exibir. Era
+  esse o modo de ~60 fps lisos; sem o sinal, depois de exibir, ~45 fps. Os
+  relatos "liso e perto de 60 com o prefetch desligado" (v1.0) eram esse
+  modo, por acaso.
+- **Com prefetch, um pedido fantasma.** A thread de decode soltava o
+  "pedido adiado" (`ask_deferred = 0`) antes de contar o pedido que fazia
+  (`dec_asks++`). A thread de rede, que desde a v1.0 olha a cada 1 ms nessa
+  espera, podia ver "ninguém pediu" no meio e pedir o mesmo frame de novo.
+  O servidor juntava os dois num frame só, o PSP ficava contando um pedido a
+  mais, o frame seguinte não era pedido, e o stream esperava o RTO (>= 30
+  ms). Antes da v1.0, o pedido repetido falso fazia o mesmo. Era o engasgo
+  do prefetch com frames P.
+
+Na simulação, depois das correções (16 s, mesmo cenário das tabelas acima):
+
+| | sem perda: FPS / engasgos / repetidos | 1% de perda: FPS / engasgos / repetidos |
+|---|---|---|
+| antes: `auto` com o pedido fantasma | 50-51 / 3-4 / 15-39 | 53,8 / 2 / 17 |
+| `auto`: pede quando o decode começa | 55,6 / 0 / 0 | 53,7 / 1 / 0 |
+| `1`: e também antes do fim do frame | 59,5 / 1 / 0 | 58,9 / 0 / 2 |
+| `0`: depois de exibir | 30,8 / 0 / 0 | 30,4 / 1 / 0 |
+
+O simulador é pessimista com a rede (ida e volta fixa de 6 ms e 450 KB/s):
+nele o `0` dá 30 fps, e no PSP deu 45. **No PSP, o modo de ~60 fps lisos foi
+o "pede quando o decode começa"**, e ele vira o `auto` (padrão) de
+propósito: sem semáforo, sem pedido antecipado no meio de um frame. O `1`,
+agora sem o pedido fantasma, foi melhor na simulação; fica para medir no
+PSP (SELECT + START + X alterna auto, sim e não).
+
 #### Som (v1.1) [PC + EMU]
 
-**Formato:** IMA ADPCM do WAV (o `adpcmenc` do GStreamer), 32 kHz estéreo,
-blocos de 641 amostras por canal (20,03 ms) = 648 bytes + 20 de cabeçalho +
-28 de UDP/IP: **~34 KB/s e 50 pacotes/s** no ar. Em mono ou a 22,05 kHz,
-metade disso ou menos.
+**Formato (primeira versão):** IMA ADPCM do WAV (o `adpcmenc` do
+GStreamer), 32 kHz estéreo, blocos de 641 amostras por canal (20,03 ms) = 648
+bytes + 20 de cabeçalho + 28 de UDP/IP: **~34 KB/s e 50 pacotes/s** no ar.
+Em mono ou a 22,05 kHz, metade disso ou menos. (Depois: 44,1 kHz, abaixo.)
 
 **Fidelidade [PC]:** num sinal de teste (senos de 440 + 3000 Hz num canal,
 220 Hz no outro), SNR de 34 dB contra o original. O decoder do PSP
@@ -1046,6 +1091,42 @@ buffer desce para 30 ms. O vídeo sai em ~30-45 ms, então o som deve chegar
 um pouco depois da imagem. Para medir no PSP: o alvo e o "vazio" do
 overlay depois de alguns minutos de jogo, e se o FPS do vídeo muda com o som
 ligado.
+
+#### Som no PSP-3000: zumbido "de abelha" (v1.1) [PSP relato + PC]
+
+**Relato:** o som funcionou, mas com um zumbido que parece som de abelha.
+
+**Causa (no código):** a thread de som tinha um buffer de saída só. No PSP,
+o `sceAudioSRCOutputBlocking` volta quando o pedaço entra na fila, e o
+hardware lê o buffer (DMA) enquanto toca; a thread já escrevia o pedaço
+seguinte por cima. O fim de cada pedaço de 256 amostras (8 ms a 32 kHz)
+saía estragado: um defeito periódico de ~125 Hz, a frequência de um
+zumbido. No PPSSPP não aparece: ele copia as amostras na hora da chamada.
+O `pspaudiolib` do pspsdk usa dois buffers pelo mesmo motivo. **Correção:**
+dois buffers alternados, e cada pedaço sai do cache para a RAM
+(`sceKernelDcacheWritebackRange`) antes de ir para o DMA. A confirmar no
+PSP.
+
+**Taxa e encoder [PC]:** 10 s de duas músicas de jogo (`triTenkemusikk.wav`
+e `Monstertruck_intro`, do opentri), SNR contra o original na mesma taxa,
+decodificado pelo `ima.c` do PSP compilado no PC (blocos de 1024 bytes para
+comparar com o ffmpeg, que só aceita potências de 2):
+
+| | adpcmenc (o do servidor) | ffmpeg, trellis 8 | ffmpeg, trellis 16 |
+|---|---|---|---|
+| tri, 32 kHz | 32,0 dB | 34,1 | 34,8 |
+| tri, 44,1 kHz | 32,3 | 33,8 | 35,6 |
+| Monstertruck, 32 kHz | 27,8 | 30,1 | 30,7 |
+| Monstertruck, 44,1 kHz | 29,6 | 32,2 | 33,0 |
+
+- **44,1 kHz passa a ser o padrão:** é a taxa do hardware do PSP, então o
+  `sceAudioSRC` não reamostra (a conversão fica no `audioresample` do PC),
+  os agudos vão até 22 kHz, e a fidelidade sobe 0,3-1,8 dB. Custa ~12 KB/s
+  (~46 KB/s no total).
+- Um encoder com trellis (busca a melhor sequência de nibbles em vez da
+  mais próxima a cada amostra) ganharia mais 2-3 dB, com o mesmo decoder no
+  PSP. Fica para depois: o `adpcmenc` não tem trellis, e o do ffmpeg exige
+  blocos de potência de 2 e um processo à parte.
 
 ## 1. Tamanho de frame [PC]
 

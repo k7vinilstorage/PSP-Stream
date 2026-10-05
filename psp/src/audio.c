@@ -5,6 +5,14 @@
  * sceAudioSRC, o canal com conversão de taxa (22,05-48 kHz). A saída
  * bloqueante dá o ritmo: o relógio é o do PSP.
  *
+ * Dois buffers de saída, alternados: no PSP, o sceAudioSRCOutputBlocking
+ * volta quando o pedaço entra na fila, e o hardware o lê (DMA) enquanto toca.
+ * Com um buffer só, o pedaço seguinte era escrito por cima do que ainda
+ * tocava, e o fim de cada pedaço saía estragado: um zumbido de ~125 Hz (um a
+ * cada 8 ms), "de abelha", no PSP-3000. O PPSSPP copia na hora da chamada,
+ * então lá não aparecia. Antes de entregar, o pedaço sai do cache para a RAM,
+ * que é de onde o DMA lê.
+ *
  * O anel absorve o vai e vem do Wi-Fi: começa a tocar quando tem o alvo
  * (40 ms), e o alvo se ajusta sozinho: +10 ms cada vez que o anel esvazia,
  * -5 ms a cada 10 s sem faltar, entre 30 e 120 ms. Pacote perdido vira
@@ -36,7 +44,7 @@
 static int16_t ring[RING_FRAMES * 2];
 static unsigned r_wr, r_rd; /* contadores livres, em frames; com o lock */
 static int16_t decoded[MAX_BLOCK_SAMPLES * 2];
-static int16_t out[OUT_SAMPLES * 2] __attribute__((aligned(64)));
+static int16_t out[2][OUT_SAMPLES * 2] __attribute__((aligned(64)));
 
 static SceUID lock_sema = -1, thid = -1;
 static volatile int running, enabled;
@@ -133,8 +141,8 @@ void audio_packet(const uint8_t *pkt, int len)
     unlock();
 }
 
-/* Enche `out` com o próximo pedaço (ou silêncio). Com o lock. */
-static void fill_out(unsigned now)
+/* Enche `buf` com o próximo pedaço (ou silêncio). Com o lock. */
+static void fill_out(int16_t *buf, unsigned now)
 {
     unsigned level = r_wr - r_rd;
     int min_target = ms_frames(TARGET_MIN_MS);
@@ -147,7 +155,7 @@ static void fill_out(unsigned now)
         calm_since = now;
     }
     if (!playing) {
-        memset(out, 0, sizeof(out));
+        memset(buf, 0, OUT_SAMPLES * 4);
         return;
     }
     if (level > (unsigned)(target + ms_frames(EXTRA_MS))) {
@@ -158,12 +166,12 @@ static void fill_out(unsigned now)
     unsigned n = level < OUT_SAMPLES ? level : OUT_SAMPLES;
     for (unsigned i = 0; i < n; i++) {
         unsigned k = (r_rd + i) & (RING_FRAMES - 1);
-        out[2 * i] = ring[2 * k];
-        out[2 * i + 1] = ring[2 * k + 1];
+        buf[2 * i] = ring[2 * k];
+        buf[2 * i + 1] = ring[2 * k + 1];
     }
     r_rd += n;
     if (n < OUT_SAMPLES) { /* o anel esvaziou: espera encher de novo, com um alvo maior */
-        memset(out + 2 * n, 0, (OUT_SAMPLES - n) * 4);
+        memset(buf + 2 * n, 0, (OUT_SAMPLES - n) * 4);
         underruns++;
         playing = 0;
         target += ms_frames(TARGET_UP_MS);
@@ -178,7 +186,7 @@ static void fill_out(unsigned now)
 
 static int audio_thread(SceSize args, void *argp)
 {
-    int reserved = 0;
+    int reserved = 0, cur = 0;
     while (running) {
         lock();
         int want = enabled ? rate : 0;
@@ -203,9 +211,13 @@ static int audio_thread(SceSize args, void *argp)
             continue;
         }
         lock();
-        fill_out(sceKernelGetSystemTimeLow());
+        fill_out(out[cur], sceKernelGetSystemTimeLow());
         unlock();
-        sceAudioSRCOutputBlocking(PSP_AUDIO_VOLUME_MAX, out); /* volta quando o canal aceita mais */
+        sceKernelDcacheWritebackRange(out[cur], sizeof(out[cur]));
+        /* volta quando o canal aceita mais; este buffer continua tocando,
+         * então o próximo pedaço vai no outro */
+        sceAudioSRCOutputBlocking(PSP_AUDIO_VOLUME_MAX, out[cur]);
+        cur ^= 1;
     }
     if (reserved)
         sceAudioSRCChRelease();

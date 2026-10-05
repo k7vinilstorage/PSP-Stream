@@ -3,11 +3,11 @@
 Pipeline (GStreamer, em processo):
 
   pulsesrc (monitor da saída padrão do PipeWire/PulseAudio) ! audioconvert
-          ! audioresample ! S16LE, 32 kHz, estéreo ! adpcmenc (IMA/DVI)
+          ! audioresample ! S16LE, 44,1 kHz, estéreo ! adpcmenc (IMA/DVI)
           ! appsink
 
-IMA ADPCM: 4 bits por amostra (32 kHz estéreo = 256 kbit/s, ~33 KB/s com
-os cabeçalhos), codificado em C pelo adpcmenc. No PSP, decodificar é umas
+IMA ADPCM: 4 bits por amostra (44,1 kHz estéreo = 353 kbit/s, ~46 KB/s
+com os cabeçalhos), codificado em C pelo adpcmenc. No PSP, decodificar é umas
 poucas somas por amostra no CPU, sem o Media Engine (que é do H.264). Cada
 bloco começa com a amostra e o passo do preditor, então decodifica sozinho:
 um pacote perdido vira só aquele pedaço de silêncio. MP3 ou ATRAC pesariam
@@ -34,7 +34,10 @@ log = logging.getLogger("pspstream.audio")
 Gst.init(None)
 
 RATES = (22050, 32000, 44100, 48000)  # o sceAudioSRC do PSP aceita estas (e outras menores)
-DEFAULT_RATE = 32000
+# 44,1 kHz é a taxa do hardware do PSP: o sceAudioSRC não reamostra (a
+# conversão fica no audioresample do PC, de boa qualidade). Numa música de
+# jogo, 0,3-1,8 dB a mais de fidelidade que 32 kHz, e agudos até 22 kHz.
+DEFAULT_RATE = 44100
 PACKET_MS = 20
 MAX_BLOCK = 1400  # um pacote UDP com o cabeçalho cabe em 1500 bytes
 

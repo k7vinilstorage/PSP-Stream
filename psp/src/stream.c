@@ -6,10 +6,11 @@
  * sempre pega o mais novo.
  *
  * Com prefetch, o próximo pedido sai assim que um frame chega, antes do
- * decode: rede e decode trabalham ao mesmo tempo. Sem prefetch, o próximo é
- * pedido só depois de exibir o atual. prefetch=auto (padrão): sem prefetch
- * com frames P (um frame por vez, ritmo regular: o que ficou liso no PSP),
- * com prefetch no resto.
+ * decode: rede e decode trabalham ao mesmo tempo. Sem prefetch (prefetch=0),
+ * o próximo é pedido só depois de exibir o atual. Com frames P e o padrão
+ * prefetch=auto, o próximo é pedido quando o decode pega o atual, nunca no
+ * meio de um frame chegando (pedido antecipado): ~60 fps lisos no PSP-3000
+ * (Hollow Knight). O pedido antecipado com frames P (prefetch=1) engasgava.
  *
  * Frames P (H.264 IPPP, o pacote começa com um AUD): cada frame é referência
  * do seguinte, então nenhum é descartado. Os prontos ficam numa fila, em
@@ -247,16 +248,33 @@ static int send_new_req(uint32_t *want)
     return send_req(PS_REQ_FRAME, &nk);
 }
 
-/* definida no fim do arquivo (depende de pmode, que o stream descobre) */
-static int prefetch_on(void);
+static int prefetch_on(void)
+{
+    return g_prefetch != 0; /* 1 ou PREFETCH_AUTO */
+}
+
+/* Frames que a thread de decode ainda não devolveu (prontos ou decodificando). */
+static int frames_out(void)
+{
+    lock();
+    int n = 0;
+    for (int i = 0; i < NUM_SLOTS; i++)
+        n += state[i] == SLOT_READY || state[i] == SLOT_DECODING;
+    unlock();
+    return n;
+}
 
 static void wait_want(void)
 {
-    /* Sem prefetch: espera o decode terminar antes de pedir o próximo. */
-    while (*g_running && !stopping && !prefetch_on()) {
-        SceUInt timeout = 100 * 1000;
-        if (sceKernelWaitSema(want_sema, 1, &timeout) == 0)
-            return;
+    /* Sem prefetch: espera o decode devolver todos os frames antes de pedir o
+     * próximo. O want_sema só acorda esta espera: ele é binário e podia
+     * guardar um sinal velho (um par de frames publicado de uma vez, ou
+     * ligar e desligar o prefetch com SELECT + START + X), e aí o pedido saía
+     * antes de exibir. No PSP-3000, isso fazia o mesmo prefetch=0 dar ~45 ou
+     * ~60 fps conforme a história; quem decide agora é o estado dos slots. */
+    while (*g_running && !stopping && !prefetch_on() && frames_out() > 0) {
+        SceUInt timeout = 20 * 1000;
+        sceKernelWaitSema(want_sema, 1, &timeout);
     }
 }
 
@@ -782,7 +800,9 @@ static int net_thread_udp(void)
 
         /* ---- nada chegando ---- */
         if (as[0].idx < 0 && as[1].idx < 0) {
-            if (pending == 0 && !ask_deferred) { /* ninguém pediu o próximo (ex.: desistiu de um frame) */
+            /* ninguém pediu o próximo (ex.: desistiu de um frame); dec_asks: um
+             * pedido da thread de decode que esta volta ainda não contou */
+            if (pending == 0 && !ask_deferred && dec_asks == dec_seen) {
                 ASK(PS_REQ_FRAME);
                 continue;
             }
@@ -791,7 +811,7 @@ static int net_thread_udp(void)
              * mais, e contava como perda no overlay ("repet"). Só volta logo
              * para ver o pedido dela (dec_asks) e marcar a repetição a tempo:
              * sem pacote chegando, o select() dormiria até o teto. */
-            if (ask_deferred) {
+            if (ask_deferred || dec_asks != dec_seen) { /* o pedido do decode ainda vai sair, ou já saiu e a próxima volta conta */
                 if (DEFER_POLL_US < timeout)
                     timeout = DEFER_POLL_US;
             } else {
@@ -1027,7 +1047,9 @@ static int net_thread_udp(void)
          * buraco num mais velho (o seguinte depende dele), nem com frame
          * esperando o decode (quem pede é a thread de decode). */
         asm_t *older = (a == &as[1]) ? &as[0] : &as[1];
-        int blocked = pmode && ((older->idx >= 0 && older->frame_no < a->frame_no) || ready_n > 0);
+        /* Frames P: só com prefetch=1 (no auto, o próximo é pedido quando o
+         * decode pega este; antecipar no meio do frame engasgava no PSP). */
+        int blocked = pmode && (g_prefetch != 1 || (older->idx >= 0 && older->frame_no < a->frame_no) || ready_n > 0);
         if (a->idx >= 0 && a->got < a->count && a->got == a->hi && !blocked && prefetch_on() && g_early &&
             !a->asked_next && pending == 0 &&
             (int)slots[a->idx].size - a->base - a->got * PS_CHUNK_PAYLOAD <= early_threshold()) {
@@ -1105,17 +1127,25 @@ ps_frame_t *stream_take(unsigned timeout_us)
     }
     int more = ready_n > 0;
     int ask = ask_deferred && !more;
-    if (ask)
-        ask_deferred = 0;
     unlock();
     if (more) /* o semáforo é binário: avisa de novo que ainda há prontos */
         sceKernelSignalSema(ready_sema, 1);
-    if (ask && !net_error && !stopping) { /* frames P: o próximo chega enquanto este decodifica */
-        uint32_t want;
-        dec_ask_t = now_us();
-        send_new_req(&want);
-        dec_ask_frame = want;
-        dec_asks++;
+    if (ask) { /* frames P: o próximo chega enquanto este decodifica */
+        /* Ordem: o pedido é contado (dec_asks) ANTES de ask_deferred voltar a
+         * 0. Ao contrário, a thread de rede (que olha a cada 1 ms) podia ver
+         * "ninguém pediu" no meio e pedir o mesmo frame de novo: ficava um
+         * pedido fantasma, o frame seguinte não era pedido, e o stream
+         * esperava o RTO (>= 30 ms). Era o engasgo do prefetch com frames P. */
+        if (!net_error && !stopping) {
+            uint32_t want;
+            dec_ask_t = now_us();
+            send_new_req(&want);
+            dec_ask_frame = want;
+            dec_asks++;
+        }
+        lock();
+        ask_deferred = 0;
+        unlock();
     }
     return idx >= 0 ? &slots[idx] : NULL;
 }
@@ -1199,14 +1229,14 @@ int stream_send_input(void)
     return send_req(0, NULL);
 }
 
-static int prefetch_on(void)
-{
-    return g_prefetch == PREFETCH_AUTO ? !pmode : g_prefetch;
-}
-
 int stream_prefetch_on(void)
 {
     return prefetch_on();
+}
+
+int stream_p_mode(void)
+{
+    return pmode;
 }
 
 void stream_set_prefetch(int mode)

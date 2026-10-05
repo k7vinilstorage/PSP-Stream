@@ -8,8 +8,8 @@ de outra versão do protocolo é recusado com aviso no log.
 
 - **Som do PC no PSP.** O servidor captura o que sai nas caixas (monitor da
   saída padrão do PipeWire/PulseAudio, `pulsesrc`), codifica em IMA ADPCM
-  (`adpcmenc`, 4 bits por amostra) e empurra um pacote UDP a cada 20 ms: 32
-  kHz estéreo, ~34 KB/s, ~2% de um núcleo no PC. O PSP decodifica no CPU
+  (`adpcmenc`, 4 bits por amostra) e empurra um pacote UDP a cada 20 ms: 44,1
+  kHz estéreo (a taxa do PSP), ~46 KB/s, ~2% de um núcleo no PC. O PSP decodifica no CPU
   (somas e deslocamentos, sem o Media Engine do H.264) e toca pelo
   `sceAudioSRC`, com um buffer que se ajusta sozinho entre 30 e 120 ms.
   Pacote perdido vira 20 ms de silêncio; o vídeo e o som não dependem um do
@@ -17,8 +17,34 @@ de outra versão do protocolo é recusado com aviso no log.
 - **Liga e desliga pelo PSP:** `audio=1/0` no `server.txt`, item "Som do PC"
   na tela de configuração e SELECT + START + cima durante o stream.
   Desligado, o PSP para de pedir som (`wflags & 0x10`) e o PC para de mandar.
+- **Zumbido "de abelha" no som (primeiro teste no PSP-3000):** a thread de
+  som reaproveitava o único buffer de saída enquanto o hardware ainda o
+  tocava (a saída bloqueante volta quando o pedaço entra na fila, e o DMA lê
+  depois), estragando o fim de cada pedaço de 8 ms: ~125 Hz. Agora são dois
+  buffers alternados, e cada pedaço sai do cache antes. No PPSSPP não
+  aparecia (ele copia na hora da chamada).
+- Som a **44,1 kHz** por padrão (era 32 kHz): é a taxa do hardware do PSP,
+  então ele não reamostra; numa música de jogo, 0,3-1,8 dB a mais de
+  fidelidade e agudos até 22 kHz, por ~12 KB/s a mais.
 - O overlay mostra o som (buffer, alvo, perdidos, vazio, pulos), e a linha
   do servidor, os KB/s de som.
+- **Frames P pedidos quando o decode começa (`prefetch=auto`).** O relato
+  "ligar e desligar o prefetch leva de ~45 a ~60 fps" (Hollow Knight) achou
+  dois erros:
+  - `prefetch=0` esperava o decode por um semáforo binário que podia guardar
+    um sinal velho (ligar/desligar o prefetch, ou dois frames publicados de
+    uma vez). Com o sinal, o próximo saía quando o decode começava (~60
+    fps); sem ele, depois de exibir (~45 fps). Agora quem decide é o estado
+    dos frames, e `0` é sempre "depois de exibir".
+  - Com prefetch e frames P, a thread de decode soltava o "pedido adiado"
+    antes de contar o pedido que fez; a thread de rede (que olha a cada 1
+    ms) podia pedir o mesmo frame de novo, e o pedido fantasma travava o
+    seguinte até o RTO. Era o engasgo do prefetch com frames P.
+  O padrão `auto` agora é o modo bom, de propósito: com frames P, o próximo
+  é pedido quando o decode pega o atual, sem pedido antecipado no meio do
+  frame. `1` acrescenta o pedido antecipado (na simulação, ~59 fps contra
+  ~55 do `auto`; no PSP, a medir). SELECT + START + X alterna auto, sim e
+  não.
 - Servidor: `--no-audio`, `--audio-device` (`monitor`, `test` ou uma fonte do
   PipeWire), `--audio-rate`, `--audio-mono`.
 - Só pelo UDP (o padrão).

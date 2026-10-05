@@ -28,9 +28,9 @@ PSP                                   PC
   menos vezes e recebe sempre o frame mais atual.
 - Pedir antes de decodificar ("prefetch") sobrepõe rede e decode. Nesse modo,
   quem limita o FPS é o mais lento dos dois, não a soma. Com `prefetch=auto`
-  (padrão), o PSP faz isso no JPEG e no H.264 só com quadros completos; com
-  frames P, pede o próximo só depois de exibir o atual (ritmo regular, o que
-  ficou liso no PSP-3000).
+  (padrão), o PSP pede antes do fim do frame que chega no JPEG e no H.264 só
+  com quadros completos; com frames P, pede o próximo quando o decode pega o
+  atual (~60 fps lisos no PSP-3000). `prefetch=0` pede depois de exibir.
 
 ## PSP -> PC: pedido (52 bytes)
 
@@ -99,9 +99,13 @@ Regras, porque cada P depende do anterior:
   codificado), e numera em sequência.
 - O PSP decodifica todos, em ordem: prontos ficam numa fila, e um frame
   completo que chega antes de um mais velho incompleto espera o reenvio dele.
-  Com prefetch, o próximo é pedido quando o decode pega o último da fila
-  (nunca vários frames adiantados); sem prefetch (o padrão com frames P),
-  depois de exibir o atual.
+  O próximo é pedido quando o decode pega o último da fila (nunca vários
+  frames adiantados); com `prefetch=1`, também antes do fim do frame que
+  chega; com `prefetch=0`, depois de exibir o atual. O pedido feito pela
+  thread de decode é contado antes de o "pedido adiado" ser solto: na ordem
+  inversa, a thread de rede via "ninguém pediu" e pedia o mesmo frame de
+  novo, o pedido fantasma travava o seguinte até o RTO (o engasgo do
+  prefetch com frames P até a v1.0).
 - Buraco na numeração, frame abandonado depois de 3 NACKs ou erro de decode:
   os P seguintes ficam sem referência. O PSP pula esses P e manda `IDR`
   (0x20) em todo pedido até decodificar um IDR. O servidor ignora pedidos de
@@ -251,15 +255,16 @@ nunca recebe som.
 | 0 | char[4] | magic | `PSA1` |
 | 4 | u32 | seq | +1 por pacote; um buraco é um pacote perdido |
 | 8 | u32 | pos | amostra (por canal) do início do bloco |
-| 12 | u16 | rate | Hz: 22050, 32000 (padrão), 44100 ou 48000 |
+| 12 | u16 | rate | Hz: 22050, 32000, 44100 (padrão, a do PSP) ou 48000 |
 | 14 | u8 | channels | 1 ou 2 |
 | 15 | u8 | codec | `1` = IMA ADPCM, bloco do WAV (o `adpcmenc` do GStreamer, layout dvi) |
-| 16 | u16 | samples | amostras por canal no bloco (641 a 32 kHz: 1 + 8 x 80) |
+| 16 | u16 | samples | amostras por canal no bloco (881 a 44,1 kHz: 1 + 8 x 110) |
 | 18 | u16 | reservado | 0 |
 | 20 | | bloco | por canal, 4 bytes (1ª amostra int16, índice do passo, 0); depois grupos de 4 bytes (8 amostras) alternando os canais, nibble baixo primeiro |
 
 Cada bloco decodifica sozinho. O PSP decodifica num anel e toca pelo
-`sceAudioSRC` (canal com conversão de taxa), em pedaços de 256 amostras. O
+`sceAudioSRC` (canal com conversão de taxa), em pedaços de 256 amostras,
+alternando dois buffers (o hardware lê o pedaço enquanto toca). O
 anel começa a tocar com 40 ms e se ajusta: +10 ms a cada vez que esvazia,
 -5 ms a cada 10 s sem faltar, entre 30 e 120 ms. Pacote perdido (até 5
 seguidos) vira silêncio do mesmo tamanho; um buraco maior, ou o `seq`

@@ -56,8 +56,8 @@ static const char *const help[IT_COUNT] = {
     "Troca de imagem no vblank: sem rasgo, +0 a 16 ms",
     "Mostra FPS, KB e tempos no canto da tela",
     "Botoes do PSP viram controle/teclado no PC",
-    "Toca o som do PC (~33 KB/s). No stream: SELECT+START+cima",
-    "auto = sim, menos com frames P (la: um frame por vez, liso)",
+    "Toca o som do PC (~46 KB/s). No stream: SELECT+START+cima",
+    "auto: frames P pedidos quando o decode comeca. 0: depois de exibir",
     "Pede o proximo frame antes do fim do atual (auto = medido)",
     "auto mede select e consulta no inicio e usa o mais rapido",
     "Grava o server.txt e conecta (START faz o mesmo)",
@@ -260,7 +260,7 @@ static void value_text(const ps_config_t *cfg, int item, char *out, int len)
         snprintf(out, len, "%s", yes(cfg->audio));
         break;
     case IT_PREFETCH:
-        snprintf(out, len, "%s", cfg->prefetch == PREFETCH_AUTO ? "auto (nao com frames P)" : yes(cfg->prefetch));
+        snprintf(out, len, "%s", cfg->prefetch == PREFETCH_AUTO ? "auto (recomendado)" : yes(cfg->prefetch));
         break;
     case IT_EARLY:
         if (cfg->early_kb < 0)

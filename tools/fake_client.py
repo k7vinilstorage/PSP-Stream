@@ -146,7 +146,7 @@ class FakePSP:
                       "last_seq": None}  # --audio: pacotes de som recebidos
         self.req_dups = 0          # pedidos repetidos depois de REQ_DUP_S
         self.send_lock = threading.Lock()
-        self.want = threading.Event()
+        self.out_n = 0             # frames publicados que o "decode" ainda não devolveu (sem prefetch)
         self.dropped = 0
         self.error = None
         self.running = True
@@ -178,10 +178,13 @@ class FakePSP:
             return
         self._raw_send(data)
 
+    def prefetch_mode(self):
+        return "off" if self.args.no_prefetch else self.args.prefetch
+
     def prefetch_on(self):
-        """prefetch=auto no PSP (padrão): sem prefetch com frames P, com no resto."""
-        mode = "off" if getattr(self.args, "no_prefetch", False) else getattr(self.args, "prefetch", "auto")
-        return mode == "on" or (mode == "auto" and not self.pmode)
+        """prefetch=auto (padrão) e 1: ligado. No auto, frames P são pedidos quando
+        o "decode" pega o atual, sem pedido antecipado (stream.c)."""
+        return self.prefetch_mode() != "off"
 
     def on_audio(self, data):
         seq, _, rate, channels, codec, samples, block = protocol.unpack_audio(data)
@@ -249,15 +252,17 @@ class FakePSP:
             self.last_pub = no
             if not self.pmode:
                 self.dropped += len(self.ready)
+                self.out_n -= len(self.ready)
                 self.ready.clear()
             self.ready.append(frame)
+            self.out_n += 1
             self.cond.notify_all()
             defer = ask and self.pmode and self.prefetch_on()
             if defer:
                 self.ask_deferred = True
-        if not self.prefetch_on():
-            self.want.wait()
-            self.want.clear()
+            # sem prefetch: o próximo só depois de o "decode" devolver todos (wait_want no stream.c)
+            while not self.prefetch_on() and self.out_n > 0 and self.running and not self.error:
+                self.cond.wait(0.02)
         return ask and not defer
 
     def ping_phase(self, count=8):
@@ -396,11 +401,13 @@ class FakePSP:
                     else:
                         give_up(a)
                 if not asm:
-                    if not req_q and not self.ask_deferred:
+                    with self.cond:
+                        nobody = not req_q and not self.ask_deferred and not self.dec_asks
+                    if nobody:
                         ask(REQ_FRAME)
                         continue
                     left = rtt.timeout(RTO_MIN_S, RTO_MAX_S) - (time.monotonic() - last_req)
-                    if self.ask_deferred and not self.args.old_retry:
+                    if (self.ask_deferred or self.dec_asks) and not self.args.old_retry:
                         # o decode ainda vai pedir: não há pedido para repetir; volta
                         # logo para ver o pedido dele (DEFER_POLL_US no stream.c)
                         left = DEFER_POLL_S
@@ -540,7 +547,9 @@ class FakePSP:
                         a["deadline"] = d
                 # com buraco, não antecipa: o próximo entraria na fila na frente do reenvio
                 # (frames P: nem com buraco num mais velho, nem com frame esperando o decode)
-                blocked = self.pmode and (any(x["no"] < no for x in asm) or self.ready)
+                # frames P: pedido antecipado só com --prefetch on (no auto, pede quando o decode pega)
+                blocked = self.pmode and (self.prefetch_mode() != "on" or any(x["no"] < no for x in asm)
+                                          or self.ready)
                 if (self.prefetch_on() and (auto or fixed) and not a["asked"] and not req_q
                       and not blocked and len(a["have"]) == a["hi"]
                       and len(a["buf"]) - a["base"] - len(a["have"]) * P <= early_bytes()):
@@ -607,9 +616,7 @@ class FakePSP:
                 if not self.ready:
                     continue
                 frame_no, send_ts, jpeg, t_req, t_recv, t_first, idle = self.ready.pop(0)
-                ask = self.ask_deferred and not self.ready
-                if ask:
-                    self.ask_deferred = False
+                ask = self.ask_deferred and not self.ready  # volta a False só depois de contar o pedido
                 kind = h264_packet_kind(jpeg)
                 skip = kind == 1 and self.need_idr_from and frame_no >= self.need_idr_from
                 if kind == 2 and self.need_idr_from and frame_no >= self.need_idr_from:
@@ -622,12 +629,15 @@ class FakePSP:
                     self.send_req(REQ_FRAME)
                 else:
                     want = self.send_new_req()
-                with self.cond:
+                with self.cond:  # como no stream.c: conta o pedido, depois solta o adiado
                     self.dec_asks.append((t_ask, want))
+                    self.ask_deferred = False
             if kind:
                 if skip:
                     self.skipped += 1
-                    self.want.set()
+                    with self.cond:
+                        self.out_n -= 1
+                        self.cond.notify_all()
                     continue
                 if kind == 1 and frame_no != last_decoded + 1:
                     self.broken += 1  # P sem o frame anterior: imagem errada no PSP
@@ -645,7 +655,8 @@ class FakePSP:
                                  clamp_u16((shown - t_recv) * 10000), clamp_u16(self.args.decode_ms * 10),
                                  clamp_u16(max(0.0, t_first - t_req) * 10000), clamp_u16((t_recv - t_first) * 10000),
                                  idle)
-            self.want.set()
+                self.out_n -= 1
+                self.cond.notify_all()
         elapsed = time.monotonic() - start
         self.running = False
         self.sock.close()

@@ -6,7 +6,7 @@
  *   wifi_profile=1
  *   decoder=auto     (auto | hw | sw)
  *   vsync=1
- *   prefetch=auto    (auto = sim, menos com frames P | 1 | 0)
+ *   prefetch=auto    (auto = sim; frames P pedidos quando o decode começa | 1 | 0)
  *   overlay=1
  *   rcvbuf=64        (KB)
  *   bench=0          (1 = mede decode hw x sw no primeiro frame)

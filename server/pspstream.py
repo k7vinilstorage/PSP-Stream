@@ -612,8 +612,8 @@ def parse_args(argv=None):
     p.add_argument("--audio-device", default="monitor", metavar="NOME",
                    help="som: fonte do PipeWire/PulseAudio (pactl list short sources); monitor (padrão) = o que "
                         "sai nas caixas; test = tom de 440 Hz")
-    p.add_argument("--audio-rate", type=int, default=32000, choices=[22050, 32000, 44100, 48000],
-                   help="som: taxa (padrão %(default)s Hz; IMA ADPCM estéreo ~ taxa/1000 KB/s)")
+    p.add_argument("--audio-rate", type=int, default=44100, choices=[22050, 32000, 44100, 48000],
+                   help="som: taxa (padrão %(default)s Hz, a do PSP; IMA ADPCM estéreo ~ taxa/1000 KB/s)")
     p.add_argument("--audio-mono", action="store_true", help="som: mono (metade dos bytes)")
     p.add_argument("--no-input", action="store_true", help="não injetar os controles do PSP no PC")
     p.add_argument("--input-dry-run", action="store_true",
