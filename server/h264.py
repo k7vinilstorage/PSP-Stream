@@ -176,12 +176,12 @@ IDR_MIN_INTERVAL_S = 0.15  # pedidos de IDR repetidos enquanto o anterior ainda 
 # qualidade nova (adaptativo) só entra junto de um IDR que já ia sair, ou no
 # máximo a cada QP_CHANGE_MIN_S.
 QP_CHANGE_MIN_S = 3.0
-# IDR a cada tantos pacotes mesmo sem pedido. O openh264 conta frame_num em 15
-# bits e o POC em 16 (as cópias também contam): sem IDR, os dois dão a volta
-# em ~3 min a 60 fps, coisa que vídeo de PSP nunca faz (cada IDR zera os
-# contadores). 1800 pacotes = 30 s a 60 fps = 5400 AUs, longe da volta; o IDR
-# a mais custa ~10 KB a cada 30 s. Também limpa qualquer erro acumulado.
-IDR_EVERY = 1800
+# IDR periódico (pacotes; 0 = só quando o PSP pede). Era 1800 (30 s a 60 fps)
+# por medo da volta de frame_num (15 bits) e do POC (16 bits) do openh264, que
+# acontece em ~3 min sem IDR. A sonda v4.1 (psp/probe, passo 7) passou 12000
+# frames (36000 AUs) sem IDR no PSP-3000, com a volta no meio: ela não é
+# problema. O IDR a mais custava ~10 KB e uma travadinha a cada 30 s.
+IDR_EVERY = 0
 
 
 class H264PEncoder:
@@ -206,7 +206,7 @@ class H264PEncoder:
                  copies: int = COPIES, idr_every: int = IDR_EVERY, backend: str = None):
         self.width, self.height = width, height
         self.copies = copies
-        self.idr_every = idr_every   # 0 = só quando pedido (teste da volta dos contadores no psp/probe)
+        self.idr_every = idr_every   # 0 = só quando pedido
         self.backend = backend or BACKEND
         self._since_idr = 0
         self.quality = quality       # pedida (adaptativo)

@@ -891,6 +891,85 @@ atualiza sem reset (`WelsEncoderParamAdjust`, ramo sem reset, conferido no
 código da 2.6). A qualidade adaptativa muda sem IDR; pelo GStreamer, cada
 troca refazia o encoder (IDR) e esperava até 3 s.
 
+#### Engasgos com frames P: perda, não decode (v1.0) [PSP relato + SIM]
+
+**Relato do PSP-3000** (Minecraft e Hollow Knight, captura KMS): bons
+resultados nos dois. No Hollow Knight, o `h264p` fica em quase 60 fps com
+70-150 KB/s, mas de vez em quando engasga bastante e o FPS cai; o `h264`
+(só quadros completos) fica mais estável, com FPS um pouco menor e 400-450
+KB/s.
+
+**O decode não é o limite.** As 3 chamadas do pacote P custam 10,6 ms no
+PSP-3000 (teste v4), e o custo é fixo por chamada: uma cópia sem nada para
+decodificar custa 3,5 ms, o mesmo que um frame com conteúdo (1 chamada:
+3,55 ms). Isso cabe nos 16,7 ms de um frame a 60 fps, e o próximo frame é
+pedido quando o decode pega o atual, então rede e decode correm em paralelo:
+com a captura a 60 fps, o frame seguinte chega ~16,7 ms depois, e o decode
+já terminou. O único corte possível seria mandar menos cópias, e cada uma a
+menos é um frame (16,7 ms) a mais de latência. O `dec` do overlay mostra o
+tempo real; só acima de ~14 ms ele começaria a pesar.
+
+**O que muda entre os dois modos é a perda.** No `h264`, cada quadro é
+independente: um pedaço perdido estraga só aquele frame, e o seguinte já
+vem a caminho (pedido antecipado). No `h264p`, cada P precisa do anterior,
+então uma perda para o stream até o reenvio:
+
+| o que se perde | v0.9 | espera |
+|---|---|---|
+| pedaço do meio | o último chega com buraco: NACK na hora | ~1 ida e volta |
+| último pedaço (ou o frame inteiro, que costuma ser 1 pedaço) | só notado pelo silêncio | 20-50 ms + 1 ida e volta |
+| o pedido, na subida | nada chega | RTO (>= 30 ms) + a resposta |
+
+Com 1-2% de perda e 60 frames por segundo, isso é uma travada de 2-4 frames
+a cada um ou dois segundos.
+
+**Simulação** (`tools/fake_client.py`, 450 KB/s, ida e volta de 6 ms,
+decode de 10,6 ms no P e 3,7 ms no intra; clipe de jogo deslizando com
+ruído, P de ~1,5 KB e troca de cena a cada 2,4 s; 16 s por rodada, 2
+rodadas). Engasgo = 50 ms ou mais entre dois frames exibidos.
+
+| cenário | engasgos v0.9 | engasgos v1.0 | p99 do intervalo v0.9 / v1.0 | FPS v0.9 / v1.0 | `h264`: engasgos, FPS, KB/s |
+|---|---|---|---|---|---|
+| sem perda | 0-1 | 0 | 38-39 / 36-37 ms | 59,6 / 59,5 | 0, 48,6, 389 |
+| 1% na descida e na subida | 9-12 | 0-1 | 49-51 / 38-39 ms | 57,1 / 59,0 | 10, 44,7, 359 |
+| 2% na descida, 0,5% na subida | 4-11 | 2-3 | 43-53 / 41-42 ms | 57,0 / 58,1 | 4, 43,8, 351 |
+| rajadas de 6 ms que levam tudo (0,5%) | 10-12 | 5-8 | 51-60 / 40-46 ms | 57,9 / 57,9 | 5, 45,9, 368 |
+
+O mesmo padrão do relato: sem perda o `h264p` fica em 60 fps; com perda,
+engasga mais que o `h264`, que tem menos FPS e 2-3x a banda.
+
+**O que entrou na v1.0:**
+
+- **Último pedaço em dobro:** o servidor manda o último pedaço de cada pacote
+  P de novo 6 ms depois (`--p-redundancy-ms`). Custo medido no clipe: ~0,7
+  KB por frame, ~40 KB/s a 60 fps (+27-53% sobre os P).
+- **Pedido em dobro:** o PSP manda o pedido de frame novo com o número do
+  frame (FRAME + NACK) e repete depois de 6 ms se nenhum pedaço chegou. O
+  servidor reconhece a cópia (frame ainda não enviado: junta com o pedido
+  pendente; enviado há menos de 15 ms: ignora). Um pedido perdido custa 6 ms
+  em vez de >= 30.
+- Atrasos de 3-4 ms caíam dentro das rajadas de 6 ms (sem ganho nelas); 9 ms
+  pioravam a perda isolada. 6 ms ficou nos dois.
+- O PSP não repete mais um pedido que ainda nem fez (com o próximo adiado
+  para a thread de decode, o pedido "sem resposta" era falso), e enquanto
+  espera a thread de decode pedir, a thread de rede olha a cada 1 ms (antes
+  podia dormir até 100 ms sem saber do pedido).
+- **Sem IDR periódico:** a volta de `frame_num`/POC passou no PSP (teste
+  v4.1, passo 7), e o IDR a cada 30 s custava ~10 KB e uma travadinha.
+- A linha do servidor mostra os engasgos com a causa provável (perda, IDR,
+  pedido atrasado, captura), para o próximo teste no PSP dizer o que sobrou.
+
+Um erro meu na simulação: o `fake_client` contava o pedido feito pelo
+"decode" depois de ler o pacote que respondia a ele, ficava com um pedido
+fantasma e esperava o RTO. Isso fazia o `h264p` engasgar até sem perda; o
+PSP não tem esse erro (a thread de rede conta o pedido antes de ler o
+pacote), e o simulador foi corrigido antes das medidas acima.
+
+**Ainda não medido no PSP:** tudo acima é simulação, e o emulador só confere
+a lógica (601 frames P por UDP e 301 por TCP sem erro; o relógio dele pula o
+tempo ocioso). O que sobra no PSP real (rajadas longas, IDR depois de perdas
+seguidas) aparece na linha de engasgos do servidor.
+
 ## 1. Tamanho de frame [PC]
 
 Mesmo pipeline do servidor (`videoscale` -> I420 -> `jpegenc`), saída 480x272

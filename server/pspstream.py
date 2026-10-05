@@ -18,6 +18,7 @@ from pathlib import Path
 import protocol
 from protocol import REQ_FRAME, REQ_HELLO, Request
 from stats import SessionStats, format_summary, now_ms
+import transports
 from transports import TcpTransport, UdpTransport, parse_datagram
 
 log = logging.getLogger("pspstream")
@@ -26,6 +27,13 @@ log = logging.getLogger("pspstream")
 # (no Wayland o compositor só manda frames quando a tela muda).
 VERSION = "1.0"
 KEEPALIVE_S = 1.0
+P_PACKET_START = b"\x00\x00\x00\x01\x09"  # pacote de frames P: começa com um AUD (h264.AUD)
+
+
+def p_packet_is_idr(packet: bytes) -> bool:
+    """A NAL depois do AUD é SPS ou IDR (decoder_h264_packet no decode.c do PSP)."""
+    i = packet.find(b"\x00\x00\x01", 5, 64)
+    return 0 <= i and i + 3 < len(packet) and packet[i + 3] & 0x1F in (5, 7)
 
 
 def local_ip() -> str:
@@ -188,8 +196,11 @@ class Session:
             send_ms = now_ms()
             age_ms = (time.monotonic() - ready_t) * 1000 if not self.source.repeat else 0.0
             wait_ms = (time.monotonic() - arrived) * 1000
-            sent = self.transport.send_frame(self.frame_no, jpeg, send_ms)
-            self.stats.on_send(self.frame_no, send_ms, age_ms, sent, wait_ms, self.source.capture_ms, resend)
+            # frames P (o pacote começa com AUD): cópia do último pedaço no UDP
+            p_packet = jpeg[:5] == P_PACKET_START
+            sent = self.transport.send_frame(self.frame_no, jpeg, send_ms, redundant=p_packet)
+            self.stats.on_send(self.frame_no, send_ms, age_ms, sent, wait_ms, self.source.capture_ms, resend,
+                               idr=p_packet and p_packet_is_idr(jpeg))
             self.stats.maybe_report(self.source.quality)
 
     def _encode(self, i420: bytes) -> bytes:
@@ -358,7 +369,8 @@ class Server:
                 # datagramas atrasados de um cliente antigo são ignorados.
                 if req.flags & protocol.REQ_BYE or not (req.flags & REQ_HELLO or cur is None or not cur.alive):
                     continue
-                cur = self.replace(UdpTransport(sock, addr, self.args.udp_pace, self.args.hdr_cache))
+                cur = self.replace(UdpTransport(sock, addr, self.args.udp_pace, self.args.hdr_cache,
+                                                 self.args.p_redundancy_ms / 1000))
                 if cur is None:
                     return
             try:
@@ -494,6 +506,9 @@ def parse_args(argv=None):
                         "GStreamer de reserva; openh264 ou gstreamer forçam um dos dois")
     p.add_argument("--udp-pace", type=float, default=0, metavar="KB/s",
                    help="UDP: limitar a taxa de envio dos pedaços (0 = sem limite, padrão)")
+    p.add_argument("--p-redundancy-ms", type=float, default=transports.REDUNDANCY_S * 1000, metavar="MS",
+                   help="frames P por UDP: o último pedaço de cada frame vai de novo depois de MS ms, e a perda "
+                        "dele não para o stream esperando o NACK (padrão %(default).0f; 0 = desliga)")
     p.add_argument("--no-hdr-cache", dest="hdr_cache", action="store_false",
                    help="UDP: mandar o cabeçalho JPEG em todo frame (para comparar; o padrão manda só "
                         "quando muda)")

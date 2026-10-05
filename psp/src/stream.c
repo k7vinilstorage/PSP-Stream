@@ -76,6 +76,14 @@
  * ~1 frame em 10 que perdia o pedido ou a resposta inteira (frames H.264 de
  * 2 pedaços somem juntos numa rajada de interferência) e esperava os 200 ms. */
 #define STALL_US (3000 * 1000)     /* nada completo por 3 s: recomeça (HELLO); > keepalive de 1 s do servidor */
+/* Frames P: um pedido perdido na subida parava o stream até o RTO (>= 30 ms)
+ * mais a resposta, porque nenhum frame pode ser pulado. Agora o pedido de
+ * frame novo leva o número do frame que ele vai trazer (FRAME + NACK, como o
+ * pedido repetido) e vai de novo depois disto se nada chegou. O servidor
+ * reconhece a cópia: frame ainda não enviado = o pedido que já está esperando;
+ * enviado há menos de 15 ms = já está no ar (transports.RETRY_GUARD_S). */
+#define REQ_DUP_US (6 * 1000)
+#define DEFER_POLL_US 1000 /* com o pedido adiado para a thread de decode: reavalia a cada 1 ms */
 
 enum { SLOT_FREE, SLOT_RECV, SLOT_READY, SLOT_DECODING };
 
@@ -85,7 +93,7 @@ static int state[NUM_SLOTS];
  * mais novo. Frames P: todos, em ordem (cada um é referência do seguinte). */
 static int ready_q[NUM_SLOTS], ready_n;
 static ps_ack_t last_ack;
-static unsigned dropped, lost, nacks, completed, retries;
+static unsigned dropped, lost, nacks, completed, retries, req_dups;
 
 static SceUID lock_sema = -1, ready_sema = -1, want_sema = -1, send_sema = -1;
 static SceUID net_thid = -1;
@@ -114,6 +122,8 @@ static unsigned idr_reqs;
  * atual decodifica. Quem pede é a thread de decode (stream_take). */
 static int ask_deferred;                  /* com o lock */
 static volatile unsigned dec_asks, dec_ask_t; /* pedidos feitos pela thread de decode e o horário do último */
+static volatile uint32_t dec_ask_frame;       /* ... e o frame que ele pediu (0 = pedido simples) */
+static volatile uint32_t seen_max;            /* maior frame visto (completo, abandonado ou chegando) */
 /* Estimativas (us), como o RTO do TCP: média móvel e desvio médio. */
 static int gap_avg = 3000, gap_dev = 3000;   /* entre pedaços seguidos de um frame */
 static int rtt_avg = 30000, rtt_dev = 10000; /* pedido -> primeiro pedaço */
@@ -215,6 +225,21 @@ static int send_req(uint16_t flags, const ps_nack_t *nack)
     int rc = g_udp ? net_sendto(g_sock, &g_dest, &msg, len) : net_send_all(g_sock, &msg, len);
     sceKernelSignalSema(send_sema, 1);
     return rc;
+}
+
+/* Pede um frame novo. Frames P no UDP: com o número dele (o seguinte ao
+ * maior já visto), para o pedido repetido ser reconhecido. *want = esse
+ * número, ou 0 (pedido simples). */
+static int send_new_req(uint32_t *want)
+{
+    *want = 0;
+    if (!pmode || !g_udp) /* o TCP lê só o pedido, sem NACK */
+        return send_req(PS_REQ_FRAME, NULL);
+    ps_nack_t nk;
+    memset(&nk, 0xFF, sizeof(nk));
+    nk.frame_no = seen_max + 1;
+    *want = nk.frame_no;
+    return send_req(PS_REQ_FRAME, &nk);
 }
 
 static void wait_want(void)
@@ -645,12 +670,23 @@ static int net_thread_udp(void)
     int pending = 0;
     unsigned now = now_us(), last_req = now, last_done = now, link_free = now;
 
+    uint32_t dup_frame = 0;       /* frames P: pedido a repetir em dup_at se nada chegar (0 = nenhum) */
+    unsigned dup_at = 0;
+
 #define ASK(flags)                                                                                                    \
     do {                                                                                                              \
         if (pending < 2)                                                                                              \
             req_q[pending++] = now_us();                                                                              \
         last_req = now_us();                                                                                          \
-        if (send_req((flags), NULL) < 0)                                                                              \
+        if ((flags) == PS_REQ_FRAME) {                                                                                \
+            uint32_t want_;                                                                                           \
+            if (send_new_req(&want_) < 0)                                                                             \
+                return -1;                                                                                            \
+            if (want_) {                                                                                              \
+                dup_frame = want_;                                                                                    \
+                dup_at = last_req + REQ_DUP_US;                                                                       \
+            }                                                                                                         \
+        } else if (send_req((flags), NULL) < 0)                                                                       \
             return -1;                                                                                                \
     } while (0)
 
@@ -667,6 +703,10 @@ static int net_thread_udp(void)
             if (pending < 2)
                 req_q[pending++] = dec_ask_t;
             last_req = dec_ask_t;
+            if (dec_ask_frame) {
+                dup_frame = dec_ask_frame;
+                dup_at = dec_ask_t + REQ_DUP_US;
+            }
         }
         now = now_us();
         if ((int)(now - next_ping) >= 0) {
@@ -676,6 +716,22 @@ static int net_thread_udp(void)
         }
         int timeout = 100 * 1000; /* teto: reavalia pelo menos a cada 100 ms */
         int acted = 0;
+
+        /* ---- frames P: o pedido de frame novo vai de novo se nada chegou ---- */
+        if (dup_frame) {
+            int left = (int)(dup_at - now);
+            if (left <= 0) {
+                ps_nack_t nk;
+                memset(&nk, 0xFF, sizeof(nk));
+                nk.frame_no = dup_frame;
+                dup_frame = 0;
+                req_dups++;
+                if (send_req(PS_REQ_FRAME, &nk) < 0)
+                    return -1;
+            } else if (left < timeout) {
+                timeout = left;
+            }
+        }
 
         /* ---- frames incompletos sem pedaço novo: NACK ou desistência ---- */
         for (int k = 0; k < 2; k++) {
@@ -722,29 +778,39 @@ static int net_thread_udp(void)
                 ASK(PS_REQ_FRAME);
                 continue;
             }
-            int left = rto_us() - (int)(now_us() - last_req);
-            if (left <= 0) {
-                /* o pedido (ou a resposta) se perdeu, ou a tela está parada */
-                int stalled = now_us() - last_done > STALL_US;
-                last_req = now_us();
-                retries++;
-                if (pmode && done && !stalled) {
-                    /* Frames P: um frame pequeno vem num pacote só e, se ele
-                     * some, nada chega. O pedido repetido leva um NACK do
-                     * frame esperado: se o servidor já o mandou, reenvia o
-                     * mesmo (a corrente continua, sem IDR); senão o pedido
-                     * é que se perdeu e vale como pedido normal. */
-                    ps_nack_t nk;
-                    memset(&nk, 0xFF, sizeof(nk));
-                    nk.frame_no = done + 1;
-                    if (send_req(PS_REQ_FRAME, &nk) < 0)
+            /* Com o pedido adiado, ninguém pediu ainda: a thread de decode
+             * pede quando pegar o frame pronto. Repetir agora era um pedido a
+             * mais, e contava como perda no overlay ("repet"). Só volta logo
+             * para ver o pedido dela (dec_asks) e marcar a repetição a tempo:
+             * sem pacote chegando, o select() dormiria até o teto. */
+            if (ask_deferred) {
+                if (DEFER_POLL_US < timeout)
+                    timeout = DEFER_POLL_US;
+            } else {
+                int left = rto_us() - (int)(now_us() - last_req);
+                if (left <= 0) {
+                    /* o pedido (ou a resposta) se perdeu, ou a tela está parada */
+                    int stalled = now_us() - last_done > STALL_US;
+                    last_req = now_us();
+                    retries++;
+                    if (pmode && done && !stalled) {
+                        /* Frames P: um frame pequeno vem num pacote só e, se ele
+                         * some, nada chega. O pedido repetido leva um NACK do
+                         * frame esperado: se o servidor já o mandou, reenvia o
+                         * mesmo (a corrente continua, sem IDR); senão o pedido
+                         * é que se perdeu e vale como pedido normal. */
+                        ps_nack_t nk;
+                        memset(&nk, 0xFF, sizeof(nk));
+                        nk.frame_no = done + 1;
+                        if (send_req(PS_REQ_FRAME, &nk) < 0)
+                            return -1;
+                    } else if (send_req(PS_REQ_FRAME | (stalled ? PS_REQ_HELLO : 0), NULL) < 0)
                         return -1;
-                } else if (send_req(PS_REQ_FRAME | (stalled ? PS_REQ_HELLO : 0), NULL) < 0)
-                    return -1;
-                continue;
+                    continue;
+                }
+                if (left < timeout)
+                    timeout = left;
             }
-            if (left < timeout)
-                timeout = left;
         }
         if (acted)
             continue;
@@ -782,9 +848,14 @@ static int net_thread_udp(void)
             as[0].held = as[1].held = 0;
             done = 0;
             last_pub = 0;
+            seen_max = 0;
         }
         if (h.frame_no <= done)
             continue; /* atrasado ou duplicado */
+        if (h.frame_no > seen_max)
+            seen_max = h.frame_no;
+        if (dup_frame && h.frame_no >= dup_frame)
+            dup_frame = 0; /* a resposta já está chegando */
 
         asm_t *a = NULL;
         for (int k = 0; k < 2; k++)
@@ -981,12 +1052,14 @@ int stream_start(int sock, int udp, const struct sockaddr_in *dest, int prefetch
     g_running = running;
     net_error = 0;
     stopping = 0;
-    dropped = lost = nacks = completed = retries = idr_reqs = 0;
+    dropped = lost = nacks = completed = retries = req_dups = idr_reqs = 0;
     ready_n = 0;
     pmode = 0;
     last_pub = 0;
     need_idr_from = 0;
     ask_deferred = 0;
+    seen_max = 0;
+    dec_ask_frame = 0;
     memset(&last_ack, 0, sizeof(last_ack));
     for (int i = 0; i < NUM_SLOTS; i++) {
         if (!slots[i].data && !(slots[i].data = memalign(64, PS_MAX_JPEG)))
@@ -1024,8 +1097,10 @@ ps_frame_t *stream_take(unsigned timeout_us)
     if (more) /* o semáforo é binário: avisa de novo que ainda há prontos */
         sceKernelSignalSema(ready_sema, 1);
     if (ask && !net_error && !stopping) { /* frames P: o próximo chega enquanto este decodifica */
+        uint32_t want;
         dec_ask_t = now_us();
-        send_req(PS_REQ_FRAME, NULL);
+        send_new_req(&want);
+        dec_ask_frame = want;
         dec_asks++;
     }
     return idx >= 0 ? &slots[idx] : NULL;

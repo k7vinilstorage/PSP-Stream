@@ -7,6 +7,13 @@ import protocol
 
 log = logging.getLogger("pspstream.stats")
 
+# Engasgo: 50 ms ou mais entre dois frames enviados (3 frames a 60 fps). A
+# causa provável sai do que o servidor viu no intervalo; o PSP só pede o
+# próximo frame depois de receber o atual, então uma espera no PSP também
+# aparece aqui.
+HITCH_MS = 50
+HITCH_CAUSES = ("perda", "IDR", "pedido atrasado", "captura")
+
 
 def now_ms() -> int:
     return int(time.monotonic() * 1000)
@@ -53,6 +60,8 @@ class Window:
         self.early = []    # bytes que faltavam quando o PSP pediu o próximo (0 = só no fim)
         self.lost0 = None  # contador de frames perdidos do PSP no início da janela
         self.lost1 = 0
+        self.hitches = []  # (intervalo ms, causa) dos engasgos
+        self.idrs = 0      # frames IDR enviados no modo P (pedidos pelo PSP ou encoder refeito)
 
     def summary(self, quality=None) -> dict:
         elapsed = max(1e-6, time.monotonic() - self.t0)
@@ -92,6 +101,10 @@ class Window:
             "lost": (self.lost1 - self.lost0) if self.lost0 is not None else 0,
             "quality": quality,
             "frames": self.frames,
+            "hitches": len(self.hitches),
+            "hitch_max_ms": max((g for g, _ in self.hitches), default=0.0),
+            "hitch_causes": {c: n for c in HITCH_CAUSES if (n := sum(1 for _, k in self.hitches if k == c))},
+            "idrs": self.idrs,
         }
 
 
@@ -120,6 +133,11 @@ def format_summary(s: dict) -> str:
         line += f" | {s['resent_pct']:.1f}% pedaços UDP reenviados"
     if s["lost"]:
         line += f" | {s['lost']} frames perdidos"
+    if s.get("idrs"):
+        line += f" | {s['idrs']} IDR"
+    if s.get("hitches"):
+        causes = ", ".join(f"{n} {c}" for c, n in s["hitch_causes"].items())
+        line += f" | engasgos {s['hitches']} (pior {s['hitch_max_ms']:.0f} ms: {causes})"
     return line
 
 
@@ -135,9 +153,34 @@ class SessionStats:
         self.window = Window(source, transport)
         self.phase = Window(source, transport)
         self.last_summary = None
+        self.last_send_ms = None  # envio anterior (engasgos)
+        self.resent_mark = 0
+
+    def _resent_total(self) -> int:
+        t = self.transport
+        return (t.resent_chunks + getattr(t, "retry_resends", 0)) if t is not None else 0
 
     def on_send(self, frame_no: int, send_ms: int, age_ms: float, size: int, wait_ms: float,
-                capture_ms: float = 0.0, resend: bool = False) -> None:
+                capture_ms: float = 0.0, resend: bool = False, idr: bool = False) -> None:
+        """wait_ms: pedido chegou -> envio (espera por frame novo + encode). idr:
+        o pacote é um IDR do modo P."""
+        resent = self._resent_total()
+        if self.last_send_ms is not None and not resend:
+            gap = send_ms - self.last_send_ms
+            if gap >= HITCH_MS:
+                if idr:
+                    cause = "IDR"  # o PSP perdeu a corrente (ou o encoder foi refeito)
+                elif resent != self.resent_mark:
+                    cause = "perda"  # pedaço ou frame reenviado no intervalo
+                elif wait_ms >= gap / 2:
+                    cause = "captura"  # o pedido esperou o PC ter frame novo
+                else:
+                    cause = "pedido atrasado"  # o pedido demorou a chegar: Wi-Fi ou PSP
+                for w in (self.window, self.phase):
+                    w.hitches.append((gap, cause))
+        # reenvio por tela parada: o intervalo seguinte não é engasgo
+        self.last_send_ms = None if resend else send_ms
+        self.resent_mark = resent
         self.sent[frame_no] = (send_ms, age_ms, size, wait_ms, capture_ms, resend)
         if len(self.sent) > 256:
             for old in sorted(self.sent)[:128]:
@@ -146,6 +189,7 @@ class SessionStats:
             w.frames += 1
             w.bytes += size
             w.keepalive += resend
+            w.idrs += idr
         self.total_frames += 1
         self.total_bytes += size
 

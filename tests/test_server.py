@@ -119,7 +119,7 @@ class UdpEndToEndTest(unittest.TestCase):
     """Servidor UDP de verdade + cliente falso (mesma lógica do PSP) com perda."""
 
     def run_stream(self, early_kb, loss=0.05, seconds=2.0, rtt_ms=0, source=None, hdr_cache=True,
-                   codec="jpeg", h264p=False, decode_ms=5):
+                   codec="jpeg", h264p=False, decode_ms=5, p_redundancy_ms=6, req_dup=True):
         import pspstream
         from sources import StaticSource
         import fake_client
@@ -127,7 +127,7 @@ class UdpEndToEndTest(unittest.TestCase):
         card = (ROOT / "assets/testcard.jpg").read_bytes()
         args = argparse.Namespace(adaptive=False, bench=None, stats_interval=60, target_fps=30, q_min=25,
                                   q_max=90, udp_pace=0, source="static", size=(480, 272), hdr_cache=hdr_cache,
-                                  dscp="ef", codec=codec, quality=70)
+                                  dscp="ef", codec=codec, quality=70, p_redundancy_ms=p_redundancy_ms)
         server = pspstream.Server(source or StaticSource(card), args, None)
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.bind(("127.0.0.1", 0))
@@ -137,7 +137,8 @@ class UdpEndToEndTest(unittest.TestCase):
             client_args = argparse.Namespace(host="127.0.0.1", port=port, transport="udp", loss=loss, kbps=2000,
                                              decode_ms=decode_ms, no_prefetch=False, frames=0, seconds=seconds,
                                              input_demo=False, rtt_ms=rtt_ms, early_kb=early_kb, loss_up=0,
-                                             h264p=h264p)
+                                             h264p=h264p, loss_burst_ms=0, no_req_dup=not req_dup,
+                                             old_retry=False, req_dup_ms=6)
             summary, jpeg = fake_client.FakePSP(client_args).run()
             self.session = server.current[0] if server.current else None
         finally:
@@ -224,17 +225,19 @@ class UdpEndToEndTest(unittest.TestCase):
             self.skipTest("sem openh264enc")
         return h264
 
-    def test_h264p_survives_loss(self):
-        # --codec h264p com perda: nenhum frame P pode ser decodificado sem o
-        # anterior (imagem errada no PSP). Frame pequeno perdido inteiro volta
-        # pelo pedido repetido com NACK, sem precisar de IDR.
+    def h264p_with_loss(self, **kw):
         h264 = self.h264_or_skip()
-        import fake_client
         from sources import StaticSource
         raw = h264.image_to_i420(str(ROOT / "assets/testcard.jpg"), 480, 272)
-        summary, got, _ = self.run_stream(early_kb="auto", loss=0.05, seconds=3.0, rtt_ms=5, codec="h264p",
-                                          h264p=True, decode_ms=12,
-                                          source=StaticSource(raw, quality=70, raw_i420=True))
+        return self.run_stream(early_kb="auto", loss=0.05, seconds=3.0, rtt_ms=5, codec="h264p", h264p=True,
+                               decode_ms=12, source=StaticSource(raw, quality=70, raw_i420=True), **kw)
+
+    def test_h264p_survives_loss(self):
+        # --codec h264p com perda: nenhum frame P pode ser decodificado sem o
+        # anterior (imagem errada no PSP). Sem as cópias (v0.9), o frame pequeno
+        # perdido inteiro volta pelo pedido repetido com NACK, sem precisar de IDR.
+        import fake_client
+        summary, got, _ = self.h264p_with_loss(p_redundancy_ms=0, req_dup=False)
         self.assertGreater(summary["frames"], 30, summary)
         self.assertEqual(summary["broken"], 0, summary)
         self.assertEqual(fake_client.h264_packet_kind(got), 1)  # frame P (imagem parada: quase nada)
@@ -242,6 +245,16 @@ class UdpEndToEndTest(unittest.TestCase):
         self.assertGreater(summary["retries"], 0, summary)  # perdas de frame inteiro aconteceram
         self.assertLessEqual(summary["idr_requests"], 2, summary)
         self.assertGreater(self.session.transport.retry_resends, 0)
+
+    def test_h264p_redundancy_under_loss(self):
+        # v1.0: último pedaço em dobro (servidor) e pedido em dobro (PSP): a
+        # corrente continua inteira.
+        summary, _, _ = self.h264p_with_loss()
+        self.assertGreater(summary["frames"], 30, summary)
+        self.assertEqual(summary["broken"], 0, summary)
+        self.assertLessEqual(summary["idr_requests"], 2, summary)
+        self.assertGreater(summary["req_dups"], 0, summary)
+        self.assertGreater(self.session.transport.redundant_chunks, 0)
 
     def test_h264p_old_eboot_gets_intra(self):
         # EBOOT sem PS_CAP_H264P (v0.5-v0.8): todo frame IDR, sem AUD
@@ -677,6 +690,19 @@ class H264PEncoderTest(unittest.TestCase):
             enc.close()
         self.assertEqual([i for i, k in enumerate(kinds) if k], [0, 5, 10])
 
+    def test_no_periodic_idr_by_default(self):
+        # a volta dos contadores passou na sonda v4.1 (passo 7): IDR só quando o PSP pede
+        h264 = self.h264
+        enc = h264.H264PEncoder(480, 272, 70)
+        try:
+            kinds = [h264.is_idr(self.aus(enc.encode(self.raw))[0]) for _ in range(40)]
+            time.sleep(h264.IDR_MIN_INTERVAL_S)  # pedido logo depois de um IDR é ignorado
+            self.assertTrue(enc.request_idr())
+            kinds.append(h264.is_idr(self.aus(enc.encode(self.raw))[0]))
+        finally:
+            enc.close()
+        self.assertEqual([i for i, k in enumerate(kinds) if k], [0, 40])
+
 
 class UdpRetryResendTest(unittest.TestCase):
     """Pedido repetido com NACK (frames P): reenvia o frame que se perdeu inteiro."""
@@ -713,6 +739,75 @@ class UdpRetryResendTest(unittest.TestCase):
         self.assertEqual(self.retry(7), protocol.REQ_NACK)
         self.assertEqual(self.t.resent_chunks, 3)  # o frame inteiro de novo, sem frame novo
         self.assertEqual(self.t.retry_resends, 1)
+
+    def test_duplicate_request_is_recognized(self):
+        # EBOOT v1.0: o pedido de frame novo leva o número do frame e vai de novo
+        # ~6 ms depois. A cópia não pode virar um frame a mais.
+        self.assertEqual(self.retry(12), protocol.REQ_FRAME | protocol.REQ_NACK)  # original: frame novo
+        self.assertEqual(self.retry(12), protocol.REQ_FRAME | protocol.REQ_NACK)  # cópia antes do envio:
+        # a sessão junta os dois pedidos pendentes (um só frame)
+        self.t.send_frame(12, b"z" * 100, 0)
+        self.assertEqual(self.retry(12), protocol.REQ_NACK)  # cópia logo depois do envio: nada
+        self.assertEqual(self.t.resent_chunks, 0)
+
+    def test_redundant_last_chunk(self):
+        from transports import UdpTransport
+        self.t = UdpTransport(self.tx, self.rx.getsockname(), redundancy_s=0.004)
+
+        class Session:
+            alive = True
+
+        sess = Session()
+        self.t.session = sess
+        self.t.start(sess)
+        self.rx.settimeout(1)
+        try:
+            t0 = time.monotonic()
+            self.t.send_frame(9, b"y" * 3000, 0, redundant=True)
+            got = []
+            for _ in range(4):
+                fn, size, _, idx, count, _, _ = protocol.unpack_chunk(self.rx.recv(2048))
+                got.append((fn, idx, count, time.monotonic() - t0))
+            self.assertEqual([g[:3] for g in got], [(9, 0, 3), (9, 1, 3), (9, 2, 3), (9, 2, 3)])
+            self.assertGreaterEqual(got[3][3], 0.004)  # a cópia sai depois, fora da mesma rajada
+            self.assertEqual(self.t.redundant_chunks, 1)
+            self.t.send_frame(10, b"y" * 3000, 0)  # sem redundant (JPEG, H.264 intra): sem cópia
+            for _ in range(3):
+                self.rx.recv(2048)
+            self.rx.settimeout(0.05)
+            with self.assertRaises(socket.timeout):
+                self.rx.recv(2048)
+        finally:
+            sess.alive = False
+
+
+class HitchStatsTest(unittest.TestCase):
+    """Engasgos no log do servidor, com a causa provável."""
+
+    class Transport:
+        sent_chunks = resent_chunks = retry_resends = 0
+
+    def test_causes(self):
+        t = self.Transport()
+        s = stats.SessionStats(60, transport=t)
+        ms = 1000
+        s.on_send(1, ms, 0, 1500, 5)
+        s.on_send(2, ms + 17, 0, 1500, 5)          # normal
+        t.resent_chunks += 1
+        s.on_send(3, ms + 80, 0, 1500, 5)          # reenvio no intervalo
+        s.on_send(4, ms + 140, 0, 9000, 2, idr=True)
+        s.on_send(5, ms + 200, 0, 1500, 50)        # esperou o PC ter frame novo
+        s.on_send(6, ms + 260, 0, 1500, 3)         # o pedido demorou a chegar
+        s.on_send(7, ms + 1300, 0, 1500, 1000, resend=True)  # tela parada: não conta
+        s.on_send(8, ms + 1400, 0, 1500, 3)
+        summary = s.window.summary()
+        self.assertEqual(summary["hitches"], 4)
+        self.assertEqual(summary["hitch_max_ms"], 63)
+        self.assertEqual(summary["hitch_causes"], {"perda": 1, "IDR": 1, "pedido atrasado": 1, "captura": 1})
+        self.assertEqual(summary["idrs"], 1)
+        line = stats.format_summary(summary)
+        self.assertIn("engasgos 4 (pior 63 ms: 1 perda, 1 IDR, 1 pedido atrasado, 1 captura)", line)
+        self.assertIn("1 IDR", line)
 
 
 class H264QualityTest(unittest.TestCase):

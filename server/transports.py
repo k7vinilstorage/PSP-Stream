@@ -8,6 +8,7 @@ novo só os que faltam (NACK). Isso evita que um pacote perdido no fim do frame
 trave o stream esperando a retransmissão do TCP, e não há ACK para cada
 segmento ocupando o rádio do 802.11b.
 """
+import heapq
 import logging
 import socket
 import threading
@@ -20,7 +21,18 @@ log = logging.getLogger("pspstream.transport")
 
 # Sem nenhuma mensagem do PSP por este tempo, a sessão é dada como morta.
 IDLE_TIMEOUT_S = 10.0
-RETRY_GUARD_S = 0.010  # frame enviado há menos que isso ainda pode estar no ar: não reenvia
+# Frame enviado há menos que isso ainda pode estar no ar: não reenvia. Tem
+# folga sobre a cópia do pedido de frame P (6 ms depois do original, ver
+# REQ_DUP_US no stream.c), que não pode virar reenvio.
+RETRY_GUARD_S = 0.015
+# Frames P: o último pedaço de cada frame vai de novo depois disto. Perder o
+# último pedaço é o caso lento do NACK: sem pedaço seguinte, o PSP só nota a
+# falta pelo silêncio (>= 20 ms) e o reenvio leva mais uma ida e volta, com o
+# stream parado (um P precisa do anterior). Um frame pequeno é um pedaço só,
+# então a cópia cobre também o frame perdido inteiro. Um pedaço do meio
+# perdido o PSP nota quando o último chega, e o NACK resolve em uma ida e
+# volta. A espera tira a cópia da mesma rajada de interferência.
+REDUNDANCY_S = 0.006
 
 
 def recv_exact(conn: socket.socket, size: int) -> bytes:
@@ -60,8 +72,8 @@ class TcpTransport:
         finally:
             session.close()
 
-    def send_frame(self, frame_no: int, jpeg: bytes, send_ms: int) -> int:
-        """Devolve os bytes de imagem enviados."""
+    def send_frame(self, frame_no: int, jpeg: bytes, send_ms: int, redundant: bool = False) -> int:
+        """Devolve os bytes de imagem enviados (redundant: só no UDP)."""
         self.conn.sendall(protocol.pack_frame_header(frame_no, len(jpeg), send_ms) + jpeg)
         return len(jpeg)
 
@@ -76,7 +88,8 @@ class TcpTransport:
 class UdpTransport:
     name = "udp"
 
-    def __init__(self, sock: socket.socket, addr, pace_kbps: float = 0, hdr_cache: bool = True):
+    def __init__(self, sock: socket.socket, addr, pace_kbps: float = 0, hdr_cache: bool = True,
+                 redundancy_s: float = REDUNDANCY_S):
         self.sock = sock  # socket UDP do servidor, compartilhado
         self.addr = addr
         self.pace = pace_kbps * 1024  # bytes/s; 0 = sem limite
@@ -89,10 +102,17 @@ class UdpTransport:
         self.sent_chunks = 0
         self.resent_chunks = 0
         self.retry_resends = 0        # frames reenviados inteiros por pedido repetido (frames P)
+        self.redundancy_s = redundancy_s
+        self.redundant_chunks = 0     # cópias do último pedaço (frames P)
+        self._later = []              # (horário, n, datagrama): cópias esperando a vez
+        self._later_n = 0
+        self._later_cv = threading.Condition()
         self.session = None           # definido pela Session, antes do primeiro pedido
 
     def start(self, session) -> None:
         threading.Thread(target=self._watchdog, name="udp-watchdog", daemon=True).start()
+        if self.redundancy_s > 0:
+            threading.Thread(target=self._send_later_loop, name="udp-redundancy", daemon=True).start()
 
     def _watchdog(self) -> None:
         while self.session.alive:
@@ -125,9 +145,10 @@ class UdpTransport:
         if self.pace:
             time.sleep(len(datagram) / self.pace)
 
-    def send_frame(self, frame_no: int, jpeg: bytes, send_ms: int) -> int:
+    def send_frame(self, frame_no: int, jpeg: bytes, send_ms: int, redundant: bool = False) -> int:
         """Envia em pedaços. Se o PSP já tem o cabeçalho deste JPEG (mesma
-        qualidade), vai só o resto. Devolve os bytes de imagem enviados."""
+        qualidade), vai só o resto. redundant (frames P): o último pedaço vai
+        de novo depois de redundancy_s. Devolve os bytes de imagem enviados."""
         payload, hdr = jpeg, 0
         n = protocol.jpeg_header_len(jpeg) if self.hdr_cache else 0
         if n:
@@ -142,7 +163,29 @@ class UdpTransport:
         for i in range(count):
             self._send(protocol.pack_chunk(frame_no, payload, send_ms, i, hdr))
         self.sent_chunks += count
+        if redundant and self.redundancy_s > 0:
+            self._send_later(protocol.pack_chunk(frame_no, payload, send_ms, count - 1, hdr))
         return len(payload)
+
+    def _send_later(self, datagram: bytes) -> None:
+        with self._later_cv:
+            self._later_n += 1
+            heapq.heappush(self._later, (time.monotonic() + self.redundancy_s, self._later_n, datagram))
+            self._later_cv.notify()
+
+    def _send_later_loop(self) -> None:
+        while self.session.alive:
+            with self._later_cv:
+                if not self._later:
+                    self._later_cv.wait(0.5)
+                    continue
+                left = self._later[0][0] - time.monotonic()
+                if left > 0:
+                    self._later_cv.wait(left)
+                    continue
+                _, _, datagram = heapq.heappop(self._later)
+            self._send(datagram)
+            self.redundant_chunks += 1
 
     def _resend(self, frame_no: int, missing) -> None:
         entry = self.recent.get(frame_no)

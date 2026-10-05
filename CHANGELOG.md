@@ -17,6 +17,28 @@ Primeira versão.
   `--h264-encoder auto|openh264|gstreamer`.
 - `--codec auto` passa a escolher **H.264 com frames P**, validado no
   PSP-3000 em gameplay. Um EBOOT anterior à v0.9 recebe todo frame IDR.
+- **Menos engasgos com frames P.** Cada P depende do anterior, então um
+  pacote perdido parava o stream até o reenvio: 30-60 ms por perda (o
+  decode, 10,6 ms, cabe nos 16,7 ms de um frame a 60 fps e não era o
+  limite). Agora:
+  - o servidor manda o **último pedaço de cada frame P de novo** 6 ms depois
+    (`--p-redundancy-ms`): perder o último pedaço era o caso lento, só
+    notado pelo silêncio, e um P pequeno é um pedaço só;
+  - o PSP **repete o pedido de frame novo** depois de 6 ms, com o número do
+    frame (o servidor reconhece a cópia e não manda frame a mais): um pedido
+    perdido na subida esperava o RTO, >= 30 ms;
+  - o PSP não repete mais um pedido que ainda nem fez (o próximo frame
+    adiado para a thread de decode): era um pedido a mais, e inflava o
+    `repet` do overlay;
+  - **sem IDR periódico** (era a cada 30 s): a volta dos contadores do
+    openh264 passou na sonda v4.1.
+  Na simulação com 1-2% de perda, os engasgos (>= 50 ms entre frames) caíram
+  de 4-12 para 0-3 a cada 16 s; a cópia do último pedaço custa ~40 KB/s.
+- A linha de estatística do servidor mostra os **engasgos com a causa
+  provável** (perda, IDR, pedido atrasado, captura) e os IDR.
+- `fake_client`: rajadas de perda (`--loss-burst-ms`) e contagem de
+  engasgos; corrigida a contagem do pedido feito pelo "decode", que criava
+  engasgos falsos na simulação.
 - `--version`; documentação reorganizada para quem instala pela primeira
   vez; este histórico.
 

@@ -185,7 +185,8 @@ pede o proximo faltando 2.5 KB (auto)
 
 `h264p` = H.264 com frames P (`h264`: só quadros completos; `hw`/`sw`:
 JPEG). `idr` conta os quadros completos pedidos depois de uma perda, e
-`repet`, os pedidos repetidos por falta de resposta.
+`repet`, os pedidos repetidos por falta de resposta (pedido ou frame inteiro
+perdido, ou tela parada). `nack` conta os pedidos de pedaços que faltavam.
 
 ### `server.txt`
 
@@ -272,6 +273,7 @@ algo apertado, tudo é solto em 0,5 s (`--input-timeout`).
 | `--scale bilinear2` | filtro de redução (padrão; `lanczos` deixa o texto um pouco mais nítido) |
 | `--input-dry-run` | só mostrar no log o que seria injetado |
 | `--dscp ef` | marca os pacotes para a fila de voz do Wi-Fi (WMM); `0` desliga |
+| `--p-redundancy-ms 4` | frames P: o último pedaço de cada frame vai de novo depois disso, e a perda dele não trava o stream; `0` desliga |
 | `--bench 30,50,70,90` | varre qualidades com o PSP conectado e grava uma tabela |
 | `-v` | log detalhado |
 
@@ -284,6 +286,20 @@ A cada 2 s, o servidor mostra uma linha de estatística:
 "Latência" vai da captura no PC até o frame aparecer no PSP, medida só com
 o relógio do servidor (ver [PROTOCOL.md](docs/PROTOCOL.md)).
 
+Quando houve, a linha termina com os **engasgos**: 50 ms ou mais entre dois
+frames, com a causa provável:
+
+```
+... | engasgos 3 (pior 74 ms: 2 perda, 1 pedido atrasado)
+```
+
+| causa | o que é |
+|---|---|
+| `perda` | um pedaço ou frame se perdeu no Wi-Fi e foi reenviado |
+| `IDR` | o PSP perdeu a corrente de frames P e pediu um quadro completo |
+| `pedido atrasado` | o pedido do PSP demorou a chegar: Wi-Fi lento naquele instante, ou o PSP ocupado |
+| `captura` | o PC demorou a ter frame novo (o jogo ou a captura engasgou no PC) |
+
 ## Desempenho medido
 
 PSP-3000 e Fedora 44 com Wi-Fi 802.11b; detalhes e o histórico em
@@ -295,13 +311,18 @@ PSP-3000 e Fedora 44 com Wi-Fi 802.11b; detalhes e o histórico em
 | H.264 só quadros completos (v0.8), imagem fixa q50 / q90 | 69 / 61 | 21 / 26 ms | 2,4 / 5,4 |
 | H.264, Minecraft pelo portal (fonte ~38 fps) | 35-37 | 30-38 ms | 5-9 |
 | H.264 + captura KMS, cenas leves / jogo | 43-56 / 40-42 | 32-38 / 55-66 ms | 4 / 8-9 |
-| H.264 com frames P (v0.9) | validado em gameplay; FPS e latência ainda não medidos | | 0,4-3 (medido no PC) |
+| H.264 com frames P (v0.9), Hollow Knight + KMS (relato) | quase 60, com engasgos de vez em quando | não medida | 1,2-2,5 (70-150 KB/s, contra 400-450 KB/s do H.264 só quadros completos) |
 
 - Decode no PSP: JPEG 7,9 ms (hardware); H.264 só quadros completos 3,7 ms;
   frame P + 2 cópias 10,6 ms.
 - No PC, o pacote P sai 1,8-2,7 ms depois do pedido (openh264 direto).
 - Nas cenas de jogo, a rede é o limite: o 802.11b do PSP entrega 380-460
   KB/s na prática. Os frames P existem para isso.
+- O decode dos frames P (10,6 ms) cabe nos 16,7 ms de um frame a 60 fps e
+  roda em paralelo com a chegada do próximo. Os engasgos do h264p vinham das
+  perdas no Wi-Fi (cada P precisa do anterior, então uma perda parava o
+  stream até o reenvio); a v1.0 manda o último pedaço em dobro e repete o
+  pedido, e a linha do servidor mostra o que sobrou e por quê.
 
 ## Solução de problemas
 
@@ -309,6 +330,7 @@ PSP-3000 e Fedora 44 com Wi-Fi 802.11b; detalhes e o histórico em
 |---|---|
 | "Sem resposta do PC" / "Procurar" não acha | o servidor está rodando? Libere 5123/udp e 5123/tcp no firewall. PC e PSP na mesma rede |
 | latência alta, FPS oscilando | desligue a Economia de energia WLAN do PSP; deixe o PC no 5 GHz ou no cabo (o servidor avisa se ele divide o canal de 2,4 GHz com o PSP); roteador em modo misto b/g/n |
+| engasgos de vez em quando (h264p) | veja os engasgos e a causa na linha do servidor (acima). `perda`/`pedido atrasado`: Wi-Fi (distância, canal de 2,4 GHz cheio, micro-ondas, Bluetooth); `captura`: o PC; `IDR` frequente: perdas seguidas. `--codec h264` aguenta perdas melhor (cada quadro é independente), com 2-3x mais banda |
 | captura em ~38-40 fps no GNOME 50 | use `--source kms` |
 | KMS: "sem permissão para ler a tela" | `make -C tools/kms cap` de novo (depois de cada `make`); partições montadas com `nosuid` ignoram a permissão |
 | controles não chegam | o log diz "controles desativados": configure o `/dev/uinput` (acima) |
@@ -327,9 +349,10 @@ python3 tools/fake_client.py --transport udp --h264p --seconds 10 --kbps 450 --d
 ```
 
 `tools/fake_client.py` imita as threads do PSP (fila em ordem, NACK, IDR,
-pedido antecipado) e confere que nenhum frame P é decodificado sem o
-anterior; `--kbps`, `--rtt-ms`, `--loss` e `--decode-ms` simulam o Wi-Fi e o
-PSP. Os números dele são simulados.
+pedido antecipado e repetido) e confere que nenhum frame P é decodificado
+sem o anterior; `--kbps`, `--rtt-ms`, `--loss`, `--loss-up`,
+`--loss-burst-ms` (rajadas de interferência) e `--decode-ms` simulam o Wi-Fi
+e o PSP, e o resumo conta os engasgos. Os números dele são simulados.
 
 **PPSSPPHeadless** (compile o PPSSPP com `cmake -DHEADLESS=ON`; o H.264
 precisa de `tools/ppsspp-pmp-fix.patch`):

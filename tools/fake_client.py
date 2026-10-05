@@ -8,10 +8,13 @@ ele produz são SIMULADOS. Os reais vêm do PSP (overlay e log do servidor).
 
 Com --h264p ele aceita frames P como o EBOOT v0.9 (fila em ordem, IDR pedido
 quando um frame se perde) e confere que nenhum frame P seria decodificado
-sem o anterior (a "corrente" de referências).
+sem o anterior (a "corrente" de referências). O resumo conta os engasgos
+(50 ms ou mais entre frames exibidos). FAKE_TRACE=1 no ambiente mostra cada
+pedido, pedaço, perda e NACK no stderr, com o horário em ms.
 """
 import argparse
 import json
+import os
 import random
 import select
 import socket
@@ -59,6 +62,10 @@ RTT_SAMPLE_MAX_S = 0.150             # acima disso o servidor esperou frame novo
 MAX_NACKS = 3          # depois disso desiste do frame e pede outro
 # pedido sem resposta: reenvia depois de uma ida e volta medida (rtt.timeout(RTO_MIN_S, RTO_MAX_S))
 STALL_S = 3.0          # nada completo por 3 s: recomeça (HELLO)
+# Frames P: o pedido de frame novo leva o número do frame (NACK) e vai de novo
+# depois disto se nada chegou; o servidor descarta o repetido (REQ_DUP_US no stream.c)
+REQ_DUP_S = 0.006
+DEFER_POLL_S = 0.001   # com o pedido adiado para o decode: reavalia a cada 1 ms
 EARLY_AUTO_MAX = 8 * 1024  # pedido antecipado automático: ping / intervalo entre pedaços x pedaço (teto)
 EARLY_PING_DEFAULT_S = 0.006
 AUD = b"\x00\x00\x00\x01\x09"
@@ -70,6 +77,15 @@ def h264_packet_kind(data: bytes) -> int:
         return 0
     i = data.find(b"\x00\x00\x01", 5)
     return 2 if i >= 0 and i + 3 < len(data) and data[i + 3] & 0x1F in (5, 7) else 1
+
+
+TRACE = os.environ.get("FAKE_TRACE")
+_T0 = time.monotonic()
+
+
+def trace(*a):
+    if TRACE:
+        print(f"{(time.monotonic() - _T0) * 1000:9.1f}", *a, file=sys.stderr)
 
 
 class Estimator:
@@ -101,6 +117,8 @@ class FakePSP:
         self.lost = 0      # frames incompletos abandonados (UDP)
         self.nacks = 0
         self.lost_chunks = 0  # descartados pela perda simulada (--loss)
+        self.burst_until = 0.0  # --loss-burst-ms: rajada de interferência em curso (sobe e desce)
+        self.burst_lock = threading.Lock()
         self.dup_chunks = 0   # chegaram repetidos ou atrasados: ar desperdiçado
         self.hdrs = []        # cabeçalhos JPEG guardados [(id, bytes)], o mais novo primeiro
         self.hdr_have = 0
@@ -119,6 +137,8 @@ class FakePSP:
         self.skipped = 0           # frames P pulados esperando IDR
         self.broken = 0            # frames P decodificados sem o anterior (não deveria acontecer)
         self.last_ack = None       # (frame_no, send_ts, shown_at, net_t, local_t, decode_t)
+        self.seen_max = 0          # maior frame visto (completo, abandonado ou chegando)
+        self.req_dups = 0          # pedidos repetidos depois de REQ_DUP_S
         self.send_lock = threading.Lock()
         self.want = threading.Event()
         self.dropped = 0
@@ -150,8 +170,32 @@ class FakePSP:
             return
         self._raw_send(data)
 
+    def lose(self, rate, where="descida"):
+        """Perda simulada de um pacote. Com --loss-burst-ms, cada perda abre uma
+        rajada em que tudo some (pedidos e pedaços), como interferência no ar."""
+        with self.burst_lock:
+            now = time.monotonic()
+            if now < self.burst_until:
+                return True
+            if rate and random.random() < rate:
+                self.burst_until = now + self.args.loss_burst_ms / 1000
+                trace("LOSS", where)
+                return True
+        return False
+
+    def send_new_req(self):
+        """Pede um frame novo. Frames P: com o número dele (FRAME + NACK do
+        frame), para o servidor reconhecer o pedido repetido. Devolve o número
+        (0 = pedido simples)."""
+        if not self.pmode or not self.udp:  # o TCP só lê o pedido, sem NACK
+            self.send_req(REQ_FRAME)
+            return 0
+        want = self.seen_max + 1
+        self.send_req(REQ_FRAME | protocol.REQ_NACK, protocol.pack_nack(want, range(protocol.MAX_CHUNKS)))
+        return want
+
     def _raw_send(self, data):
-        if self.args.loss_up and random.random() < self.args.loss_up:
+        if self.lose(self.args.loss_up, "subida"):
             return  # pedido "perdido no Wi-Fi" na subida
         with self.send_lock:
             try:
@@ -231,12 +275,20 @@ class FakePSP:
             req_q = []        # horários dos pedidos sem resposta (máx. 2)
             last_req = last_done = link_free = time.monotonic()
 
+            req_dup = None    # frames P: (horário, frame) do pedido a repetir se nada chegar
+
             def ask(flags):
-                nonlocal last_req
+                nonlocal last_req, req_dup
+                trace("ASK net", flags)
                 if len(req_q) < 2:
                     req_q.append(time.monotonic())
                 last_req = time.monotonic()
-                self.send_req(flags)
+                if flags == REQ_FRAME and not self.args.no_req_dup:
+                    want = self.send_new_req()
+                    if want:
+                        req_dup = (last_req + self.args.req_dup_ms / 1000, want)
+                else:
+                    self.send_req(flags)
 
             gap = Estimator(0.003, 0.003)   # entre pedaços seguidos de um frame
             rtt = Estimator(0.030, 0.010)   # pedido -> primeiro pedaço
@@ -256,6 +308,7 @@ class FakePSP:
                 self.nacks += 1
                 a["t_nack"] = time.monotonic()
                 a["deadline"] = a["t_nack"] + rtt.timeout(RTO_MIN_S, RTO_MAX_S)
+                trace("NACK", a["no"], missing)
                 self.send_req(protocol.REQ_NACK, protocol.pack_nack(a["no"], missing))
 
             self.ping_phase()
@@ -282,12 +335,24 @@ class FakePSP:
             while self.running:
                 with self.cond:
                     dec_asks, self.dec_asks = self.dec_asks, []
-                for t in dec_asks:  # frames P: o "decode" pediu o próximo
+                for t, want in dec_asks:  # frames P: o "decode" pediu o próximo
                     if len(req_q) < 2:
                         req_q.append(t)
                     last_req = t
+                    if want:
+                        req_dup = (t + self.args.req_dup_ms / 1000, want)
+                if req_dup:
+                    left = req_dup[0] - time.monotonic()
+                    if left <= 0:
+                        trace("REQ DUP", req_dup[1])
+                        self.req_dups += 1
+                        self.send_req(REQ_FRAME | protocol.REQ_NACK,
+                                      protocol.pack_nack(req_dup[1], range(protocol.MAX_CHUNKS)))
+                        req_dup = None
                 now = time.monotonic()
                 timeout, acted = 0.1, False
+                if req_dup:
+                    timeout = max(0.0, min(timeout, req_dup[0] - now))
                 for a in list(asm):
                     if a not in asm or a.get("held"):
                         continue
@@ -308,10 +373,15 @@ class FakePSP:
                         ask(REQ_FRAME)
                         continue
                     left = rtt.timeout(RTO_MIN_S, RTO_MAX_S) - (time.monotonic() - last_req)
-                    if left <= 0:
+                    if self.ask_deferred and not self.args.old_retry:
+                        # o decode ainda vai pedir: não há pedido para repetir; volta
+                        # logo para ver o pedido dele (DEFER_POLL_US no stream.c)
+                        left = DEFER_POLL_S
+                    elif left <= 0:
                         stalled = time.monotonic() - last_done > STALL_S
                         last_req = time.monotonic()
                         self.retries += 1
+                        trace("RETRY done", done, "rto", round(rtt.timeout(RTO_MIN_S, RTO_MAX_S) * 1000, 1))
                         if self.pmode and done and not stalled:
                             # frames P: NACK do frame esperado; se ele saiu e se perdeu inteiro,
                             # o servidor reenvia o mesmo (sem IDR)
@@ -327,8 +397,16 @@ class FakePSP:
                 r, _, _ = select.select([self.sock], [], [], timeout)
                 if not r:
                     continue
+                with self.cond:  # como no PSP: o pedido feito pelo decode conta antes do pacote
+                    dec_asks, self.dec_asks = self.dec_asks, []
+                for t, want in dec_asks:
+                    if len(req_q) < 2:
+                        req_q.append(t)
+                    last_req = t
+                    if want:
+                        req_dup = (t + self.args.req_dup_ms / 1000, want)
                 data, _ = self.sock.recvfrom(2048)
-                if self.args.loss and random.random() < self.args.loss:
+                if self.lose(self.args.loss):
                     self.lost_chunks += 1
                     continue  # pacote "perdido no Wi-Fi"
                 self.throttle.consume(len(data))
@@ -343,10 +421,15 @@ class FakePSP:
                 if no <= done and time.monotonic() - last_done > STALL_S:
                     asm.clear()
                     done = 0  # servidor reiniciou a numeração
+                    self.seen_max = 0
                     self.last_pub = 0
                 if no <= done:
                     self.dup_chunks += 1
                     continue
+                if no > self.seen_max:
+                    self.seen_max = no
+                if req_dup and no >= req_dup[1]:
+                    req_dup = None  # a resposta já está chegando
                 a = next((x for x in asm if x["no"] == no), None)
                 if a is None:
                     if len(asm) == 2:  # dois em andamento: o mais velho sai
@@ -364,6 +447,7 @@ class FakePSP:
                     a = {"no": no, "count": fcount, "have": set(), "nacks": 0, "asked": False, "hi": 0,
                          "last_rx": t_first, "t_first": t_first, "buf": bytearray(head) + bytearray(fsize),
                          "ts": fts, "t_req": t_first, "deadline": 0.0, "base": len(head), "hdr": hdr}
+                    trace("first", no, "count", fcount, "req_q", len(req_q))
                     if req_q:
                         a["t_req"] = req_q.pop(0)
                         if t_first - a["t_req"] < RTT_SAMPLE_MAX_S:
@@ -385,6 +469,7 @@ class FakePSP:
                     self.dup_chunks += 1
                 a["last_rx"] = t_rx
                 if len(a["have"]) == a["count"]:
+                    trace("complete", no)
                     t = time.monotonic()
                     t_req = max(a["t_req"], link_free)
                     idle = max(-0x7FFF, min(0x7FFF, int((a["t_first"] - link_free) * 10000)))
@@ -445,7 +530,7 @@ class FakePSP:
                 t_first = time.monotonic()
                 with self.cond:
                     if self.dec_asks:  # o pedido foi do "decode"
-                        t_req, self.dec_asks = self.dec_asks[-1], []
+                        t_req, self.dec_asks = self.dec_asks[-1][0], []
                 jpeg = recv_exact(self.sock, size, self.throttle)
                 self.pmode = jpeg.startswith(AUD)
                 if self.publish((frame_no, send_ts, jpeg, t_req, time.monotonic(), t_first, protocol.IDLE_NONE),
@@ -475,7 +560,7 @@ class FakePSP:
         threading.Thread(target=self.net_loop_udp if self.udp else self.net_loop, daemon=True).start()
         if self.args.input_demo:
             threading.Thread(target=self.input_demo, daemon=True).start()
-        sizes, nets, locals_ = [], [], []
+        sizes, nets, locals_, shown_t = [], [], [], []
         jpeg = b""
         start = time.monotonic()
         count = 0
@@ -495,13 +580,20 @@ class FakePSP:
                 ask = self.ask_deferred and not self.ready
                 if ask:
                     self.ask_deferred = False
-                    self.dec_asks.append(time.monotonic())
                 kind = h264_packet_kind(jpeg)
                 skip = kind == 1 and self.need_idr_from and frame_no >= self.need_idr_from
                 if kind == 2 and self.need_idr_from and frame_no >= self.need_idr_from:
                     self.need_idr_from = 0
+            trace("take", frame_no, "ask", ask)
             if ask:  # frames P: o próximo chega enquanto este "decodifica"
-                self.send_req(REQ_FRAME)
+                t_ask = time.monotonic()
+                want = 0
+                if self.args.no_req_dup:
+                    self.send_req(REQ_FRAME)
+                else:
+                    want = self.send_new_req()
+                with self.cond:
+                    self.dec_asks.append((t_ask, want))
             if kind:
                 if skip:
                     self.skipped += 1
@@ -513,6 +605,7 @@ class FakePSP:
             if self.args.decode_ms:
                 time.sleep(self.args.decode_ms / 1000)
             shown = time.monotonic()
+            shown_t.append(shown)
             count += 1
             sizes.append(len(jpeg))
             nets.append((t_recv - t_req) * 1000)
@@ -526,6 +619,8 @@ class FakePSP:
         elapsed = time.monotonic() - start
         self.running = False
         self.sock.close()
+        # engasgo: intervalo entre frames exibidos de 50 ms ou mais (3 frames a 60 fps)
+        gaps = sorted((b - a) * 1000 for a, b in zip(shown_t[5:], shown_t[6:]))
         return {
             "frames": count,
             "seconds": round(elapsed, 2),
@@ -542,9 +637,14 @@ class FakePSP:
             "stripped": self.stripped,
             "ping_ms": round(self.ping_us / 1000, 2),
             "retries": self.retries,
+            "req_dups": self.req_dups,
             "idr_requests": self.idr_reqs,
             "skipped": self.skipped,
             "broken": self.broken,
+            "hitches": sum(g >= 50 for g in gaps),
+            "hitch_ms": round(sum(g for g in gaps if g >= 50)),
+            "gap_p99_ms": round(gaps[min(len(gaps) - 1, int(len(gaps) * 0.99))], 1) if gaps else 0,
+            "gap_max_ms": round(gaps[-1], 1) if gaps else 0,
         }, jpeg
 
 
@@ -558,6 +658,8 @@ def main(argv=None):
     p.add_argument("--loss", type=float, default=0, help="UDP: fração de pacotes perdidos (ex.: 0.02)")
     p.add_argument("--loss-up", type=float, default=0,
                    help="UDP: fração dos pedidos do PSP perdidos na subida (ex.: 0.05)")
+    p.add_argument("--loss-burst-ms", type=float, default=0,
+                   help="UDP: cada perda abre uma rajada desta duração em que tudo some (ex.: 10)")
     p.add_argument("--rtt-ms", type=float, default=0, help="UDP: atraso fixo por pedido (ex.: 21, medido no PSP)")
     p.add_argument("--early-kb", default="auto",
                    help="UDP: pedido antecipado, como no PSP: auto (padrão) = ida e volta x vazão, "
@@ -570,6 +672,12 @@ def main(argv=None):
     p.add_argument("--input-demo", action="store_true",
                    help="enviar uma sequência de teste: X, cima, analógico p/ direita e p/ cima")
     p.add_argument("--json", action="store_true", help="imprimir o resumo em JSON")
+    p.add_argument("--no-req-dup", action="store_true",
+                   help="frames P: não repetir o pedido de frame (comparação com o EBOOT v1.0)")
+    p.add_argument("--req-dup-ms", type=float, default=REQ_DUP_S * 1000,
+                   help="frames P: repete o pedido de frame novo depois disto (REQ_DUP_US no stream.c)")
+    p.add_argument("--old-retry", action="store_true",
+                   help="repetir o pedido mesmo com o decode ainda para pedir (comparação com o EBOOT v1.0)")
     p.add_argument("--h264p", action="store_true",
                    help="aceitar H.264 com frames P, como o EBOOT v0.9 (servidor com --codec h264p)")
     args = p.parse_args(argv)
@@ -583,7 +691,8 @@ def main(argv=None):
         print("{frames} frames em {seconds} s: {fps} fps, {kb_per_frame} KB/frame, {kbps} KB/s, "
               "rede {net_ms} ms, local {local_ms} ms, descartados {dropped}, perdidos {lost}, "
               "NACKs {nacks}, pedaços perdidos/repetidos {lost_chunks}/{dup_chunks}, pedidos repetidos {retries}, IDR pedidos "
-              "{idr_requests}, P pulados {skipped}, P sem referência {broken}".format(**summary))
+              "{idr_requests}, P pulados {skipped}, P sem referência {broken}, engasgos (>= 50 ms) {hitches} "
+              "somando {hitch_ms} ms, intervalo p99 {gap_p99_ms} ms, máximo {gap_max_ms} ms".format(**summary))
     return 0
 
 

@@ -166,13 +166,30 @@ esperar por consulta se isso for mais de 1 ms mais rápido.
 
 O servidor reenvia só esses pedaços. Ele guarda os últimos 4 frames enviados.
 
-**FRAME + NACK** (frames P): é um pedido repetido. Um frame P pequeno cabe
-num pacote; se ele some, o PSP nem sabe que o frame existiu, e um frame novo
-chegaria sem a referência. Então o pedido repetido leva um NACK do frame
-esperado (o último completo + 1, todos os pedaços). Se o servidor já mandou
-esse frame (há mais de 10 ms), reenvia o mesmo e não manda outro; se mandou
-há menos de 10 ms, ele ainda está a caminho e o pedido é ignorado; se ainda
-não mandou, quem se perdeu foi o pedido, e ele vale como pedido normal.
+**FRAME + NACK** (frames P): pedido de um frame com o número dele (todos os
+pedaços marcados). Um frame P pequeno cabe num pacote; se ele some, o PSP nem
+sabe que o frame existiu, e um frame novo chegaria sem a referência. Se o
+servidor já mandou esse frame (há mais de 15 ms), reenvia o mesmo e não
+manda outro; se mandou há menos de 15 ms, ele ainda está a caminho e o
+pedido é ignorado; se ainda não mandou, vale como pedido normal (e se já há
+um pedido esperando frame novo, os dois viram um só).
+
+Desde a v1.0, com frames P no UDP, **todo pedido de frame novo** vai assim,
+com o número seguinte ao maior frame já visto, e vai **de novo 6 ms depois**
+se nenhum pedaço desse frame chegou. Pelas regras acima, a cópia nunca vira
+um frame a mais: ou ela se junta ao pedido que está esperando, ou chega com o
+frame já no ar. Mas se o original se perdeu na subida, a cópia é o pedido, e
+o frame sai 6 ms depois em vez de esperar o RTO (>= 30 ms) com o stream
+parado (um P não pode ser pulado). O pedido repetido por falta de resposta
+continua igual, com o NACK do último completo + 1.
+
+**Último pedaço em dobro** (frames P, servidor v1.0): o último pedaço de cada
+pacote P vai de novo 6 ms depois (`--p-redundancy-ms`; o PSP ignora o que já
+tem). Perder o último pedaço era o caso lento: sem pedaço seguinte, o PSP só
+nota pelo silêncio (20-50 ms) e o NACK leva mais uma ida e volta. Um frame P
+pequeno é um pedaço só, então a cópia cobre também o frame perdido inteiro.
+Custa 1 pacote por frame: ~40 KB/s a 60 fps num clipe de jogo (+27-53% sobre os
+frames P), ainda bem abaixo dos 350-450 KB/s do H.264 só com quadros completos.
 `BYE` (0x8) avisa que o app do PSP está saindo: o servidor solta as teclas e
 encerra a sessão na hora (no UDP não existe "fechar conexão").
 
@@ -186,7 +203,9 @@ encerra a sessão na hora (no UDP não existe "fechar conexão").
 | chegou o último pedaço do reenvio e ainda faltam outros | NACK de novo na hora |
 | 3 NACKs sem completar | desiste do frame (conta em "perdidos") e pede outro |
 | hora do NACK, mas um frame mais novo já está chegando | desiste do frame sem NACK: o reenvio viria na fila atrás do mais novo (frames P: manda o NACK, o mais novo depende dele) |
+| frames P: pedido de frame novo sem nenhum pedaço dele em 6 ms | manda o mesmo pedido de novo, uma vez (ver acima) |
 | pedido sem nenhuma resposta por uma ida e volta medida (média + 4 desvios do pedido -> 1º pedaço, 30-200 ms) | reenvia o pedido (frames P: com NACK do frame esperado, ver acima) |
+| frames P: frame pronto esperando o decode | o próximo é pedido pela thread de decode quando ela pega esse frame; até lá não há pedido para repetir |
 | 3 s sem completar nenhum frame | o pedido vai com HELLO (o servidor pode ter reiniciado) |
 | pedaço de frame mais antigo ou duplicado | ignorado |
 
