@@ -9,6 +9,7 @@ porta.
 """
 import argparse
 import logging
+import signal
 import socket
 import sys
 import threading
@@ -22,6 +23,7 @@ from protocol import REQ_FRAME, REQ_HELLO, Request
 import settings
 from stats import SessionStats, Window, format_summary, now_ms
 import transports
+import wolf_api
 from transports import DSCP, TcpTransport, UdpTransport, parse_datagram, set_dscp
 
 log = logging.getLogger("pspstream")
@@ -511,17 +513,35 @@ def build_parser() -> argparse.ArgumentParser:
                    help="marcação dos pacotes do servidor para a fila de prioridade do Wi-Fi (WMM): "
                         "ef = voz (padrão), cs5/af41 = vídeo, 0 = nenhuma")
     p.add_argument("--bind", default="0.0.0.0", help="endereço local (padrão %(default)s)")
-    p.add_argument("--source", choices=["portal", "kms", "test", "x11", "gst", "static"], default="portal",
+    p.add_argument("--source", choices=["portal", "kms", "test", "x11", "gst", "static", "wolf"], default="portal",
                    help="portal = tela no Wayland (padrão); kms = direto da placa de vídeo, sem o limite de "
                         "~40 fps do GNOME 50 (precisa de make -C tools/kms e make -C tools/kms cap); "
                         "test = padrão animado com relógio; x11 = sessão X11; gst = pipeline próprio "
-                        "(--gst-src); static = uma imagem")
+                        "(--gst-src); static = uma imagem; wolf = o que roda no Wolf (Games on Whales), pela "
+                        "API dele (README, seção Wolf)")
     p.add_argument("--kms-monitor", type=int, default=0, metavar="N",
                    help="kms: qual monitor ligado (0 = o primeiro; o log mostra quantos há)")
     p.add_argument("--kms-card", metavar="/dev/dri/cardN", help="kms: placa de vídeo (padrão: procura em todas)")
     p.add_argument("--image", default=str(here.parent / "assets" / "testcard.jpg"),
                    help="imagem do modo static (padrão: assets/testcard.jpg)")
     p.add_argument("--gst-src", help="elementos GStreamer da fonte para --source gst")
+    p.add_argument("--wolf-socket", default=wolf_api.default_socket(), metavar="CAMINHO",
+                   help="wolf: socket da API do Wolf (padrão: WOLF_SOCKET_PATH ou %(default)s). Ele dá controle "
+                        "total do Wolf: monte-o só no container do PSPStream e nunca o exponha por TCP")
+    p.add_argument("--wolf-target", default="", metavar="ID",
+                   help="wolf: o que espelhar: id ou nome do lobby, ou id da sessão (padrão: o único lobby "
+                        "aberto; com vários, o log lista as opções)")
+    p.add_argument("--wolf-video-convert", default="auto", metavar="auto|nvidia|va|cpu|ELEMENTOS",
+                   help="wolf: como o Wolf desce a imagem para a memória comum em 480x272. nvidia = CUDA (o "
+                        "padrão do Wolf com NVIDIA); va = Intel/AMD; cpu = Wolf com WOLF_USE_ZERO_COPY=FALSE; "
+                        "auto (padrão) tenta nessa ordem. Ou elementos GStreamer que entreguem I420 na "
+                        "resolução enviada")
+    p.add_argument("--wolf-rtp-port", type=int,
+                   default=wolf_api.env_port("WOLF_VIDEO_PING_PORT", wolf_api.VIDEO_PING_PORT), metavar="PORTA",
+                   help="wolf: porta UDP do ping de vídeo do Wolf (padrão: WOLF_VIDEO_PING_PORT ou %(default)s)")
+    p.add_argument("--wolf-audio-rtp-port", type=int,
+                   default=wolf_api.env_port("WOLF_AUDIO_PING_PORT", wolf_api.AUDIO_PING_PORT), metavar="PORTA",
+                   help="wolf: porta UDP do ping de som do Wolf (padrão: WOLF_AUDIO_PING_PORT ou %(default)s)")
     p.add_argument("--size", type=parse_size, default=(480, 272), help="resolução enviada (padrão 480x272)")
     p.add_argument("--fps", type=int, default=60,
                    help="taxa máxima de captura (padrão %(default)s). Capturar acima do que o PSP "
@@ -614,6 +634,10 @@ def load_config(parser, args, argv):
     if overridden:
         log.info("configuração: a linha de comando vale mais que o arquivo para %s", ", ".join(overridden))
     return store, explicit, from_file
+
+
+def _terminate(signum, frame):
+    raise KeyboardInterrupt
 
 
 def main(argv=None) -> int:
@@ -711,6 +735,10 @@ def main(argv=None) -> int:
     from netcheck import check_pc_wifi
     check_pc_wifi(local_ip())
     srv.settimeout(0.5)
+    if threading.current_thread() is threading.main_thread():
+        # docker stop e systemctl stop (SIGTERM) encerram como o Ctrl+C: a captura para direito
+        # (a fonte do Wolf encerra a sessão dela no Wolf).
+        signal.signal(signal.SIGTERM, _terminate)
     try:
         while True:
             failed = getattr(server.source, "failed", None)  # a interface web pode trocar a captura

@@ -277,13 +277,16 @@ class GstSource(FrameSource):
                 log.warning("GStreamer: %s", err.message)
             elif msg.type == Gst.MessageType.ERROR:
                 err, dbg = msg.parse_error()
-                self.failed = f"{err.message} ({dbg})"
-                log.error("GStreamer: %s", self.failed)
+                self._ended(f"{err.message} ({dbg})")
                 return
             elif msg.type == Gst.MessageType.EOS:
-                self.failed = "fim do stream (EOS)"
-                log.error("GStreamer: %s", self.failed)
+                self._ended("fim do stream (EOS)")
                 return
+
+    def _ended(self, reason: str) -> None:
+        """O pipeline parou (erro ou EOS). A fonte do Wolf trata o fim esperado sem o log de erro."""
+        self.failed = reason
+        log.error("GStreamer: %s", reason)
 
     def start(self) -> None:
         if self.pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:

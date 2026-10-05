@@ -116,6 +116,20 @@ de outra versão do protocolo é recusado com aviso no log.
 - `fake_client --audio`, `tools/emu_audio_test.py`, e o decoder do PSP
   (`psp/src/ima.c`) testado no PC contra a referência.
 - O README dizia `--p-redundancy-ms 4`; o padrão é 6.
+- **Wolf (Games on Whales), vídeo** (`--source wolf`, experimental): o
+  PSPStream cria uma sessão no Wolf pela API (socket Unix, `--wolf-socket`)
+  e o Wolf roda um pipeline do PSPStream, que escuta o lobby
+  (`interpipesrc`), reduz para 480x272 I420 e manda por TCP em 127.0.0.1;
+  daí em diante é igual às outras fontes (JPEG, h264, h264p). O alvo é o
+  único lobby aberto, ou `--wolf-target` (id ou nome do lobby, ou id da
+  sessão); a conversão na GPU é `--wolf-video-convert` (`nvidia`, `va`,
+  `cpu` ou `auto`, que tenta nessa ordem). Se o lobby fecha, a sessão é
+  encerrada e a fonte espera ele voltar, sem derrubar o servidor. Ping na
+  porta 48100 do Wolf (`--wolf-rtp-port`, `WOLF_VIDEO_PING_PORT`).
+  Testado só contra um Wolf falso (`tests/fake_wolf.py`), não num Wolf de
+  verdade.
+- O servidor encerra direito no SIGTERM (`docker stop`, `systemctl stop`),
+  como no Ctrl+C.
 
 ## 1.0
 

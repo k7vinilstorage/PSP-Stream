@@ -94,6 +94,13 @@ def build_source(args, portal=None):
 
         return StaticSource(reencode(args.quality), reencode, args.quality)
 
+    if args.source == "wolf":
+        from wolf_api import WolfApi
+        from wolf_source import WolfSource
+        return WolfSource(WolfApi(args.wolf_socket), args.wolf_target, args.wolf_video_convert, w, h, args.fps,
+                          args.quality, args.scale, not args.stretch, args.codec, args.wolf_rtp_port,
+                          args.wolf_audio_rtp_port)
+
     if args.source == "kms":
         from kms import KmsSource
         return KmsSource(w, h, args.fps, args.quality, args.scale, not args.stretch, args.codec,
