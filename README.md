@@ -557,7 +557,7 @@ diretório não serve, porque o Wolf cria o socket sem escrita para os outros.
 | mensagem ou sintoma | o que fazer |
 |---|---|
 | `o socket da API do Wolf não existe` | as duas linhas no serviço `wolf` (passo 1); `ls -l /var/run/wolf/` no servidor |
-| `sem permissão para abrir /var/run/wolf/wolf.sock` | `user: "0:0"` no serviço `pspstream`, ou o `setfacl` acima |
+| `sem permissão para abrir /var/run/wolf/wolf.sock` | `user: "0:0"` no serviço `pspstream`, ou o `setfacl` acima; e o diretório `/var/run/wolf` com `drwxr-xr-x` (o Docker o cria assim; sem capability, nem o uid 0 entra num diretório fechado de outro dono) |
 | `nenhum lobby aberto no Wolf; esperando um` | abra um jogo pelo Wolf UI |
 | `há vários lobbies abertos` | `--wolf-target "Nome do lobby"` (a lista está na mensagem) |
 | `nenhum frame com a conversão ...` | a conversão não bate com a GPU do Wolf: `--wolf-video-convert` (`nvidia`, `va`, `cpu`) e o erro em `docker logs <wolf>` |

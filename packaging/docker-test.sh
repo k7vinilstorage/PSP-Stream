@@ -9,6 +9,9 @@ set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 image=${1:-pspstream:test}
 run=$(mktemp -d)
+# Como o /var/run/wolf que o Docker cria no host: 0755 (o mktemp faz 0700, e o
+# uid 0 sem capabilities não entra num diretório 0700 de outro usuário).
+chmod 755 "$run"
 cleanup() {
     docker rm -f pspstream-test fakewolf-test > /dev/null 2>&1 || true
     rm -rf "$run" 2> /dev/null || sudo rm -rf "$run" 2> /dev/null || true
