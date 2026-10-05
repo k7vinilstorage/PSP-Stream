@@ -12,6 +12,22 @@ componentes (GStreamer, PipeWire, uinput).
 
 ## Resumo
 
+O mais fácil é o pacote: baixe o `pspstream_*.deb` das
+[Releases](https://github.com/k7vinilstorage/PSP-Stream/releases) e instale com o apt (ele puxa as dependências):
+
+```sh
+sudo apt install ./pspstream_*.deb
+pspstream --setup      # permissão da captura KMS (opcional) e firewall, se precisar
+pspstream              # e no PSP: "Procurar o PC na rede"
+```
+
+O EBOOT pronto também está lá (`PSPStream-EBOOT.zip`). O pacote foi
+instalado e testado num Ubuntu 22.04 limpo: o apt instalou as dependências
+e a `libopenh264`, e o servidor transmitiu para o PSP de teste em JPEG e
+H.264 com frames P.
+
+Pelo código:
+
 ```sh
 sudo apt install git python3
 git clone https://github.com/k7vinilstorage/PSP-Stream && cd PSP-Stream
@@ -51,7 +67,10 @@ sudo apt install git python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0
 para ele: num venv, conda ou pyenv, o `import gi` falha. Se precisar de um
 venv, crie com `python3 -m venv --system-site-packages`.
 
-**Sem `libopenh264-dev` no apt** (versões antigas): use a biblioteca do
+O `libopenh264-dev` existe no 22.04 (puxa a `libopenh264-6`, 2.2.0) e no
+24.04 (`libopenh264-7`, 2.4.1).
+
+**Sem `libopenh264-dev` no apt** (versões mais antigas): use a biblioteca do
 próprio Cisco. O nome do arquivo de cada versão está em
 <https://github.com/cisco/openh264/releases>; por exemplo:
 

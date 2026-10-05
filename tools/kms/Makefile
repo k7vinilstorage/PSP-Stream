@@ -9,7 +9,7 @@ DRM_CFLAGS := $(shell pkg-config --cflags libdrm)
 DRM_LIBS := $(shell pkg-config --libs libdrm)
 
 pspstream-kms: pspstream-kms.c
-	$(CC) $(CFLAGS) $(DRM_CFLAGS) -o $@ $< $(DRM_LIBS)
+	$(CC) $(CFLAGS) $(DRM_CFLAGS) $(LDFLAGS) -o $@ $< $(DRM_LIBS)
 
 cap: pspstream-kms
 	sudo setcap cap_sys_admin+ep pspstream-kms

@@ -101,6 +101,15 @@ de outra versão do protocolo é recusado com aviso no log.
   pacote.
 - No PSP, "Sem resposta do PC" sugere o `--check` em vez do comando do
   firewalld.
+- **EBOOT e pacotes prontos no GitHub** (`.github/workflows/build.yml`): a
+  cada push, o CI compila o EBOOT, roda os testes e gera o `.deb` (Ubuntu
+  22.04+, Debian 12+) e o `.rpm` (Fedora), instalando cada um para testar.
+  Um push na `main` refaz a pré-release `nightly`; uma tag `v*` publica a
+  release estável. O pacote traz o comando `pspstream`, a permissão do
+  `/dev/uinput`, o atalho no menu, o serviço de usuário do systemd e a regra
+  de firewall (ufw/firewalld); a permissão da captura KMS fica para o
+  `pspstream --setup`.
+- Licença MIT (`LICENSE`).
 - Servidor: `--no-audio`, `--audio-device` (`monitor`, `test` ou uma fonte do
   PipeWire), `--audio-rate`, `--audio-mono`.
 - Só pelo UDP (o padrão).

@@ -139,8 +139,16 @@ def firewall() -> str:
     return ""
 
 
+UFW_PROFILE = Path("/etc/ufw/applications.d/pspstream")            # do pacote .deb
+FIREWALLD_SERVICE = Path("/usr/lib/firewalld/services/pspstream.xml")  # do pacote .rpm
+
+
 def firewall_command(port: int, name=None) -> str:
     name = firewall() if name is None else name
+    if port == 5123 and name == "ufw" and UFW_PROFILE.exists():
+        return "sudo ufw allow PSPStream"
+    if port == 5123 and name == "firewalld" and FIREWALLD_SERVICE.exists():
+        return "sudo firewall-cmd --permanent --add-service=pspstream && sudo firewall-cmd --reload"
     if name == "ufw":
         return f"sudo ufw allow {port}/udp && sudo ufw allow {port}/tcp"
     if name == "firewalld":

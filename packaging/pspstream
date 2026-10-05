@@ -1,0 +1,3 @@
+#!/bin/sh
+# PSPStream (servidor), instalado pelo pacote. As opções: pspstream --help
+exec /usr/bin/python3 /usr/share/pspstream/server/pspstream.py "$@"
