@@ -1,0 +1,672 @@
+/*
+ * PSPStream - teste do decoder H.264 de hardware do PSP (Media Engine).
+ *
+ * Decodifica clipes curtos embutidos no EBOOT (tools/h264_probe_clips.py)
+ * pelo mesmo caminho que o PMP Mod / PMPlayer usavam para tocar H.264 cru:
+ *
+ *   sceMpegCreate com um ringbuffer vazio, sceMpegBasePESpacketCopy leva o
+ *   frame (Annex B) para a memória do Media Engine, sceMpegAvcDecode decodifica
+ *   e já converte para RGBA 8888 no buffer que passamos.
+ *
+ * Responde três perguntas que só o hardware responde:
+ *  1. o decoder funciona neste firmware, chamado de um app comum?
+ *  2. quanto tempo leva por frame (decode + conversão de cor)?
+ *  3. ele segura frames antes de entregar? Cada frame do clipe tem o próprio
+ *     número desenhado em 8 blocos (branco = bit 1); lendo os blocos no frame
+ *     que saiu, sabemos qual foi. Frames segurados = latência a mais no stream.
+ *
+ * O resultado aparece na tela e vai para resultado_h264.txt na pasta do EBOOT.
+ *
+ * v4: o stream com frames P (openh264, frame + 2 cópias) desligou o PSP, e o
+ * mesmo esquema com x264 tinha funcionado na v2. Cada diferença entre os dois
+ * vira um passo, do mais seguro para o mais arriscado. Antes de cada passo o
+ * relatório é gravado com "iniciando", e passo_atual.txt guarda qual é: se o
+ * PSP desligar, na próxima vez o passo vai para travou_h264.txt e é pulado,
+ * e os outros rodam.
+ *
+ * v4.1: os 6 passos rodaram no PSP-3000 sem desligar (60 frames cada). O
+ * passo 7 roda 12000 frames sem IDR: frame_num e POC do openh264 dão a volta
+ * no AU 32768 (frame ~10900), o que o stream faria em ~3 min. O progresso vai
+ * para progresso_h264.txt a cada 500 frames.
+ *
+ * v4.2: na v4.1 o passo 7 passou (a volta dos contadores não importa) e o 8
+ * DESLIGOU o PSP: um IDR no meio de uma sequência de P, sem Stop. Os passos
+ * 1-8 não rodam mais. Os novos chamam sceMpegAvcDecodeStop antes de cada IDR
+ * (a correção do stream): IDR a cada 10 frames, e uma perda antes do IDR.
+ */
+#include <pspctrl.h>
+#include <pspdebug.h>
+#include <pspdisplay.h>
+#include <pspkernel.h>
+#include <pspmpeg.h>
+#include <psppower.h>
+#include <psputility.h>
+#include <psputility_avmodules.h>
+#include <psputility_modules.h>
+
+#include <malloc.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+PSP_MODULE_INFO("PSPStreamH264", 0, 1, 0);
+PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
+/* Heap pequeno: o mpeg.prx carregado pelo sceUtility vai para a memória de usuário. */
+PSP_HEAP_SIZE_KB(6144);
+
+/* clips.bin, embutido pelo bin2o */
+extern unsigned char clips[];
+
+/* sceMpegbase. O SceMpegLLI do pspmpegbase.h é alinhado a 64 bytes; o PMP usa
+ * entradas de 16 bytes seguidas, e é isso que repetimos. */
+typedef struct {
+    void *src;
+    void *dst;
+    void *next;
+    int size;
+} lli_t;
+int sceMpegBasePESpacketCopy(lli_t *lli);
+
+#define DMA_BLOCK 4095    /* bytes por entrada da lista de DMA */
+#define ME_AVC_BUF 0x4a000 /* destino na memória do Media Engine (o mesmo do PMP) */
+#define MAX_AU (128 * 1024)
+#define FB_SIZE (512 * 272 * 4)
+#define VRAM ((u32 *)0x04000000)
+#define VRAM_UNCACHED ((u32 *)0x44000000)
+
+/* ---- relatório: tela + arquivo ---- */
+#define MAX_LINES 64
+static char report[MAX_LINES][80];
+static int nlines;
+
+static void say(const char *fmt, ...)
+{
+    if (nlines >= MAX_LINES)
+        return;
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(report[nlines], sizeof(report[0]), fmt, ap);
+    va_end(ap);
+    pspDebugScreenPrintf("%s\n", report[nlines]);
+    nlines++;
+}
+
+static unsigned now_us(void)
+{
+    return sceKernelGetSystemTimeLow();
+}
+
+/* ---- decoder ---- */
+typedef struct {
+    SceMpeg mpeg;
+    /* O SceMpegRingbuffer do pspsdk tem 44 bytes, mas a biblioteca mpeg dos
+     * firmwares novos escreve 48 (um campo gp a mais) e passaria por cima do
+     * campo seguinte. Folga de sobra. */
+    union {
+        SceMpegRingbuffer rb;
+        uint8_t rb_room[128];
+    };
+    void *data;
+    void *es;
+    lli_t *lli;
+    SceMpegAu au;
+    int inited, rb_made, created;
+} avc_t;
+
+static void avc_close(avc_t *a)
+{
+    if (a->es)
+        sceMpegFreeAvcEsBuf(&a->mpeg, a->es);
+    if (a->created)
+        sceMpegDelete(&a->mpeg);
+    if (a->rb_made)
+        sceMpegRingbufferDestruct(&a->rb);
+    if (a->inited)
+        sceMpegFinish();
+    free(a->data);
+    free(a->lli);
+    memset(a, 0, sizeof(*a));
+}
+
+/* 0 = ok; senão diz em que passo parou e o código. */
+static int avc_open(avc_t *a, const char **step)
+{
+    memset(a, 0, sizeof(*a));
+    int r;
+    *step = "sceMpegInit";
+    if ((r = sceMpegInit()) != 0)
+        return r;
+    a->inited = 1;
+    *step = "sceMpegQueryMemSize";
+    int size = sceMpegQueryMemSize(0);
+    if (size <= 0)
+        return size ? size : -1;
+    *step = "memalign";
+    if (!(a->data = memalign(64, size)))
+        return -1;
+    *step = "sceMpegRingbufferConstruct";
+    if ((r = sceMpegRingbufferConstruct(&a->rb, 0, NULL, 0, NULL, NULL)) != 0)
+        return r;
+    a->rb_made = 1;
+    *step = "sceMpegCreate";
+    if ((r = sceMpegCreate(&a->mpeg, a->data, size, &a->rb, 512, 0, 0)) != 0)
+        return r;
+    a->created = 1;
+    *step = "sceMpegAvcDecodeMode";
+    SceMpegAvcMode mode = {-1, SCE_MPEG_AVC_FORMAT_8888};
+    if ((r = sceMpegAvcDecodeMode(&a->mpeg, &mode)) != 0)
+        return r;
+    *step = "sceMpegMallocAvcEsBuf";
+    if (!(a->es = sceMpegMallocAvcEsBuf(&a->mpeg)))
+        return -1;
+    *step = "memalign lli";
+    if (!(a->lli = memalign(64, sizeof(lli_t) * (MAX_AU / DMA_BLOCK + 1))))
+        return -1;
+    memset(&a->au, 0xFF, sizeof(a->au));
+    a->au.iEsBuffer = 1; /* como o PMP: o primeiro ES buffer */
+    return 0;
+}
+
+/* au: alinhado a 64 bytes. dest: RGBA 8888, largura 512. */
+static int avc_decode(avc_t *a, void *au, int size, void *dest, SceInt32 *status)
+{
+    uint8_t *src = au;
+    uint8_t *dst = (uint8_t *)ME_AVC_BUF;
+    int i = 0;
+    for (;;) {
+        a->lli[i].src = src;
+        a->lli[i].dst = dst;
+        if (size > DMA_BLOCK) {
+            a->lli[i].size = DMA_BLOCK;
+            a->lli[i].next = &a->lli[i + 1];
+            src += DMA_BLOCK;
+            dst += DMA_BLOCK;
+            size -= DMA_BLOCK;
+            i++;
+        } else {
+            a->lli[i].size = size;
+            a->lli[i].next = NULL;
+            break;
+        }
+    }
+    sceKernelDcacheWritebackInvalidateAll(); /* o DMA lê a RAM, não o cache */
+    int r = sceMpegBasePESpacketCopy(a->lli);
+    if (r != 0)
+        return r;
+    a->au.iAuSize = (src - (uint8_t *)au) + size;
+    *status = 0;
+    return sceMpegAvcDecode(&a->mpeg, &a->au, 512, &dest, status);
+}
+
+/* Número do frame desenhado nos blocos; -1 se os blocos não forem preto/branco. */
+static int read_marker(const u32 *fb)
+{
+    int value = 0;
+    for (int k = 0; k < 8; k++) {
+        u32 p = fb[16 * 512 + 16 + 32 * k];
+        int lum = ((p & 0xFF) + (p >> 8 & 0xFF) + (p >> 16 & 0xFF)) / 3;
+        if (lum > 192)
+            value |= 1 << k;
+        else if (lum > 64)
+            return -1;
+    }
+    return value;
+}
+
+/* ---- clipes ---- */
+typedef struct {
+    char name[25];
+    int frames;
+    const uint8_t *sizes; /* u32 LE; lido com memcpy */
+    const uint8_t *data;
+} clip_t;
+
+static int clip_size(const clip_t *cl, int i)
+{
+    u32 v;
+    memcpy(&v, cl->sizes + 4 * i, 4);
+    return v;
+}
+
+static int load_clips(clip_t *out, int max)
+{
+    const uint8_t *p = clips;
+    if (memcmp(p, "H264PRB1", 8))
+        return 0;
+    u32 n;
+    memcpy(&n, p + 8, 4);
+    p += 12;
+    int count = 0;
+    for (u32 c = 0; c < n && count < max; c++, count++) {
+        clip_t *cl = &out[count];
+        memcpy(cl->name, p, 24);
+        cl->name[24] = 0;
+        u32 frames, bytes;
+        memcpy(&frames, p + 24, 4);
+        memcpy(&bytes, p + 28, 4);
+        cl->frames = frames;
+        cl->sizes = p + 32;
+        cl->data = p + 32 + 4 * frames;
+        p = cl->data + bytes;
+        p += (4 - ((p - clips) & 3)) & 3; /* o gerador alinha cada clipe a 4 bytes */
+    }
+    return count;
+}
+
+/* ---- um teste: decodifica o clipe inteiro ---- */
+static const char *g_argv0;
+static void write_report(const char *argv0);
+static void write_small(const char *name, const char *text, int append);
+
+enum {
+    MODE_PLAIN, /* uma chamada por AU; lê o número depois de cada uma */
+    MODE_GROUP, /* o clipe tem `group` AUs por frame (o frame + cópias); lê no último */
+    MODE_EMPTY, /* depois de cada AU, `group - 1` chamadas com um AU só com o AUD */
+    MODE_STOP,  /* depois de cada AU, sceMpegAvcDecodeStop (solta o que está preso) */
+};
+
+typedef struct {
+    const char *label;
+    int mode;
+    int group;  /* chamadas por frame mostrado */
+    int to_vram;
+    int skip;   /* AU não entregue (simula perda); -1 = nenhum */
+    int skip_to; /* com skip: pula de skip até antes deste AU (0 = só o skip) */
+    int stop_idr; /* Stop antes de cada IDR que não seja o primeiro */
+    const char *done; /* != NULL: já respondido numa versão anterior, não roda */
+} pass_t;
+
+/* O AU (Annex B) tem uma fatia IDR? */
+static int au_is_idr(const uint8_t *p, int n)
+{
+    for (int i = 0; i + 3 < n; i++)
+        if (p[i] == 0 && p[i + 1] == 0 && p[i + 2] == 1) {
+            if ((p[i + 3] & 0x1F) == 5)
+                return 1;
+            i += 2;
+        }
+    return 0;
+}
+
+static u32 *g_stop_bufs[4]; /* sceMpegAvcDecodeStop escreve até 4 imagens */
+
+static int run(const clip_t *cl, const pass_t *ps, uint8_t *stage, u32 *ram_fb)
+{
+    /* cinza: os blocos do número ficam ilegíveis até o decoder escrever algo */
+    memset(ps->to_vram ? (void *)VRAM_UNCACHED : (void *)((u32)ram_fb | 0x40000000), 0x80, FB_SIZE);
+    avc_t a;
+    const char *step = "";
+    int r = avc_open(&a, &step);
+    if (r != 0) {
+        say("%s: falhou em %s (%08x)", ps->label, step, r);
+        avc_close(&a);
+        write_report(g_argv0);
+        return -1;
+    }
+    static const uint8_t aud_only[64] __attribute__((aligned(64))) = {0, 0, 0, 1, 0x09, 0xF0};
+    int calls = 0, ok = 0, shown = 0, errors = 0, first_err = 0, first_err_at = -1, no_picture = 0;
+    int delay_min = 99, delay_max = -99, unreadable = 0, readable = 0, held_first = -1, stop_imgs = 0;
+    unsigned t_sum = 0, t_max = 0, t_min = ~0u, t_frame = 0, bytes = 0, extra_sum = 0, extra_n = 0;
+    int idr_stops = 0, idr_stop_imgs = 0;
+    unsigned idr_stop_t = 0;
+    const uint8_t *src = cl->data;
+    void *dest = ps->to_vram ? (void *)VRAM : (void *)ram_fb;
+    const u32 *fb = ps->to_vram ? VRAM_UNCACHED : (const u32 *)((u32)ram_fb | 0x40000000);
+    for (int i = 0; i < cl->frames && errors < 5; i++) {
+        int size = clip_size(cl, i);
+        if (size <= 0 || size > MAX_AU)
+            break;
+        memcpy(stage, src, size);
+        src += size;
+        if (i == ps->skip || (ps->skip >= 0 && i > ps->skip && i < ps->skip_to))
+            continue;
+        bytes += size;
+        unsigned dt_stop = 0;
+        if (ps->stop_idr && i > 0 && au_is_idr(stage, size)) { /* a correção do stream */
+            static u32 *vbufs[4] = {VRAM, VRAM, VRAM, VRAM};
+            SceInt32 ns = 0;
+            unsigned ts = now_us();
+            int rs = sceMpegAvcDecodeStop(&a.mpeg, 512, ps->to_vram ? vbufs : g_stop_bufs, &ns);
+            dt_stop = now_us() - ts;
+            idr_stop_t += dt_stop;
+            idr_stops++;
+            if (rs != 0 && !errors++) {
+                first_err = rs;
+                first_err_at = i;
+            }
+            if (rs == 0 && ns > 0)
+                idr_stop_imgs += ns;
+        }
+        SceInt32 status = 0;
+        unsigned t0 = now_us();
+        r = avc_decode(&a, stage, size, dest, &status);
+        unsigned dt = now_us() - t0 + dt_stop;
+        calls++;
+        if (r != 0) {
+            if (!errors++) {
+                first_err = r;
+                first_err_at = i;
+            }
+            continue;
+        }
+        ok++;
+        if (!status)
+            no_picture++;
+        int last = 1;       /* esta chamada fecha um frame mostrado? */
+        int expect = i;     /* número que deveria aparecer agora */
+        const u32 *out = fb;
+        if (ps->mode == MODE_GROUP) {
+            last = i % ps->group == ps->group - 1;
+            expect = i / ps->group;
+            if (i % ps->group) {
+                extra_sum += dt;
+                extra_n++;
+            }
+        } else if (ps->mode == MODE_EMPTY) {
+            for (int k = 1; k < ps->group && r == 0; k++) {
+                SceInt32 st = 0;
+                unsigned te = now_us();
+                r = avc_decode(&a, (void *)aud_only, 6, dest, &st);
+                unsigned de = now_us() - te;
+                calls++;
+                dt += de;
+                extra_sum += de;
+                extra_n++;
+                if (r == 0)
+                    ok++;
+                else if (!errors++) {
+                    first_err = r;
+                    first_err_at = i;
+                }
+            }
+        } else if (ps->mode == MODE_STOP) {
+            static u32 *vram_bufs[4] = {VRAM, VRAM, VRAM, VRAM};
+            SceInt32 n = 0;
+            unsigned ts = now_us();
+            r = sceMpegAvcDecodeStop(&a.mpeg, 512, ps->to_vram ? vram_bufs : g_stop_bufs, &n);
+            unsigned ds = now_us() - ts;
+            dt += ds;
+            extra_sum += ds;
+            extra_n++;
+            if (r != 0 && !errors++) {
+                first_err = r;
+                first_err_at = i;
+            }
+            if (r == 0 && n > 0 && n <= 4) {
+                stop_imgs += n;
+                out = ps->to_vram ? VRAM_UNCACHED : (const u32 *)((u32)g_stop_bufs[n - 1] | 0x40000000);
+            }
+        }
+        t_frame += dt;
+        if (!last)
+            continue;
+        shown++;
+        if (shown > 1) { /* o 1º (IDR, decoder começando) fica fora da média */
+            t_sum += t_frame;
+            if (t_frame > t_max)
+                t_max = t_frame;
+            if (t_frame < t_min)
+                t_min = t_frame;
+        }
+        t_frame = 0;
+        int idx = read_marker(out);
+        if (idx < 0) {
+            unreadable++;
+        } else {
+            if (held_first < 0)
+                held_first = expect;
+            readable++;
+            int d = ((expect - idx) % 256 + 256) % 256; /* o número desenhado vai até 255 */
+            if (d >= 128)
+                d -= 256;
+            if (d < delay_min)
+                delay_min = d;
+            if (d > delay_max)
+                delay_max = d;
+        }
+        if (out != VRAM_UNCACHED)
+            memcpy(VRAM_UNCACHED, out, FB_SIZE); /* mostra o progresso */
+        if (cl->frames > 1000 && shown % 500 == 0) { /* clipe longo: onde estava, se desligar */
+            char line[96];
+            snprintf(line, sizeof(line), "%s: frame %d de %d, AU %d, %d erros\r\n", ps->label, shown,
+                     cl->frames / ps->group, i + 1, errors);
+            write_small("progresso_h264.txt", line, 0);
+        }
+    }
+    say("%s: %d/%d chamadas ok, %.1f KB por frame", ps->label, ok, calls, bytes / 1024.0f / (shown ? shown : 1));
+    if (errors)
+        say("  erro %08x no AU %d (%d erros)", first_err, first_err_at, errors);
+    if (no_picture)
+        say("  %d chamadas sem imagem (status 0)", no_picture);
+    if (shown > 1)
+        say("  por frame mostrado %.2f ms (min %.2f, max %.2f)", t_sum / 1000.0f / (shown - 1), t_min / 1000.0f,
+            t_max / 1000.0f);
+    if (extra_n)
+        say("  chamadas extras: %.2f ms cada (%d)", extra_sum / 1000.0f / extra_n, extra_n);
+    if (ps->mode == MODE_STOP)
+        say("  Stop soltou %d imagens", stop_imgs);
+    if (idr_stops)
+        say("  Stop antes do IDR: %d, %.2f ms cada, soltou %d imagens", idr_stops,
+            idr_stop_t / 1000.0f / idr_stops, idr_stop_imgs);
+    if (readable)
+        say("  frames de atraso: %d a %d (1o legivel no frame %d)", delay_min, delay_max, held_first);
+    else
+        say("  nenhum frame legivel saiu (%d ilegiveis)", unreadable);
+    if (unreadable && readable)
+        say("  %d frames ilegiveis", unreadable);
+    avc_close(&a);
+    write_report(g_argv0); /* a cada passo: se o próximo travar o PSP, este fica gravado */
+    return ok;
+}
+
+/* Arquivo na pasta do EBOOT. 0 se o caminho do EBOOT não é conhecido. */
+static int app_file(char *path, int size, const char *name)
+{
+    snprintf(path, size, "%s", g_argv0);
+    char *slash = strrchr(path, '/');
+    if (!slash || (int)(slash - path) + 1 + (int)strlen(name) >= size)
+        return 0;
+    strcpy(slash + 1, name);
+    return 1;
+}
+
+static void write_report(const char *argv0)
+{
+    char path[256];
+    if (!app_file(path, sizeof(path), "resultado_h264.txt"))
+        return;
+    SceUID fd = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
+    if (fd < 0) {
+        pspDebugScreenPrintf("nao consegui gravar %s (%08x)\n", path, fd);
+        return;
+    }
+    for (int i = 0; i < nlines; i++) {
+        sceIoWrite(fd, report[i], strlen(report[i]));
+        sceIoWrite(fd, "\r\n", 2);
+    }
+    sceIoClose(fd);
+}
+
+/* ---- passos que desligaram o PSP numa rodada anterior ---- */
+#define MAX_PASSES 16
+static int crashed[MAX_PASSES];
+
+static int read_small(const char *name, char *buf, int size)
+{
+    char path[256];
+    if (!app_file(path, sizeof(path), name))
+        return -1;
+    SceUID fd = sceIoOpen(path, PSP_O_RDONLY, 0);
+    if (fd < 0)
+        return -1;
+    int n = sceIoRead(fd, buf, size - 1);
+    sceIoClose(fd);
+    buf[n > 0 ? n : 0] = 0;
+    return n;
+}
+
+static void write_small(const char *name, const char *text, int append)
+{
+    char path[256];
+    if (!app_file(path, sizeof(path), name))
+        return;
+    SceUID fd = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | (append ? PSP_O_APPEND : PSP_O_TRUNC), 0777);
+    if (fd < 0)
+        return;
+    sceIoWrite(fd, text, strlen(text));
+    sceIoClose(fd);
+}
+
+static void remove_small(const char *name)
+{
+    char path[256];
+    if (app_file(path, sizeof(path), name))
+        sceIoRemove(path);
+}
+
+/* passo_atual.txt sobrou = o PSP desligou durante aquele passo. */
+static void load_crashed(void)
+{
+    char buf[128];
+    if (read_small("passo_atual.txt", buf, sizeof(buf)) > 0) {
+        char line[16];
+        snprintf(line, sizeof(line), "%d\n", atoi(buf));
+        write_small("travou_h264.txt", line, 1);
+        remove_small("passo_atual.txt");
+    }
+    if (read_small("travou_h264.txt", buf, sizeof(buf)) > 0)
+        for (char *p = buf; *p;) {
+            int k = atoi(p);
+            if (k >= 1 && k <= MAX_PASSES)
+                crashed[k - 1] = 1;
+            while (*p && *p != '\n')
+                p++;
+            while (*p == '\n' || *p == '\r')
+                p++;
+        }
+}
+
+static int exit_cb(int arg1, int arg2, void *common)
+{
+    sceKernelExitGame();
+    return 0;
+}
+
+static int callback_thread(SceSize args, void *argp)
+{
+    int cbid = sceKernelCreateCallback("exit", exit_cb, NULL);
+    sceKernelRegisterExitCallback(cbid);
+    sceKernelSleepThreadCB();
+    return 0;
+}
+
+int main(int argc, char *argv[])
+{
+    SceUID cb = sceKernelCreateThread("cb", callback_thread, 0x11, 0x1000, 0, NULL);
+    if (cb >= 0)
+        sceKernelStartThread(cb, 0, NULL);
+    scePowerSetClockFrequency(333, 333, 166);
+
+    memset(VRAM_UNCACHED, 0, FB_SIZE);
+    sceDisplaySetMode(0, 480, 272);
+    sceDisplaySetFrameBuf(VRAM, 512, PSP_DISPLAY_PIXEL_FORMAT_8888, PSP_DISPLAY_SETBUF_NEXTFRAME);
+    pspDebugScreenInitEx(VRAM, PSP_DISPLAY_PIXEL_FORMAT_8888, 1);
+
+    g_argv0 = argc > 0 ? argv[0] : "";
+    say("PSPStream - teste do decoder H.264 (v4.2)");
+    load_crashed();
+    /* Como os jogos fazem nos firmwares novos (0x300 = codecs do ME, 0x303 =
+     * mpeg.prx); o sceUtilityLoadAvModule antigo fica de reserva. 0x80020139 =
+     * já carregado. */
+    int m1 = sceUtilityLoadModule(PSP_MODULE_AV_AVCODEC);
+    int m2 = sceUtilityLoadModule(PSP_MODULE_AV_MPEGBASE);
+    say("modulos: avcodec %08x, mpegbase %08x", m1, m2);
+    if ((m1 < 0 && m1 != (int)0x80020139) || (m2 < 0 && m2 != (int)0x80020139)) {
+        m1 = sceUtilityLoadAvModule(PSP_AV_MODULE_AVCODEC);
+        m2 = sceUtilityLoadAvModule(PSP_AV_MODULE_MPEGBASE);
+        say("modulos (metodo antigo): avcodec %08x, mpegbase %08x", m1, m2);
+    }
+    write_report(g_argv0);
+
+    clip_t cl[12];
+    int n = load_clips(cl, 12);
+    uint8_t *stage = memalign(64, MAX_AU);
+    u32 *ram_fb = memalign(64, FB_SIZE);
+    if (!n || !stage || !ram_fb) {
+        say("clipes ou memoria indisponiveis (%d clipes)", n);
+    } else {
+        sceKernelDelayThread(500 * 1000);
+        pspDebugScreenClear();
+        /* v1/v2 (PSP-3000, 6.61): decode de ~4 ms, mas o decoder segura 2
+         * frames. 2 cópias depois do frame: atraso 0, 12 ms. v3: só IDR + Stop
+         * (é o --codec h264). v4: o --codec h264p (openh264 + 2 cópias)
+         * desligou o PSP; os passos separam as diferenças para o x264 da v2:
+         * nível 4.1, e o stream do openh264 (POC tipo 0, frame_num de 15 bits). */
+#define OK41 "ok na v4.1"
+        static const pass_t passes[] = {
+            {"1 x264 + 2 copias, nivel 3.0 (v2)", MODE_GROUP, 3, 0, -1, 0, 0, OK41},
+            {"2 x264 + 2 copias, nivel 4.1", MODE_GROUP, 3, 0, -1, 0, 0, OK41},
+            {"3 openh264 IDR + Stop (h264)", MODE_STOP, 1, 1, -1, 0, 0, OK41},
+            {"4 openh264 P, 1 chamada, nivel 3.0", MODE_PLAIN, 1, 1, -1, 0, 0, OK41},
+            {"5 openh264 P + 2 copias, nivel 3.0", MODE_GROUP, 3, 1, -1, 0, 0, OK41},
+            {"6 openh264 P + 2 copias, nivel 4.1", MODE_GROUP, 3, 1, -1, 0, 0, OK41},
+            {"7 openh264 + 2 copias, 12000 frames", MODE_GROUP, 3, 1, -1, 0, 0, OK41},
+            /* frames 20-29 (AUs 60-89) não entram; o IDR do frame 30 entra sem Stop */
+            {"8 openh264 + 2 copias, perde 10, IDR", MODE_GROUP, 3, 1, 60, 90, 0, "DESLIGOU o PSP na v4.1"},
+            /* oh_idr10: IDR nos frames 0, 10, 20... (AUs 0, 30, 60...) */
+            {"9 IDR a cada 10, Stop antes", MODE_GROUP, 3, 1, -1, 0, 1, NULL},
+            /* frames 15-19 (AUs 45-59) não entram; Stop e o IDR do frame 20 */
+            {"10 perde 5, Stop, IDR", MODE_GROUP, 3, 1, 45, 60, 1, NULL},
+        };
+        static const int clip_of[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 8};
+        for (int k = 0; k < 4; k++)
+            g_stop_bufs[k] = memalign(64, FB_SIZE);
+        _Static_assert(sizeof(passes) / sizeof(passes[0]) == sizeof(clip_of) / sizeof(clip_of[0]), "um clipe por passo");
+        _Static_assert(sizeof(passes) / sizeof(passes[0]) <= MAX_PASSES, "MAX_PASSES");
+        for (unsigned p = 0; p < sizeof(passes) / sizeof(passes[0]); p++) {
+            if (passes[p].done) {
+                say("%s: %s (nao roda)", passes[p].label, passes[p].done);
+                continue;
+            }
+            if (crashed[p]) {
+                say("%s: DESLIGOU O PSP antes (pulado)", passes[p].label);
+                write_report(g_argv0);
+                continue;
+            }
+            if (clip_of[p] >= n || (passes[p].mode == MODE_STOP && !g_stop_bufs[3])) {
+                say("%s: clipe ou memoria indisponivel", passes[p].label);
+                continue;
+            }
+            /* gravado antes: se o PSP desligar aqui, a próxima rodada sabe onde */
+            char num[16];
+            snprintf(num, sizeof(num), "%u\n", p + 1);
+            write_small("passo_atual.txt", num, 0);
+            say("iniciando: %s", passes[p].label);
+            write_report(g_argv0);
+            if (nlines > 0 && !strncmp(report[nlines - 1], "iniciando", 9))
+                nlines--; /* a linha "iniciando" sai do relatório quando o passo termina */
+            run(&cl[clip_of[p]], &passes[p], stage, ram_fb);
+            remove_small("passo_atual.txt");
+        }
+    }
+
+    /* resultado por cima da última imagem */
+    pspDebugScreenSetXY(0, 0);
+    pspDebugScreenSetBackColor(0xFF000000);
+    pspDebugScreenEnableBackColor(1);
+    pspDebugScreenClear();
+    for (int i = 0; i < nlines; i++)
+        pspDebugScreenPrintf("%s\n", report[i]);
+    write_report(g_argv0);
+    pspDebugScreenPrintf("\nGravado em resultado_h264.txt. X ou O para sair.\n");
+
+    SceCtrlData pad;
+    unsigned t0 = now_us();
+    do {
+        sceCtrlReadBufferPositive(&pad, 1);
+        sceKernelDelayThread(50 * 1000);
+    } while (!(pad.Buttons & (PSP_CTRL_CROSS | PSP_CTRL_CIRCLE)) && now_us() - t0 < 300u * 1000 * 1000);
+    sceKernelExitGame();
+    return 0;
+}

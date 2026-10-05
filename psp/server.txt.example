@@ -1,5 +1,57 @@
-# PSPStream: IP do PC na primeira linha (porta opcional, padrão 5123)
-192.168.1.100
+# PSPStream: IP do PC na primeira linha (porta opcional, padrão 5123).
+# Tudo aqui também dá para mudar na tela de configuração do próprio PSP,
+# que grava este arquivo (sem os comentários).
+# Sem IP, a tela de configuração abre e espera: use "Procurar o PC na rede".
+# 192.168.1.100
 
 # Perfil de rede salvo em Ajustes > Ajustes de rede (1 = primeiro)
 wifi_profile=1
+
+# auto = decoder de hardware (sceJpeg) com fallback para software
+# hw | sw = forçar um deles. Se a imagem sair torta ou com cores erradas, use sw.
+decoder=auto
+
+# 1 = troca de quadro no vblank (sem rasgo na imagem, +0 a 16 ms)
+vsync=1
+
+# 1 = pede o próximo frame antes de decodificar o atual (rede e decode em paralelo)
+prefetch=1
+
+# 1 = mostra FPS, KB/frame, tempos de decode e rede
+overlay=1
+
+# 1 = os botões e o analógico do PSP viram teclado/mouse no PC
+input=1
+
+# udp | tcp. No PSP-3000 medido, o UDP não travou e o TCP travou várias vezes.
+# Com o stream rodando, SELECT+START+L troca e reconecta.
+# (libere as duas portas no firewall do PC: 5123/udp e 5123/tcp)
+transport=udp
+
+# UDP: pede o próximo frame quando faltar isso do atual, para ele começar a
+# chegar logo que o atual termina. auto = ida e volta x vazão, medidas pelo PSP
+# (~2-3 KB no PSP-3000). 0 = só depois do frame inteiro (como até a v0.7).
+# N = fixo em N KB; 6-14 KB fixos pediam cedo demais e a latência subia.
+early_kb=auto
+
+# UDP: como esperar pacotes. auto = ao conectar, mede a ida e volta com select()
+# e consultando o socket a cada 0,5 ms, e usa o mais rápido. select | poll = forçar.
+rxwait=auto
+
+# 1 = aceita H.264 (servidor com --codec h264 ou auto). 0 = só JPEG.
+h264=1
+
+# 1 = aceita H.264 com frames P (servidor com --codec h264p): ~10x menos bytes
+# por frame, decode de ~10,6 ms em vez de ~3,7 ms. 0 = o servidor manda todo frame IDR.
+h264p=1
+
+# Buffer de recepção do socket em KB. Para experimentar: 32, 64, 128
+rcvbuf=64
+
+# 1 = ao conectar, mede o decode hw x sw no próprio PSP e mostra na tela
+bench=0
+
+# Segundos com a tela de configuração aberta antes de conectar sozinho
+# (qualquer botão para a contagem). 0 = conecta direto; a tela continua
+# abrindo com SELECT + START + R durante o stream.
+menu_wait=3

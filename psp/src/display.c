@@ -62,6 +62,12 @@ void display_console(const char *fmt, ...)
         draw_idx = 1;
 }
 
+void display_console_clear(void)
+{
+    memset(UNCACHED(fb[0]), 0, FB_BYTES);
+    console_row = 0;
+}
+
 uint32_t *display_back(void)
 {
     return fb[draw_idx];
@@ -89,6 +95,9 @@ void display_writeback(void)
 
 void display_clear_back(void)
 {
+    /* Sem isso, linhas velhas no cache (de um frame anterior neste buffer)
+     * poderiam ser gravadas por cima dos zeros nas bordas da imagem. */
+    sceKernelDcacheWritebackInvalidateAll();
     memset(UNCACHED(fb[draw_idx]), 0, FB_BYTES);
 }
 

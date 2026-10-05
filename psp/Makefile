@@ -3,10 +3,11 @@
 #   make dist       -> dist/PSP/GAME/PSPStream/ pronto para copiar no memory stick
 
 TARGET = PSPStream
-OBJS = src/main.o src/config.o src/net.o src/display.o src/decode.o
+OBJS = src/main.o src/config.o src/net.o src/display.o src/decode.o src/stream.o src/menu.o
 
 INCDIR =
-CFLAGS = -O2 -G0 -Wall -Wextra -Wno-unused-parameter -std=gnu11
+# -MMD -MP: recompila o .c quando um .h muda (o build.mak não rastreia isso)
+CFLAGS = -O2 -G0 -Wall -Wextra -Wno-unused-parameter -std=gnu11 -MMD -MP
 CXXFLAGS = $(CFLAGS) -fno-exceptions -fno-rtti
 ASFLAGS = $(CFLAGS)
 
@@ -18,13 +19,16 @@ LDFLAGS =
 # depois da libc. Listados aqui também, os stubs de um mesmo módulo seriam
 # puxados em dois blocos separados, e o carregador (PSP e PPSSPP) leria NIDs
 # errados. Foi assim que socket()/connect() quebraram no primeiro teste.
-LIBS = -lturbojpeg -lpspjpeg -lpsppower
+LIBS = -lturbojpeg -lpspmpeg -lpspmpegbase -lpspjpeg -lpsppower
 
 EXTRA_TARGETS = EBOOT.PBP
 PSP_EBOOT_TITLE = PSPStream
 
-PSPSDK = $(shell psp-config --pspsdk-path)
+include pspdev.mk
 include $(PSPSDK)/lib/build.mak
+
+-include $(OBJS:.o=.d)
+EXTRA_CLEAN = $(OBJS:.o=.d)
 
 DIST_DIR = dist/PSP/GAME/PSPStream
 
@@ -33,4 +37,5 @@ dist: EBOOT.PBP
 	mkdir -p $(DIST_DIR)
 	cp EBOOT.PBP $(DIST_DIR)/
 	[ -f $(DIST_DIR)/server.txt ] || cp server.txt.example $(DIST_DIR)/server.txt
-	@echo "Copie a pasta dist/PSP para a raiz do memory stick e edite PSP/GAME/PSPStream/server.txt"
+	@echo "Copie a pasta dist/PSP para a raiz do memory stick. O IP do PC se configura no próprio PSP"
+	@echo "(tela de configuracao, 'Procurar o PC na rede') ou em PSP/GAME/PSPStream/server.txt."
