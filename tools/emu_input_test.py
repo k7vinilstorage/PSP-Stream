@@ -42,7 +42,7 @@ def main():
     (game / "server.txt").write_text(f"127.0.0.1:{port}\nexit_after=400\noverlay=0\ntransport={transport}\n")
 
     log_path = work / "server.log"
-    server = subprocess.Popen([python, str(ROOT / "server/pspstream.py"), "--source", "test", "--port", str(port),
+    server = subprocess.Popen([python, str(ROOT / "server/pspstream.py"), "--config", str(work / "server.json"), "--no-web", "--source", "test", "--port", str(port),
                                "--input-dry-run", "-v"], stdout=open(log_path, "w"), stderr=subprocess.STDOUT)
     time.sleep(1.5)
     emu = subprocess.Popen([headless, f"--memstick={work / 'ms'}", "--graphics=software", "--timeout=60",

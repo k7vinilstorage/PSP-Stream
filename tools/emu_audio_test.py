@@ -42,7 +42,7 @@ def main():
                                      "menu_wait=0\n")
 
     log_path, psp_path = work / "server.log", work / "psp.log"
-    server = subprocess.Popen([python, str(ROOT / "server/pspstream.py"), "--source", "static", "--codec", "h264p",
+    server = subprocess.Popen([python, str(ROOT / "server/pspstream.py"), "--config", str(work / "server.json"), "--no-web", "--source", "static", "--codec", "h264p",
                                "--audio-device", "test", "--no-input", "--port", str(port), "--stats-interval", "1"],
                               stdout=open(log_path, "w"), stderr=subprocess.STDOUT)
     time.sleep(1.5)

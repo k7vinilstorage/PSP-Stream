@@ -44,6 +44,9 @@ fila na rede, e a latência fica perto de um frame. Detalhes em
   Wi-Fi, transporte e opções, gravados no `server.txt`.
 - **Overlay** com FPS, KB por frame, tempos de decode e rede; estatísticas
   completas no log do servidor.
+- **Interface web** no PC (http://localhost:5124): as configurações gerais
+  (captura, codec, qualidade, som, controles, rede) mudam com o PSP
+  conectado, e ficam gravadas. Mostra também o estado do stream e o log.
 
 ## Requisitos
 
@@ -145,6 +148,9 @@ configuração espera: escolha **Procurar o PC na rede** (X) e depois aperte
 Sem `--source kms`, a captura é pelo portal: na primeira vez o GNOME/KDE
 pergunta qual monitor ou janela transmitir, e a escolha fica salva
 (`--forget` pergunta de novo).
+
+As configurações também mudam pelo navegador, em **http://localhost:5124**
+(ver [Interface web](#interface-web)).
 
 ## No PSP
 
@@ -304,6 +310,45 @@ Os perfis ficam em `server/keymap.json` (as chaves `_ajuda` explicam o
 formato), com zona morta, curva e velocidade ajustáveis. Se o PSP sumir com
 algo apertado, tudo é solto em 0,5 s (`--input-timeout`).
 
+## Interface web
+
+Com o servidor rodando, abra **http://localhost:5124** no PC. A página mostra
+o estado (PSP conectado, FPS no PSP e da captura, latência, Wi-Fi,
+engasgos, qualidade), as configurações gerais e o log.
+
+| grupo | o que muda |
+|---|---|
+| Captura | fonte (portal, kms, x11, test, static), monitor do KMS, janela e cursor do portal, limite de FPS, filtro de redução, esticar |
+| Vídeo | codec, qualidade adaptativa ou fixa, alvo e limites da adaptativa |
+| Som | ligado, fonte (o que sai nas caixas, tom de teste ou uma fonte do PipeWire), taxa, mono |
+| Controles | ligados, perfil, velocidade do mouse |
+| Rede | prioridade no Wi-Fi (DSCP), cópia do último pedaço, porta |
+
+Cada campo diz quando a mudança vale:
+
+- **na hora**: qualidade, limite de FPS, DSCP;
+- **refaz a captura**, com o PSP continuando conectado: fonte, codec,
+  filtro. A captura nova sobe antes de a velha parar; se não subir (ex.: KMS
+  sem o auxiliar), a velha continua e a página mostra o motivo. Com frames P,
+  o primeiro frame da captura nova é um IDR;
+- **refaz o som** ou **os controles** (as teclas seguradas são soltas);
+- **na próxima conexão do PSP** (cópia do último pedaço) ou **ao reiniciar o
+  servidor** (porta: mude também o `server.txt` do PSP).
+
+As mudanças ficam em `~/.config/pspstream/server.json` (só o que difere do
+padrão; `--config` escolhe outro arquivo). Na partida, a ordem é padrão <
+arquivo < linha de comando: uma opção dada na linha de comando vale mais que
+o arquivo, e a página marca esses campos com "linha de comando". Se a
+captura gravada no arquivo não subir, o servidor usa a da linha de comando e
+avisa no log, e a página continua acessível para trocar.
+
+Por padrão, a página só abre no próprio PC (127.0.0.1). `--web
+0.0.0.0:5124` abre para a rede local (do celular, por exemplo), **sem
+senha**: qualquer um na rede muda as configurações. `--no-web` desliga.
+A página recusa pedidos vindos de outros sites (ver `server/web.py`), e
+nada nela recebe caminho de arquivo nem pipeline do GStreamer
+(`--source gst` e `--image` só pela linha de comando).
+
 ## Opções do servidor
 
 | opção | o que faz |
@@ -326,6 +371,8 @@ algo apertado, tudo é solto em 0,5 s (`--input-timeout`).
 | `--audio-device NOME` | fonte do som: `monitor` (padrão, o que sai nas caixas), `test` (tom de 440 Hz) ou uma fonte do `pactl list short sources` |
 | `--audio-rate 44100`, `--audio-mono` | taxa (22050, 32000, 44100 ou 48000 Hz; 44100 é a do PSP) e mono: ~46 KB/s a 44,1 kHz estéreo, ~34 a 32 kHz, metade em mono |
 | `--bench 30,50,70,90` | varre qualidades com o PSP conectado e grava uma tabela |
+| `--web 127.0.0.1:5124`, `--no-web` | endereço da [interface web](#interface-web) (`0.0.0.0:5124` = rede local, sem senha) ou nenhuma |
+| `--config ARQUIVO` | configurações gravadas pela interface web (padrão `~/.config/pspstream/server.json`) |
 | `-v` | log detalhado |
 
 A cada 2 s, o servidor mostra uma linha de estatística:
@@ -459,6 +506,10 @@ psp/                   cliente (C, pspdev)
   probe/               teste do decoder H.264 no hardware
 server/                servidor (Python 3)
   pspstream.py         sessões, linha de comando, benchmark
+  capture.py           monta captura, som e controles (na partida e pela interface web)
+  settings.py          configurações gerais: esquema, server.json, validação
+  control.py           aplica as configurações com o servidor rodando
+  web.py, web/         interface web (http.server da biblioteca padrão; HTML, CSS e JS sem dependências)
   gst_source.py        pipeline GStreamer (captura -> 480x272 -> JPEG/H.264/I420)
   kms.py, portal.py    captura KMS e pelo portal ScreenCast
   audio.py             som: captura (pulsesrc), IMA ADPCM (adpcmenc), pacotes
@@ -468,8 +519,8 @@ server/                servidor (Python 3)
   inject.py, gamepad.py, keymap.json   controles (uinput)
   stats.py, sources.py, jpeginfo.py, protocol.py, netcheck.py
 tools/                 fake_client.py, emu_*.py/sh, h264_probe_clips.py, kms/ (auxiliar KMS)
-docs/                  PROTOCOL.md, MEASUREMENTS.md
-tests/                 testes do servidor
+docs/                  PROTOCOL.md, MEASUREMENTS.md, WINDOWS.md (plano do servidor de Windows)
+tests/                 testes do servidor e da interface web
 ```
 
 ### Decisões técnicas
@@ -539,6 +590,9 @@ tests/                 testes do servidor
 ## Limitações conhecidas
 
 - Um PSP por vez. Sem autenticação nem criptografia: use só na rede local.
+  A interface web também não tem senha (por padrão, só abre no próprio PC).
+- Servidor só para Linux por enquanto. O plano do servidor de Windows está
+  em [docs/WINDOWS.md](docs/WINDOWS.md).
 - Sem microfone (o som vai só do PC para o PSP).
 - O som só vai pelo UDP (o padrão).
 - 480x272 fixo para H.264; resoluções menores (só JPEG) aparecem

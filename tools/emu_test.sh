@@ -20,7 +20,9 @@ mkdir -p "$game"
 cp "$root/psp/EBOOT.PBP" "$game/"
 printf '127.0.0.1:%s\nexit_after=%s\n%b\n' "$port" "${EXIT_AFTER:-1}" "${EXTRA_CFG:-}" > "$game/server.txt"
 
-${PYTHON:-python3} "$root/server/pspstream.py" --port "$port" --stats-interval 1 "$@" > "$work/server.log" 2>&1 &
+# --config e --no-web: o teste não lê as configurações do usuário nem disputa a porta da interface web
+${PYTHON:-python3} "$root/server/pspstream.py" --port "$port" --stats-interval 1 --config "$work/server.json" --no-web \
+    "$@" > "$work/server.log" 2>&1 &
 srv=$!
 sleep 1
 

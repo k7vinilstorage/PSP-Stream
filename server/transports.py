@@ -45,6 +45,18 @@ def recv_exact(conn: socket.socket, size: int) -> bytes:
     return bytes(buf)
 
 
+DSCP = {"ef": 0xB8, "cs5": 0xA0, "af41": 0x88, "0": 0}
+
+
+def set_dscp(sock: socket.socket, name: str) -> None:
+    """Marca os pacotes do servidor (WMM): com EF, a placa Wi-Fi do PC e o
+    roteador usam a fila de voz, que disputa o ar com prioridade."""
+    try:
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, DSCP[name])
+    except OSError as exc:
+        log.debug("DSCP não aplicado: %s", exc)
+
+
 class TcpTransport:
     name = "tcp"
 

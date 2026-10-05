@@ -75,6 +75,17 @@ de outra versão do protocolo é recusado com aviso no log.
   volta da tela de configuração.
 - `fake_client`: `--rtt-jitter-ms` (ida e volta oscilando, exponencial),
   `--no-window` (sem a janela) e "P perdidos inteiros".
+- **Interface web das configurações gerais** (http://localhost:5124): captura,
+  codec, qualidade, som, controles e rede mudam com o PSP conectado. A
+  captura nova sobe antes de a velha parar e entra na mesma sessão (a
+  numeração dos frames continua, e o primeiro frame P é um IDR); se não
+  subir, a velha continua. Estado do stream e log na página. As mudanças
+  ficam em `~/.config/pspstream/server.json`; a linha de comando vale mais
+  que o arquivo. Só no próprio PC por padrão (`--web`, `--no-web`), com
+  proteção contra pedidos de outros sites. Só a biblioteca padrão do Python.
+- Servidor reorganizado para isso: `capture.py` (montagem da captura, som e
+  controles), `settings.py`, `control.py`, `web.py`. As ferramentas do
+  emulador rodam o servidor com `--config` próprio e `--no-web`.
 - Servidor: `--no-audio`, `--audio-device` (`monitor`, `test` ou uma fonte do
   PipeWire), `--audio-rate`, `--audio-mono`.
 - Só pelo UDP (o padrão).

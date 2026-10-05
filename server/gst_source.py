@@ -285,6 +285,11 @@ class GstSource(FrameSource):
         if self.h264 is not None:
             self.h264.close()
 
+    def set_fps(self, fps: int) -> None:
+        """Limite de FPS novo com o pipeline rodando (interface web)."""
+        self.fps = fps
+        self._limiter = RateLimiter(fps)
+
     def set_quality(self, quality: int) -> None:
         # jpegenc aceita mudar a qualidade com o pipeline rodando; o H.264 troca o QP no próximo frame.
         quality = max(1, min(100, int(quality)))
