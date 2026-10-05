@@ -34,13 +34,13 @@
 
 enum {
     IT_HOST, IT_PORT, IT_WIFI, IT_FIND, IT_TRANSPORT, IT_H264, IT_H264P, IT_DECODER, IT_VSYNC, IT_OVERLAY,
-    IT_INPUT, IT_PREFETCH, IT_EARLY, IT_RXWAIT, IT_SAVE, IT_CONNECT, IT_QUIT, IT_COUNT
+    IT_INPUT, IT_AUDIO, IT_PREFETCH, IT_EARLY, IT_RXWAIT, IT_SAVE, IT_CONNECT, IT_QUIT, IT_COUNT
 };
 
 static const char *const labels[IT_COUNT] = {
     "IP do PC", "Porta", "Perfil de Wi-Fi", "[ Procurar o PC na rede ]", "Transporte", "H.264",
     "H.264 com frames P", "Decoder do JPEG", "Vsync", "Overlay (FPS, tempos)", "Controles para o PC",
-    "Prefetch", "Pedido antecipado (UDP)", "Espera de pacotes (UDP)", "[ Salvar e conectar ]",
+    "Som do PC (UDP)", "Prefetch", "Pedido antecipado (UDP)", "Espera de pacotes (UDP)", "[ Salvar e conectar ]",
     "[ Conectar sem salvar ]", "[ Sair ]",
 };
 
@@ -56,6 +56,7 @@ static const char *const help[IT_COUNT] = {
     "Troca de imagem no vblank: sem rasgo, +0 a 16 ms",
     "Mostra FPS, KB e tempos no canto da tela",
     "Botoes do PSP viram controle/teclado no PC",
+    "Toca o som do PC (~33 KB/s). No stream: SELECT+START+cima",
     "auto = sim, menos com frames P (la: um frame por vez, liso)",
     "Pede o proximo frame antes do fim do atual (auto = medido)",
     "auto mede select e consulta no inicio e usa o mais rapido",
@@ -194,6 +195,9 @@ static void change(ps_config_t *cfg, int item, int dir)
     case IT_INPUT:
         cfg->input = !cfg->input;
         break;
+    case IT_AUDIO:
+        cfg->audio = !cfg->audio;
+        break;
     case IT_PREFETCH: /* auto -> sim -> nao */
         cfg->prefetch = cfg->prefetch == PREFETCH_AUTO ? (dir > 0 ? 1 : 0)
                       : cfg->prefetch               ? (dir > 0 ? 0 : PREFETCH_AUTO)
@@ -251,6 +255,9 @@ static void value_text(const ps_config_t *cfg, int item, char *out, int len)
         break;
     case IT_INPUT:
         snprintf(out, len, "%s", yes(cfg->input));
+        break;
+    case IT_AUDIO:
+        snprintf(out, len, "%s", yes(cfg->audio));
         break;
     case IT_PREFETCH:
         snprintf(out, len, "%s", cfg->prefetch == PREFETCH_AUTO ? "auto (nao com frames P)" : yes(cfg->prefetch));

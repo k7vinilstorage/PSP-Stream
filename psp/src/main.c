@@ -9,6 +9,7 @@
  * Atalhos locais (segure SELECT + START e aperte):
  *   triângulo = overlay    quadrado = decoder hw/sw
  *   círculo   = vsync      X        = prefetch (liga/desliga o que está valendo)
+ *   cima      = som do PC liga/desliga (UDP)
  *   L         = transporte TCP/UDP (reconecta)
  *   R         = tela de configuração (menu.c)
  */
@@ -24,6 +25,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "audio.h"
 #include "config.h"
 #include "decode.h"
 #include "display.h"
@@ -33,7 +35,7 @@
 #include "stream.h"
 #include "version.h"
 
-PSP_MODULE_INFO("PSPStream", PSP_MODULE_USER, 1, 0);
+PSP_MODULE_INFO("PSPStream", PSP_MODULE_USER, 1, 1);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
 /* Heap fixo: os módulos de rede/avcodec carregados depois precisam de RAM livre. */
 PSP_HEAP_SIZE_KB(8 * 1024);
@@ -153,9 +155,9 @@ static void stats_add(stats_t *s, const ps_frame_t *f, unsigned dec_us, unsigned
 #define INPUT_PRIO 0x28
 #define STICK_DEADZONE 20 /* analógicos gastos repousam longe de 128 */
 
-enum { ACT_OVERLAY, ACT_DECODER, ACT_VSYNC, ACT_PREFETCH, ACT_TRANSPORT, ACT_CONFIG, ACT_COUNT };
+enum { ACT_OVERLAY, ACT_DECODER, ACT_VSYNC, ACT_PREFETCH, ACT_TRANSPORT, ACT_CONFIG, ACT_AUDIO, ACT_COUNT };
 static const uint32_t act_button[ACT_COUNT] = {PSP_CTRL_TRIANGLE, PSP_CTRL_SQUARE, PSP_CTRL_CIRCLE, PSP_CTRL_CROSS,
-                                               PSP_CTRL_LTRIGGER, PSP_CTRL_RTRIGGER};
+                                               PSP_CTRL_LTRIGGER, PSP_CTRL_RTRIGGER, PSP_CTRL_UP};
 /* Só a thread de controles escreve; a principal só lê: sem lock. */
 static volatile unsigned act_count[ACT_COUNT];
 static volatile int input_run;
@@ -222,7 +224,7 @@ static int input_thread(SceSize args, void *argp)
 }
 
 typedef struct {
-    int overlay, vsync, prefetch, udp;
+    int overlay, vsync, prefetch, udp, audio;
     int early_auto;       /* early_kb=auto: o overlay mostra o valor calculado */
     int switch_transport; /* atalho L: reconectar com o outro transporte */
     int open_config;      /* atalho R: parar o stream e abrir a configuração */
@@ -267,6 +269,14 @@ static void apply_menu(ui_t *ui, unsigned seen[ACT_COUNT])
                 snprintf(msg, sizeof(msg), "prefetch: %s", ui->prefetch ? "on" : "off");
                 toast(ui, msg);
                 break;
+            case ACT_AUDIO:
+                ui->audio = !ui->audio;
+                audio_set_enabled(ui->audio);
+                stream_set_audio(ui->audio); /* sem o pedido de som, o PC para de mandar */
+                snprintf(msg, sizeof(msg), "som: %s%s", ui->audio ? "ligado" : "desligado",
+                         ui->audio && !ui->udp ? " (so no UDP)" : "");
+                toast(ui, msg);
+                break;
             case ACT_TRANSPORT:
                 ui->switch_transport = 1;
                 break;
@@ -300,6 +310,17 @@ static void draw_overlay(const ui_t *ui, const stats_t *s)
                              ui->early_auto ? " (auto)" : "");
             else
                 display_text(0, 3, 0xFF00FF00, "pede o proximo no fim do frame");
+            audio_stats_t a;
+            audio_get_stats(&a);
+            if (!ui->audio)
+                display_text(0, 4, 0xFF00FF00, "som desligado (SELECT+START+cima)");
+            else if (a.error < 0)
+                display_text(0, 4, 0xFF00FF00, "som: erro no canal de audio 0x%08X", a.error);
+            else if (!a.rate)
+                display_text(0, 4, 0xFF00FF00, "som: esperando o PC (servidor sem --no-audio?)");
+            else
+                display_text(0, 4, 0xFF00FF00, "som %.1f kHz buf %d ms (alvo %d) perdidos %u vazio %u pulos %u",
+                             a.rate / 1000.0f, a.buffered_ms, a.target_ms, a.lost, a.underruns, a.skips);
         }
     }
     if (ui->toast_until && (int)(ui->toast_until - now_us()) > 0)
@@ -351,9 +372,13 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
     ui->open_config = 0;
     stream_set_h264(cfg->h264);
     stream_set_h264p(cfg->h264p);
+    stream_set_audio(ui->audio);
+    if (ui->udp) /* o som só vem pelo UDP */
+        audio_start(ui->audio);
     int early = cfg->early_kb < 0 ? STREAM_EARLY_AUTO : cfg->early_kb * 1024;
     if (stream_start(sock, ui->udp, dest, ui->prefetch, early, cfg->rxwait, &g_running) < 0) {
         status("Erro ao iniciar a thread de rede");
+        audio_stop();
         return -1;
     }
     stats_t st;
@@ -475,6 +500,7 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
         sceKernelDeleteThread(input_thid);
     }
     stream_stop();
+    audio_stop();
     return err;
 }
 
@@ -550,6 +576,7 @@ static void apply_config(const ps_config_t *cfg, ui_t *ui, int decoder_ready)
     ui->vsync = cfg->vsync;
     ui->prefetch = cfg->prefetch;
     ui->udp = cfg->udp;
+    ui->audio = cfg->audio;
     input_enabled = cfg->input;
     if (decoder_ready)
         decoder_select(cfg->decoder == DEC_SW ? DEC_SW : DEC_HW);
@@ -647,6 +674,7 @@ int main(int argc, char *argv[])
             cfg.vsync = ui.vsync;
             cfg.prefetch = ui.prefetch;
             cfg.udp = ui.udp;
+            cfg.audio = ui.audio;
             need_menu = 1;
         } else if (g_running) {
             display_console("Conexao perdida (%d). Reconectando...", e);

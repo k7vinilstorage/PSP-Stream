@@ -50,7 +50,7 @@ PSP                                   PC
 | 28 | u16 | first_t | 0,1 ms: pedido -> primeiro pedaço/byte do frame (ida e volta + reação do servidor) |
 | 30 | u16 | burst_t | 0,1 ms: primeiro -> último pedaço (dá a vazão real do enlace) |
 | 32 | u8 | signal | sinal do Wi-Fi do PSP, % |
-| 33 | u8 | wflags | `0x1` = "Economia de energia WLAN" ligada no XMB; `0x2` = esperando pacotes por consulta, não `select()`; `0x4` = decodifica H.264; `0x8` = aceita frames P (v0.9) |
+| 33 | u8 | wflags | `0x1` = "Economia de energia WLAN" ligada no XMB; `0x2` = esperando pacotes por consulta, não `select()`; `0x4` = decodifica H.264; `0x8` = aceita frames P (v0.9); `0x10` = toca o som (v1.1, só UDP; abaixo) |
 | 34 | u16 | lost | UDP: frames abandonados incompletos desde o início do stream |
 | 36 | u32 | hdr_have | UDP: id do cabeçalho JPEG guardado no PSP (0 = nenhum) |
 | 40 | u16 | ping_select | 0,1 ms: ida e volta pura medida no início, esperando com `select()` |
@@ -237,6 +237,35 @@ e é identificada pelo IP:porta do PSP.
 **Controles no UDP:** cada mudança é mandada duas vezes (na amostra seguinte
 de novo). Enquanto algo está segurado, o estado é reafirmado a cada ~100 ms,
 em TCP e UDP.
+
+## Som (UDP, v1.1)
+
+O som não segue o modelo pull: enquanto o pedido mais recente do PSP tiver
+`wflags & 0x10`, o servidor **empurra** um pacote a cada ~20 ms para o
+endereço da sessão UDP. Sem o bit (`audio=0` no `server.txt`, ou desligado
+com SELECT + START + cima), nenhum pacote de som sai, e um EBOOT antigo
+nunca recebe som.
+
+| offset | tipo | campo | descrição |
+|---|---|---|---|
+| 0 | char[4] | magic | `PSA1` |
+| 4 | u32 | seq | +1 por pacote; um buraco é um pacote perdido |
+| 8 | u32 | pos | amostra (por canal) do início do bloco |
+| 12 | u16 | rate | Hz: 22050, 32000 (padrão), 44100 ou 48000 |
+| 14 | u8 | channels | 1 ou 2 |
+| 15 | u8 | codec | `1` = IMA ADPCM, bloco do WAV (o `adpcmenc` do GStreamer, layout dvi) |
+| 16 | u16 | samples | amostras por canal no bloco (641 a 32 kHz: 1 + 8 x 80) |
+| 18 | u16 | reservado | 0 |
+| 20 | | bloco | por canal, 4 bytes (1ª amostra int16, índice do passo, 0); depois grupos de 4 bytes (8 amostras) alternando os canais, nibble baixo primeiro |
+
+Cada bloco decodifica sozinho. O PSP decodifica num anel e toca pelo
+`sceAudioSRC` (canal com conversão de taxa), em pedaços de 256 amostras. O
+anel começa a tocar com 40 ms e se ajusta: +10 ms a cada vez que esvazia,
+-5 ms a cada 10 s sem faltar, entre 30 e 120 ms. Pacote perdido (até 5
+seguidos) vira silêncio do mesmo tamanho; um buraco maior, ou o `seq`
+voltando (servidor reiniciado), recomeça o anel. Som acima de alvo + 40 ms é
+descartado até o alvo, para o atraso não crescer (rajadas depois de um
+atraso, ou o relógio do PC um pouco mais rápido que o do PSP).
 
 ## Conexão
 

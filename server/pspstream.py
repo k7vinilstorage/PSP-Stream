@@ -25,7 +25,7 @@ log = logging.getLogger("pspstream")
 
 # Sem frame novo por este tempo, reenvia o último para a conexão não morrer
 # (no Wayland o compositor só manda frames quando a tela muda).
-VERSION = "1.0"
+VERSION = "1.1"
 KEEPALIVE_S = 1.0
 P_PACKET_START = b"\x00\x00\x00\x01\x09"  # pacote de frames P: começa com um AUD (h264.AUD)
 
@@ -49,7 +49,7 @@ def local_ip() -> str:
 class Session:
     """Um PSP conectado. O transporte (TCP/UDP) entrega pedidos e envia frames."""
 
-    def __init__(self, transport, source, args, injector=None):
+    def __init__(self, transport, source, args, injector=None, audio=None):
         self.transport = transport
         transport.session = self  # antes de qualquer pedido chegar (UDP entrega na hora)
         self.source = source
@@ -73,10 +73,15 @@ class Session:
         self.encoder_p = None     # o encoder atual faz frames P (o PSP aceita)?
         self.p_capable = False    # o PSP informou PS_CAP_H264P
         self.idr_wanted = True    # o PSP pediu IDR (ou a sessão acabou de começar)
+        self.audio = audio        # AudioCapture (som do PC) ou None
+        self.audio_on = None      # o PSP pede som (CAP_AUDIO)? None = ainda não disse
 
     def run(self) -> None:
         log.info("PSP conectado via %s: %s:%d", self.transport.name.upper(), *self.transport.addr)
         self.transport.start(self)
+        audio_listening = self.audio is not None and hasattr(self.transport, "send_audio")
+        if audio_listening:
+            self.audio.add_listener(self._on_audio)
         if self.args.bench:
             threading.Thread(target=self._bench, name="bench", daemon=True).start()
         try:
@@ -86,6 +91,8 @@ class Session:
                 log.info("envio falhou: %s", exc)
         finally:
             self.close()
+            if audio_listening:
+                self.audio.remove_listener(self._on_audio)
             if self.encoder is not None:
                 self.encoder.close()
             if self.injector:
@@ -119,6 +126,7 @@ class Session:
         if req.signal:
             self._wifi(req.signal, req.wflags)
         self.p_capable = bool(req.wflags & protocol.CAP_H264P)
+        self._audio_wanted(bool(req.wflags & protocol.CAP_AUDIO))
         if req.flags & (protocol.REQ_IDR | REQ_HELLO):
             self.idr_wanted = True
         if self.args.codec in ("h264", "h264p") and not req.wflags & protocol.CAP_H264 and not self.h264_warned:
@@ -140,6 +148,29 @@ class Session:
                     self.pending = True
                     self.arrived = time.monotonic()
                 self.cond.notify_all()
+
+    def _audio_wanted(self, on: bool) -> None:
+        """O PSP liga e desliga o som (audio= no server.txt, tela de configuração
+        ou SELECT + START + cima): sem CAP_AUDIO, nenhum pacote de som sai."""
+        if on == self.audio_on:
+            return
+        self.audio_on = on
+        if not hasattr(self.transport, "send_audio"):
+            return  # TCP: o PSP nem pede som (só vai pelo UDP)
+        if not on:
+            if self.audio is not None:
+                log.info("som: desligado no PSP")
+        elif self.audio is None:
+            log.info("som: o PSP pediu, mas o servidor está sem som (--no-audio, ou a captura não abriu)")
+        else:
+            log.info("som: ligado no PSP (%d Hz, %s, ~%.0f KB/s)", self.audio.rate,
+                     "estéreo" if self.audio.channels == 2 else "mono", self.audio.kbps)
+
+    def _on_audio(self, seq, pos, rate, channels, samples, block) -> None:
+        """Thread da captura de som: um bloco para o PSP, se ele quer som."""
+        if self.alive and self.audio_on:
+            self.stats.on_audio(self.transport.send_audio(
+                protocol.pack_audio(seq, pos, rate, channels, samples, block)))
 
     def _wifi(self, signal: int, flags: int) -> None:
         old = self.wifi
@@ -310,10 +341,11 @@ class Server:
     """Um PSP por vez. Uma conexão nova (TCP ou HELLO por UDP) derruba a
     anterior: o PSP pode ter reiniciado o app e deixado a sessão velha pendurada."""
 
-    def __init__(self, source, args, injector):
+    def __init__(self, source, args, injector, audio=None):
         self.source = source
         self.args = args
         self.injector = injector
+        self.audio = audio
         self.lock = threading.Lock()
         self.current = None  # (Session, Thread)
         self.running = True
@@ -328,7 +360,7 @@ class Server:
             old = self.current
             if old is not None:
                 old[0].close()
-            session = Session(transport, self.source, self.args, self.injector)
+            session = Session(transport, self.source, self.args, self.injector, self.audio)
             thread = threading.Thread(target=session.run, name="session", daemon=True)
             self.current = (session, thread)
         if old is not None:
@@ -453,6 +485,29 @@ def build_source(args, portal=None):
 DMABUF_FIRST_FRAME_S = 5
 
 
+def start_audio(args):
+    """Captura do som, ou None (o vídeo continua sem som)."""
+    try:
+        import audio
+    except (ImportError, ValueError) as exc:
+        log.warning("som desativado: %s", exc)
+        return None
+    if not audio.available():
+        log.warning("som desativado: faltam o pulsesrc e o adpcmenc do GStreamer "
+                    "(sudo dnf install gstreamer1-plugins-good gstreamer1-plugins-bad-free)")
+        return None
+    try:
+        capture = audio.AudioCapture(args.audio_device, args.audio_rate, 1 if args.audio_mono else 2)
+        capture.start()
+    except Exception as exc:  # sem PipeWire/PulseAudio, fonte errada...
+        log.warning("som desativado: %s", exc)
+        return None
+    log.info("som: %s, %d Hz %s, IMA ADPCM em pacotes de %.0f ms (~%.0f KB/s quando o PSP pede)",
+             capture.device, capture.rate, "estéreo" if capture.channels == 2 else "mono", capture.packet_ms,
+             capture.kbps)
+    return capture
+
+
 def open_portal(args):
     from portal import open_screencast
     return open_screencast(window=args.window, cursor=not args.no_cursor, remember=not args.forget)
@@ -553,6 +608,13 @@ def parse_args(argv=None):
                         "sozinho para o modo normal")
     p.add_argument("--no-cursor", action="store_true", help="portal: não desenhar o cursor")
     p.add_argument("--forget", action="store_true", help="portal: não reutilizar/guardar a escolha de tela")
+    p.add_argument("--no-audio", action="store_true", help="não capturar nem mandar o som")
+    p.add_argument("--audio-device", default="monitor", metavar="NOME",
+                   help="som: fonte do PipeWire/PulseAudio (pactl list short sources); monitor (padrão) = o que "
+                        "sai nas caixas; test = tom de 440 Hz")
+    p.add_argument("--audio-rate", type=int, default=32000, choices=[22050, 32000, 44100, 48000],
+                   help="som: taxa (padrão %(default)s Hz; IMA ADPCM estéreo ~ taxa/1000 KB/s)")
+    p.add_argument("--audio-mono", action="store_true", help="som: mono (metade dos bytes)")
     p.add_argument("--no-input", action="store_true", help="não injetar os controles do PSP no PC")
     p.add_argument("--input-dry-run", action="store_true",
                    help="só mostrar no log as teclas/movimentos que seriam injetados")
@@ -636,12 +698,16 @@ def main(argv=None) -> int:
         except RuntimeError as exc:
             log.warning("controles desativados: %s", exc)
 
+    audio = None
+    if not args.no_audio:
+        audio = start_audio(args)
+
     srv = socket.create_server((args.bind, args.port))
     udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1 << 20)
     set_dscp(udp, args.dscp)
     udp.bind((args.bind, args.port))
-    server = Server(source, args, injector)
+    server = Server(source, args, injector, audio)
     threading.Thread(target=server.serve_udp, args=(udp,), name="udp", daemon=True).start()
     log.info("PSPStream %s: aguardando o PSP em %s:%d, TCP e UDP (no PSP: 'Procurar o PC na rede', ou este IP "
              "no server.txt)", VERSION, local_ip(), args.port)
@@ -666,6 +732,8 @@ def main(argv=None) -> int:
         server.close()
         if injector:
             injector.close()
+        if audio is not None:
+            audio.stop()
         source.stop()
         srv.close()
         udp.close()

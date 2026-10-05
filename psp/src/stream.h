@@ -51,6 +51,8 @@ void stream_release(ps_frame_t *frame, const ps_ack_t *ack);
 void stream_set_h264(int on);
 /* ... e H.264 com frames P (pacote AUD + frame + 2 cópias). Padrão: sim. */
 void stream_set_h264p(int on);
+/* UDP: pede o som do PC (PS_CAP_AUDIO). Os pacotes vão para audio_packet. */
+void stream_set_audio(int on);
 
 /* Frames P: a partir de qual frame falta referência (um frame se perdeu ou
  * deu erro). Esses frames são pulados até chegar um IDR, que o PSP pede. */

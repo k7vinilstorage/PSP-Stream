@@ -1047,3 +1047,139 @@ class AdaptiveTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AudioTest(unittest.TestCase):
+    """Som: IMA ADPCM do adpcmenc, decoder de referência (Python) e do PSP (C), pacotes UDP."""
+
+    RATE, CH = 32000, 2
+
+    def setUp(self):
+        try:
+            import audio
+        except (ImportError, ValueError):
+            self.skipTest("sem GStreamer")
+        if not audio.available():
+            self.skipTest("sem pulsesrc/adpcmenc")
+        self.audio = audio
+
+    def signal(self, n=9600):
+        import struct
+        r = self.RATE
+        return b"".join(struct.pack("<hh", int(12000 * math.sin(2 * math.pi * 440 * i / r)
+                                                + 4000 * math.sin(2 * math.pi * 3000 * i / r)),
+                                    int(9000 * math.sin(2 * math.pi * 220 * i / r))) for i in range(n))
+
+    def encode(self, pcm):
+        from gi.repository import Gst
+        align = self.audio.block_align(self.audio.block_samples(self.RATE), self.CH)
+        p = Gst.parse_launch(f'appsrc name=src caps="audio/x-raw,format=S16LE,layout=interleaved,'
+                             f'rate={self.RATE},channels={self.CH}" format=time '
+                             f"! adpcmenc layout=dvi blockalign={align} ! appsink name=sink sync=false")
+        src, sink = p.get_by_name("src"), p.get_by_name("sink")
+        p.set_state(Gst.State.PLAYING)
+        src.emit("push-buffer", Gst.Buffer.new_wrapped(pcm))
+        src.emit("end-of-stream")
+        out = []
+        while (s := sink.emit("try-pull-sample", 2 * Gst.SECOND)) is not None:
+            b = s.get_buffer()
+            out.append(b.extract_dup(0, b.get_size()))
+        p.set_state(Gst.State.NULL)
+        blocks = b"".join(out)
+        return [blocks[i:i + align] for i in range(0, len(blocks) // align * align, align)]
+
+    def test_block_size(self):
+        # ~20 ms por pacote: 1 + 8k amostras por canal, 4 bits cada
+        self.assertEqual(self.audio.block_samples(32000), 641)
+        self.assertEqual(self.audio.block_align(641, 2), 648)
+        self.assertEqual(self.audio.block_samples(48000), 961)
+        self.assertLessEqual(self.audio.block_align(961, 2), self.audio.MAX_BLOCK)
+
+    def test_reference_decoder(self):
+        import struct
+        pcm = self.signal()
+        blocks = self.encode(pcm)
+        self.assertGreater(len(blocks), 10)
+        dec = [s for b in blocks for s in self.audio.ima_decode_block(b, self.CH)]
+        orig = struct.unpack(f"<{len(pcm) // 2}h", pcm)[:len(dec)]
+        noise = sum((a - b) ** 2 for a, b in zip(dec, orig))
+        snr = 10 * math.log10(sum(x * x for x in orig) / max(1, noise))
+        self.assertGreater(snr, 30)  # medido: 34 dB nesta mistura de senos
+
+    def test_psp_decoder_matches_reference(self):
+        # o psp/src/ima.c compilado no PC tem de dar as mesmas amostras da referência
+        import shutil
+        import struct
+        import subprocess
+        import tempfile
+        cc = shutil.which("cc") or shutil.which("gcc")
+        if not cc:
+            self.skipTest("sem compilador C")
+        blocks = self.encode(self.signal(4000))
+        with tempfile.TemporaryDirectory() as tmp:
+            main = Path(tmp) / "t.c"
+            main.write_text(
+                '#include <stdio.h>\n#include "ima.h"\n'
+                "int main(void){unsigned char b[4096];int16_t o[8192];int len,ch,n;\n"
+                "while(scanf(\"%d %d\",&len,&ch)==2){fread(b,1,1,stdin);fread(b,1,len,stdin);\n"
+                "n=ima_decode_block(b,len,ch,(len-4*ch)*2/ch+1,o);fwrite(&n,4,1,stdout);fwrite(o,4,n,stdout);}\n"
+                "return 0;}\n")
+            exe = Path(tmp) / "t"
+            subprocess.run([cc, "-O2", "-I", str(ROOT / "psp/src"), str(main), str(ROOT / "psp/src/ima.c"),
+                            "-o", str(exe)], check=True, capture_output=True)
+            for ch, blks in ((2, blocks), (1, [b[:4] + bytes(b[8:8 + (len(b) - 8) // 2]) for b in blocks[:3]])):
+                feed = b"".join(f"{len(b)} {ch}\n".encode() + b for b in blks)
+                out = subprocess.run([str(exe)], input=feed, capture_output=True, check=True).stdout
+                pos = 0
+                for b in blks:
+                    n = struct.unpack_from("<i", out, pos)[0]
+                    got = list(struct.unpack_from(f"<{2 * n}h", out, pos + 4))
+                    pos += 4 + 4 * n
+                    ref = self.audio.ima_decode_block(b, ch)
+                    if ch == 1:  # o PSP toca mono nos dois lados
+                        ref = [s for v in ref for s in (v, v)]
+                    self.assertEqual(got, ref)
+
+    def test_packet(self):
+        data = protocol.pack_audio(7, 1282, 32000, 2, 641, b"\x01" * 648)
+        self.assertEqual(len(data), 20 + 648)
+        self.assertEqual(protocol.unpack_audio(data), (7, 1282, 32000, 2, protocol.CODEC_IMA_ADPCM, 641,
+                                                       b"\x01" * 648))
+
+    def run_stream(self, want_audio, seconds=1.5):
+        import pspstream
+        import fake_client
+        from sources import StaticSource
+        cap = self.audio.AudioCapture("test", self.RATE, self.CH)
+        cap.start()
+        args = argparse.Namespace(adaptive=False, bench=None, stats_interval=60, target_fps=30, q_min=25,
+                                  q_max=90, udp_pace=0, source="static", size=(480, 272), hdr_cache=True,
+                                  dscp="ef", codec="jpeg", quality=70, p_redundancy_ms=6)
+        server = pspstream.Server(StaticSource((ROOT / "assets/testcard.jpg").read_bytes()), args, None, cap)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(("127.0.0.1", 0))
+        threading.Thread(target=server.serve_udp, args=(sock,), daemon=True).start()
+        try:
+            client_args = argparse.Namespace(host="127.0.0.1", port=sock.getsockname()[1], transport="udp",
+                                             loss=0, kbps=0, decode_ms=5, no_prefetch=False, frames=0,
+                                             seconds=seconds, input_demo=False, rtt_ms=0, early_kb="auto",
+                                             loss_up=0, h264p=False, audio=want_audio)
+            summary, _ = fake_client.FakePSP(client_args).run()
+        finally:
+            server.close()
+            sock.close()
+            cap.stop()
+        return summary
+
+    def test_stream_with_audio(self):
+        s = self.run_stream(True)
+        self.assertGreater(s["frames"], 10, s)  # o vídeo continua
+        self.assertGreater(s["audio_packets"], 40, s)  # ~50 por segundo
+        self.assertEqual(s["audio_lost"], 0, s)
+        self.assertEqual(s["audio_rate"], self.RATE)
+
+    def test_psp_can_turn_audio_off(self):
+        # sem PS_CAP_AUDIO (audio=0 no PSP, ou desligado no atalho), nenhum pacote de som sai
+        s = self.run_stream(False, seconds=1.0)
+        self.assertGreater(s["frames"], 10, s)
+        self.assertEqual(s["audio_packets"], 0, s)

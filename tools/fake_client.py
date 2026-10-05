@@ -105,6 +105,10 @@ class Estimator:
 
 class FakePSP:
     def __init__(self, args):
+        # opções que o chamador não passou (testes) ficam com o padrão da linha de comando
+        for key, value in vars(build_parser().parse_args([])).items():
+            if not hasattr(args, key):
+                setattr(args, key, value)
         self.args = args
         self.udp = args.transport == "udp"
         if self.udp:
@@ -138,6 +142,8 @@ class FakePSP:
         self.broken = 0            # frames P decodificados sem o anterior (não deveria acontecer)
         self.last_ack = None       # (frame_no, send_ts, shown_at, net_t, local_t, decode_t)
         self.seen_max = 0          # maior frame visto (completo, abandonado ou chegando)
+        self.audio = {"packets": 0, "bytes": 0, "lost": 0, "late": 0, "rate": 0, "channels": 0, "samples": 0,
+                      "last_seq": None}  # --audio: pacotes de som recebidos
         self.req_dups = 0          # pedidos repetidos depois de REQ_DUP_S
         self.send_lock = threading.Lock()
         self.want = threading.Event()
@@ -160,6 +166,8 @@ class FakePSP:
             r.flags |= protocol.REQ_IDR
         if self.args.h264p:
             r.wflags |= protocol.CAP_H264 | protocol.CAP_H264P
+        if getattr(self.args, "audio", False) and self.udp:
+            r.wflags |= protocol.CAP_AUDIO
         r.hdr_have = self.hdr_have
         r.early_b = clamp_u16(self.early_cur)
         r.ping_select = clamp_u16(self.ping_us / 100)
@@ -174,6 +182,20 @@ class FakePSP:
         """prefetch=auto no PSP (padrão): sem prefetch com frames P, com no resto."""
         mode = "off" if getattr(self.args, "no_prefetch", False) else getattr(self.args, "prefetch", "auto")
         return mode == "on" or (mode == "auto" and not self.pmode)
+
+    def on_audio(self, data):
+        seq, _, rate, channels, codec, samples, block = protocol.unpack_audio(data)
+        a = self.audio
+        if a["last_seq"] is not None:
+            d = (seq - a["last_seq"] - 1) & 0xFFFFFFFF
+            if d >= 0x80000000:
+                a["late"] += 1
+                return
+            a["lost"] += d
+        a["last_seq"] = seq
+        a["packets"] += 1
+        a["bytes"] += len(data)
+        a["rate"], a["channels"], a["samples"] = rate, channels, samples
 
     def lose(self, rate, where="descida"):
         """Perda simulada de um pacote. Com --loss-burst-ms, cada perda abre uma
@@ -414,6 +436,9 @@ class FakePSP:
                 if self.lose(self.args.loss):
                     self.lost_chunks += 1
                     continue  # pacote "perdido no Wi-Fi"
+                if data[:4] == protocol.MAGIC_AUDIO:  # som: só confere a sequência (o PSP decodifica e toca)
+                    self.on_audio(data)
+                    continue
                 self.throttle.consume(len(data))
                 try:
                     no, fsize, fts, idx, fcount, hdr, payload = protocol.unpack_chunk(data)
@@ -646,6 +671,10 @@ class FakePSP:
             "idr_requests": self.idr_reqs,
             "skipped": self.skipped,
             "broken": self.broken,
+            "audio_packets": self.audio["packets"],
+            "audio_lost": self.audio["lost"],
+            "audio_kbps": round(self.audio["bytes"] / elapsed / 1024, 1) if elapsed else 0,
+            "audio_rate": self.audio["rate"],
             "hitches": sum(g >= 50 for g in gaps),
             "hitch_ms": round(sum(g for g in gaps if g >= 50)),
             "gap_p99_ms": round(gaps[min(len(gaps) - 1, int(len(gaps) * 0.99))], 1) if gaps else 0,
@@ -653,7 +682,7 @@ class FakePSP:
         }, jpeg
 
 
-def main(argv=None):
+def build_parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("host", nargs="?", default="127.0.0.1")
     p.add_argument("--port", type=int, default=protocol.DEFAULT_PORT)
@@ -671,6 +700,8 @@ def main(argv=None):
                         "0 = só no fim do frame, N = quando faltarem N KB")
     p.add_argument("--kbps", type=float, default=0, help="limitar a vazão (KB/s), ex.: 400")
     p.add_argument("--decode-ms", type=float, default=0, help="simular o tempo de decode do PSP")
+    p.add_argument("--audio", action="store_true",
+                   help="UDP: pedir o som (CAP_AUDIO) e contar os pacotes de som, como o EBOOT com audio=1")
     p.add_argument("--prefetch", choices=["auto", "on", "off"], default="auto",
                    help="como o prefetch= do server.txt: auto (padrão) = sem prefetch com frames P, com no resto")
     p.add_argument("--no-prefetch", action="store_true",
@@ -687,7 +718,11 @@ def main(argv=None):
                    help="repetir o pedido mesmo com o decode ainda para pedir (comparação com o EBOOT v1.0)")
     p.add_argument("--h264p", action="store_true",
                    help="aceitar H.264 com frames P, como o EBOOT v0.9 (servidor com --codec h264p)")
-    args = p.parse_args(argv)
+    return p
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
 
     summary, jpeg = FakePSP(args).run()
     if args.save and jpeg:
@@ -699,7 +734,8 @@ def main(argv=None):
               "rede {net_ms} ms, local {local_ms} ms, descartados {dropped}, perdidos {lost}, "
               "NACKs {nacks}, pedaços perdidos/repetidos {lost_chunks}/{dup_chunks}, pedidos repetidos {retries}, IDR pedidos "
               "{idr_requests}, P pulados {skipped}, P sem referência {broken}, engasgos (>= 50 ms) {hitches} "
-              "somando {hitch_ms} ms, intervalo p99 {gap_p99_ms} ms, máximo {gap_max_ms} ms".format(**summary))
+              "somando {hitch_ms} ms, intervalo p99 {gap_p99_ms} ms, máximo {gap_max_ms} ms; som: {audio_packets} "
+              "pacotes ({audio_kbps} KB/s, {audio_rate} Hz), {audio_lost} perdidos".format(**summary))
     return 0
 
 

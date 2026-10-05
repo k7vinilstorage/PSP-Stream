@@ -1013,6 +1013,40 @@ no JPEG e no H.264 só com quadros completos, onde ele rende 1,2-1,7x de FPS
 START + X inverte durante o stream, e o overlay diz quando o próximo é
 pedido.
 
+#### Som (v1.1) [PC + EMU]
+
+**Formato:** IMA ADPCM do WAV (o `adpcmenc` do GStreamer), 32 kHz estéreo,
+blocos de 641 amostras por canal (20,03 ms) = 648 bytes + 20 de cabeçalho +
+28 de UDP/IP: **~34 KB/s e 50 pacotes/s** no ar. Em mono ou a 22,05 kHz,
+metade disso ou menos.
+
+**Fidelidade [PC]:** num sinal de teste (senos de 440 + 3000 Hz num canal,
+220 Hz no outro), SNR de 34 dB contra o original. O decoder do PSP
+(`psp/src/ima.c`) é o contrário exato do encoder: refazendo o encode em
+Python com o estado do decoder, 0 de 30720 nibbles diferem. O `adpcmdec` do
+próprio GStreamer usa a fórmula com multiplicação e difere em até 36 (de
+32767) da reconstrução do encoder; a mesma SNR. O `ima.c` compilado no PC dá
+as mesmas amostras da referência em Python (teste
+`test_psp_decoder_matches_reference`, estéreo e mono).
+
+**CPU no PC [PC]:** captura de teste + `audioresample` + `adpcmenc` + pacote
++ `sendto`: ~2% de um núcleo (10 s, 49,8 pacotes/s, 32,5 KB/s de dados).
+
+**Emulador [EMU]:** o canal `sceAudioSRC` abre a 32 kHz, os pacotes chegam
+inteiros (0 perdidos), o vídeo segue (401 frames P sem erro), e o atalho
+desliga e liga o som (o servidor para e volta a mandar;
+`tools/emu_audio_test.py`). O buffer esvazia no emulador ("vazio" 13, alvo
+em 120 ms) porque o relógio emulado corre mais rápido que o real quando o
+PSP está ocioso: não vale como medida.
+
+**Atraso esperado (não medido no PSP):** leitura do PipeWire (pedaços de 10
+ms) + bloco de 20 ms + rede (~5-10 ms) + buffer do PSP (começa em 40 ms,
+30-120 ms) + saída (pedaços de 8 ms): ~80-100 ms no começo, menos quando o
+buffer desce para 30 ms. O vídeo sai em ~30-45 ms, então o som deve chegar
+um pouco depois da imagem. Para medir no PSP: o alvo e o "vazio" do
+overlay depois de alguns minutos de jogo, e se o FPS do vídeo muda com o som
+ligado.
+
 ## 1. Tamanho de frame [PC]
 
 Mesmo pipeline do servidor (`videoscale` -> I420 -> `jpegenc`), saída 480x272

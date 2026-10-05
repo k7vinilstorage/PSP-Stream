@@ -13,6 +13,7 @@
 #define PS_MAGIC_FRAME 0x31465350u /* "PSF1" */
 #define PS_MAGIC_CHUNK 0x32555350u /* "PSU2" */
 #define PS_MAGIC_PONG  0x314F5350u /* "PSO1" */
+#define PS_MAGIC_AUDIO 0x31415350u /* "PSA1": som, UDP, empurrado pelo PC */
 
 /* Maior JPEG aceito pelo cliente. O servidor nunca envia nada maior. */
 #define PS_MAX_JPEG (256 * 1024)
@@ -64,6 +65,7 @@ typedef struct __attribute__((packed)) {
 #define PS_WIFI_RX_POLL 0x02    /* esperando pacotes por consulta, não select() */
 #define PS_CAP_H264 0x04        /* decodifica H.264 (todo frame IDR) pelo hardware */
 #define PS_CAP_H264P 0x08       /* ... e frames P: pacote AUD + frame + 2 cópias (server/h264.py) */
+#define PS_CAP_AUDIO 0x10       /* UDP: toca o som (pacotes PS_MAGIC_AUDIO); sem este bit, o PC não manda */
 
 #define PS_IDLE_NONE (-0x8000) /* idle_t: não medido (TCP) */
 
@@ -100,6 +102,21 @@ typedef struct __attribute__((packed)) {
     uint32_t token; /* echo_ts do ping */
 } ps_pong_t;
 
+/* PC -> PSP, UDP (20 bytes), seguido de um bloco IMA ADPCM do WAV (server/audio.py).
+ * O PC manda um a cada ~20 ms enquanto o PSP pede som (PS_CAP_AUDIO). */
+typedef struct __attribute__((packed)) {
+    uint32_t magic;    /* PS_MAGIC_AUDIO */
+    uint32_t seq;      /* +1 por pacote: buraco = pacote perdido */
+    uint32_t pos;      /* amostra (por canal) do início do bloco */
+    uint16_t rate;     /* Hz: 22050, 32000, 44100 ou 48000 */
+    uint8_t channels;  /* 1 ou 2 */
+    uint8_t codec;     /* PS_AUDIO_IMA */
+    uint16_t samples;  /* amostras por canal no bloco */
+    uint16_t reserved;
+} ps_audio_hdr_t;
+
+#define PS_AUDIO_IMA 1
+
 /* PSP -> PC, UDP, logo depois de um ps_req_t com PS_REQ_NACK (36 bytes). */
 typedef struct __attribute__((packed)) {
     uint32_t frame_no;
@@ -111,5 +128,6 @@ _Static_assert(sizeof(ps_chunk_hdr_t) == 24, "ps_chunk_hdr_t deve ter 24 bytes")
 _Static_assert(sizeof(ps_pong_t) == 8, "ps_pong_t deve ter 8 bytes");
 _Static_assert(sizeof(ps_nack_t) == 36, "ps_nack_t deve ter 36 bytes");
 _Static_assert(sizeof(ps_frame_hdr_t) == 16, "ps_frame_hdr_t deve ter 16 bytes");
+_Static_assert(sizeof(ps_audio_hdr_t) == 20, "ps_audio_hdr_t deve ter 20 bytes");
 
 #endif

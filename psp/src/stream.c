@@ -48,6 +48,7 @@
  * mais novo completa, o mais velho incompleto é abandonado.
  */
 #include "stream.h"
+#include "audio.h"
 #include "config.h"
 #include "net.h"
 #include "protocol.h"
@@ -112,6 +113,7 @@ static volatile int stopping;
 
 static volatile int wifi_signal, wifi_flags;
 static volatile int cap_h264 = 1, cap_h264p = 1;
+static volatile int cap_audio; /* UDP: pede o som (PS_CAP_AUDIO) */
 /* Frames P (o pacote começa com AUD): nenhum frame pode ser pulado. Quando
  * um se perde, todo frame P a partir de need_idr_from fica sem referência
  * até chegar um IDR; o PSP pede (PS_REQ_IDR) e pula os P até lá. */
@@ -211,7 +213,7 @@ static int send_req(uint16_t flags, const ps_nack_t *nack)
     r->early_b = clamp_u16(early_cur);
     r->signal = wifi_signal;
     r->wflags = wifi_flags | (rx_poll ? PS_WIFI_RX_POLL : 0) | (cap_h264 ? PS_CAP_H264 : 0) |
-                (cap_h264 && cap_h264p ? PS_CAP_H264P : 0);
+                (cap_h264 && cap_h264p ? PS_CAP_H264P : 0) | (cap_audio && g_udp ? PS_CAP_AUDIO : 0);
     r->lost = lost > 0xFFFF ? 0xFFFF : lost;
     r->hdr_have = hdr_have;
     r->ping_select = clamp_u16(ping_sel_us / 100);
@@ -834,6 +836,12 @@ static int net_thread_udp(void)
             live_pong(pkt);
             continue;
         }
+        uint32_t magic;
+        memcpy(&magic, pkt, sizeof(magic));
+        if (magic == PS_MAGIC_AUDIO) { /* som: empurrado pelo PC, vai direto para o anel do audio.c */
+            audio_packet(pkt, n);
+            continue;
+        }
         if (n < (int)sizeof(ps_chunk_hdr_t))
             continue;
 
@@ -1135,6 +1143,11 @@ void stream_ping(unsigned *select_us, unsigned *poll_us, int *polling, unsigned 
 void stream_set_h264(int on)
 {
     cap_h264 = on;
+}
+
+void stream_set_audio(int on)
+{
+    cap_audio = on;
 }
 
 void stream_set_h264p(int on)

@@ -4,6 +4,28 @@ As versões do EBOOT e do servidor andam juntas. O protocolo tem a própria
 versão (`PSC5` = v5) e só muda quando o formato das mensagens muda; um EBOOT
 de outra versão do protocolo é recusado com aviso no log.
 
+## 1.1 (em desenvolvimento)
+
+- **Som do PC no PSP.** O servidor captura o que sai nas caixas (monitor da
+  saída padrão do PipeWire/PulseAudio, `pulsesrc`), codifica em IMA ADPCM
+  (`adpcmenc`, 4 bits por amostra) e empurra um pacote UDP a cada 20 ms: 32
+  kHz estéreo, ~34 KB/s, ~2% de um núcleo no PC. O PSP decodifica no CPU
+  (somas e deslocamentos, sem o Media Engine do H.264) e toca pelo
+  `sceAudioSRC`, com um buffer que se ajusta sozinho entre 30 e 120 ms.
+  Pacote perdido vira 20 ms de silêncio; o vídeo e o som não dependem um do
+  outro.
+- **Liga e desliga pelo PSP:** `audio=1/0` no `server.txt`, item "Som do PC"
+  na tela de configuração e SELECT + START + cima durante o stream.
+  Desligado, o PSP para de pedir som (`wflags & 0x10`) e o PC para de mandar.
+- O overlay mostra o som (buffer, alvo, perdidos, vazio, pulos), e a linha
+  do servidor, os KB/s de som.
+- Servidor: `--no-audio`, `--audio-device` (`monitor`, `test` ou uma fonte do
+  PipeWire), `--audio-rate`, `--audio-mono`.
+- Só pelo UDP (o padrão).
+- `fake_client --audio`, `tools/emu_audio_test.py`, e o decoder do PSP
+  (`psp/src/ima.c`) testado no PC contra a referência.
+- O README dizia `--p-redundancy-ms 4`; o padrão é 6.
+
 ## 1.0
 
 Primeira versão.

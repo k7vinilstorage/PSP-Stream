@@ -187,6 +187,11 @@ class UdpTransport:
             self._send(datagram)
             self.redundant_chunks += 1
 
+    def send_audio(self, datagram: bytes) -> int:
+        """Pacote de som (protocol.pack_audio), da thread da captura."""
+        self._send(datagram)
+        return len(datagram)
+
     def _resend(self, frame_no: int, missing) -> None:
         entry = self.recent.get(frame_no)
         if entry is None:

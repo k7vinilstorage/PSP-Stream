@@ -21,6 +21,7 @@ typedef struct {
     int exit_after;   /* testes: sai depois de exibir N frames (0 = nunca) */
     int menu_wait;    /* s até conectar sozinho com a tela de configuração aberta (0 = conecta direto) */
     int menu_shot;    /* testes: desenha a tela de configuração, tira o screenshot e sai */
+    int audio;        /* 1 = toca o som do PC (só UDP) */
 } ps_config_t;
 
 /* prefetch=auto (padrão). Com frames P, pedir o próximo só depois de exibir
