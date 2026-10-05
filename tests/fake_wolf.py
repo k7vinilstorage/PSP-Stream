@@ -50,7 +50,7 @@ def fmt_unescape(text: str) -> str:
 
 
 class FakeWolf:
-    def __init__(self, directory, lobbies=None):
+    def __init__(self, directory, lobbies=None, video_port=0, audio_port=0):
         self.socket_path = os.path.join(directory, "wolf.sock")
         self.lock = threading.Lock()
         self.calls = []        # (método, caminho, corpo)
@@ -63,9 +63,9 @@ class FakeWolf:
         self.fail = None       # (código, erro) para a próxima requisição
         self.udp = {}
         self.ports = {}
-        for kind in ("video", "audio"):
+        for kind, port in (("video", video_port), ("audio", audio_port)):
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.bind(("127.0.0.1", 0))
+            sock.bind(("127.0.0.1", port))
             sock.settimeout(0.2)
             self.udp[kind], self.ports[kind] = sock, sock.getsockname()[1]
         self.running = True
@@ -266,3 +266,37 @@ class FakeWolf:
         self.server.server_close()
         for sock in self.udp.values():
             sock.close()
+
+
+def main(argv=None) -> int:
+    """Wolf falso de pé (teste da imagem Docker e do CI): imprime um resumo em JSON ao receber SIGTERM."""
+    import argparse
+    import signal
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("--dir", default="/var/run/wolf", help="onde criar o wolf.sock")
+    p.add_argument("--video-port", type=int, default=48100)
+    p.add_argument("--audio-port", type=int, default=48200)
+    p.add_argument("--lobby", default="Steam", help="nome do lobby aberto")
+    args = p.parse_args(argv)
+    os.makedirs(args.dir, exist_ok=True)
+    if os.path.exists(os.path.join(args.dir, "wolf.sock")):
+        os.unlink(os.path.join(args.dir, "wolf.sock"))
+    lobby = {"id": "8f0b2c6e-0d6a-4c1e-9a52-3f2f5d7a1b10", "name": args.lobby, "multi_user": True,
+             "pin_required": False, "connected_sessions": []}
+    wolf = FakeWolf(args.dir, [lobby], args.video_port, args.audio_port)
+    print(f"Wolf falso: {wolf.socket_path}, ping {wolf.ports['video']}/{wolf.ports['audio']}", flush=True)
+    done = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *a: done.set())
+    signal.signal(signal.SIGINT, lambda *a: done.set())
+    done.wait()
+    with wolf.lock:
+        summary = {"calls": [path.removeprefix("/api/v1") for method, path, _ in wolf.calls if method == "POST"],
+                   "started": [(k, ok, err) for k, _, _, ok, err in wolf.started],
+                   "inputs": len(wolf.inputs), "joined": lobby.get("connected_sessions", [])}
+    print(json.dumps(summary), flush=True)
+    wolf.close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

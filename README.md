@@ -46,6 +46,9 @@ fila na rede, e a latência fica perto de um frame. Detalhes em
   Wi-Fi, transporte e opções, gravados no `server.txt`.
 - **Overlay** com FPS, KB por frame, tempos de decode e rede; estatísticas
   completas no log do servidor.
+- **Wolf (Games on Whales)**, experimental: transmite o lobby do Wolf para o
+  PSP, com som e controles, num container ao lado dele
+  ([seção Wolf](#wolf-games-on-whales)).
 - **Interface web** no PC (http://localhost:5124): as configurações gerais
   (captura, codec, qualidade, som, controles, rede) mudam com o PSP
   conectado, e ficam gravadas. Mostra também o estado do stream e o log.
@@ -373,7 +376,7 @@ engasgos, qualidade), as configurações gerais e o log.
 
 | grupo | o que muda |
 |---|---|
-| Captura | fonte (portal, kms, x11, test, static), monitor do KMS, janela e cursor do portal, limite de FPS, filtro de redução, esticar |
+| Captura | fonte (portal, kms, x11, test, static, wolf), monitor do KMS, janela e cursor do portal, alvo e conversão do Wolf, limite de FPS, filtro de redução, esticar |
 | Vídeo | codec, qualidade adaptativa ou fixa, alvo e limites da adaptativa |
 | Som | ligado, fonte (o que sai nas caixas, tom de teste ou uma fonte do PipeWire), taxa, mono |
 | Controles | ligados, perfil, velocidade do mouse |
@@ -404,6 +407,163 @@ A página recusa pedidos vindos de outros sites (ver `server/web.py`), e
 nada nela recebe caminho de arquivo nem pipeline do GStreamer
 (`--source gst` e `--image` só pela linha de comando).
 
+## Wolf (Games on Whales)
+
+O PSPStream também transmite o que roda no
+[Wolf](https://github.com/games-on-whales/wolf) (jogos em containers,
+servidos para o Moonlight), sem mudar nada no Wolf: o PSP vê o mesmo lobby
+que o Moonlight, ouve o som dele, e os botões do PSP viram um controle de
+Xbox no jogo. Fonte `--source wolf`, num container ao lado do Wolf.
+
+**Experimental.** Foi testado contra um Wolf falso (`tests/fake_wolf.py`,
+que imita a API, o ping e os pipelines conforme o código do Wolf `stable`),
+inclusive a imagem Docker com o `docker/compose.yml`, mas ainda não num Wolf
+de verdade.
+
+### Como funciona
+
+```
+ Wolf (container)                                   PSPStream (container)           PSP
+ lobby: interpipesink <lobby>_video / _audio
+   └─ pipeline da sessão do PSPStream (o Wolf roda):
+      interpipesrc ! GPU: 480x272 I420 ! TCP 127.0.0.1 ──> H.264 / IMA ADPCM ── Wi-Fi ──> tela
+ controle de Xbox virtual (no jogo) <── API: sessions/input <────────────── botões ──────────
+```
+
+- O PSPStream fala com a API do Wolf pelo socket Unix dele e cria uma sessão
+  própria (como a de um cliente Moonlight, mas sem Moonlight).
+- O Wolf roda um pipeline do PSPStream nessa sessão: ele escuta o lobby
+  (`interpipesrc`), desce a imagem da GPU já em 480x272 e manda por TCP em
+  127.0.0.1. O som vai do mesmo jeito. Daí em diante é como as outras
+  fontes: H.264 com frames P, o mesmo modelo pull, o mesmo som.
+- Com os controles ligados, a sessão entra no lobby, e o Wolf liga o
+  controle virtual dela no jogo. Os perfis `xbox`, `xbox-camera` e
+  `xbox-ombros` do [keymap.json](#controles) valem iguais.
+- Se o lobby fecha, a sessão é encerrada e o PSPStream espera outro abrir.
+  Ao parar o container, a sessão é encerrada no Wolf.
+
+### Requisitos
+
+- O Wolf em Docker (`ghcr.io/games-on-whales/wolf:stable`) com
+  `network_mode: host`, que é o padrão dele.
+- **O PSP e o servidor na mesma LAN.** O PSP só fala 802.11b (2,4 GHz). O
+  PSPStream escuta a porta **5123, UDP e TCP**, em todas as interfaces do
+  servidor: no PSP, use o IP da LAN (e não o do Tailscale, que o Wolf às
+  vezes anuncia). Com firewall: `sudo ufw allow 5123/udp && sudo ufw allow
+  5123/tcp`.
+- Um lobby aberto (abra o jogo pelo Wolf UI no Moonlight).
+
+### Instalação (Docker ou Portainer)
+
+O exemplo completo está em [`docker/compose.yml`](docker/compose.yml).
+
+1. **No serviço `wolf`**, duas linhas: o socket da API passa a ficar em
+   `/var/run/wolf` no host (é onde a configuração padrão do Wolf UI já o
+   procura, então ele continua funcionando). O Wolf reinicia, e quem estiver
+   jogando cai.
+
+   ```yaml
+       environment:
+         - WOLF_SOCKET_PATH=/var/run/wolf/wolf.sock
+       volumes:
+         - /var/run/wolf:/var/run/wolf
+   ```
+
+2. **Acrescente o serviço `pspstream`** do `docker/compose.yml` à mesma
+   stack. Ele compila a imagem a partir deste repositório na primeira vez.
+   Para compilar à mão:
+   `docker build -t pspstream https://github.com/k7vinilstorage/PSP-Stream.git#main`.
+   Escolha a conversão da GPU em `command`: `nvidia` (padrão do Wolf com
+   placa NVIDIA), `va` (Intel/AMD) ou `cpu` (Wolf com
+   `WOLF_USE_ZERO_COPY=FALSE`).
+
+3. **Confira o log** (`docker logs -f <container do pspstream>`):
+
+   ```
+   Wolf: sessão ... espelhando lobby Steam (...), conversão nvidia
+   controles: a sessão do PSP entrou no lobby Steam (...); o controle virtual vai para o jogo
+   ```
+
+4. **No PSP**, "Procurar o PC na rede" (ou o IP da LAN do servidor no
+   `server.txt`).
+
+A interface web fica em http://127.0.0.1:5124 *no servidor*; de outro PC,
+por um túnel: `ssh -L 5124:127.0.0.1:5124 usuário@servidor` e
+http://localhost:5124. Ela também mostra uma linha "Wolf" com o que está
+sendo espelhado.
+
+A imagem (`Dockerfile`, Ubuntu 24.04) traz só o servidor, o GStreamer e a
+`libopenh264-7`, o openh264 da Cisco compilado pelo Ubuntu (do repositório
+universe, ativo na imagem oficial). Ela roda como usuário comum (uid 10001);
+o compose a roda com o uid 0, explicado em [Segurança](#segurança-do-socket).
+
+### Opções
+
+| opção | o que faz |
+|---|---|
+| `--wolf-target ID` | o que espelhar: id ou nome do lobby, ou id de uma sessão Moonlight (padrão: o único lobby aberto; com vários, o log lista as opções) |
+| `--wolf-video-convert` | `nvidia`, `va`, `cpu` ou `auto` (padrão; tenta nessa ordem, ~10 s por tentativa que falha, e o log diz qual funcionou); ou elementos GStreamer próprios que entreguem I420 na resolução enviada |
+| `--wolf-pin 1234` | PIN do lobby, se ele pede (para os controles entrarem) |
+| `--wolf-socket CAMINHO` | o socket da API (padrão: `WOLF_SOCKET_PATH` ou `/var/run/wolf/wolf.sock`) |
+| `--wolf-rtp-port 48100`, `--wolf-audio-rtp-port 48200` | portas UDP de ping do Wolf (padrão: as dele, ou `WOLF_VIDEO_PING_PORT` e `WOLF_AUDIO_PING_PORT`) |
+| `--profile xbox` | `xbox`, `xbox-camera` ou `xbox-ombros`; um perfil de teclado vira `xbox` |
+| `--no-audio`, `--no-input` | sem som; sem controles (só visualização, a sessão não entra no lobby) |
+
+O som do Wolf é o padrão com `--source wolf` (`--audio-device monitor` ou
+`wolf`).
+
+### Segurança do socket
+
+O socket da API dá **controle total do Wolf** (parear clientes, iniciar
+apps). Monte `/var/run/wolf` só no container do PSPStream, e nunca exponha
+o socket por TCP. O PSPStream só usa: listar lobbies e sessões, criar,
+iniciar e encerrar a própria sessão, mandar os pacotes de controle e entrar
+e sair do lobby. A interface web continua só em 127.0.0.1, e nela não se
+digita pipeline nem caminho: a conversão própria (`--wolf-video-convert
+"..."`), que o Wolf executa, só vale pela linha de comando.
+
+O Wolf cria o socket como root (`srwxr-xr-x root root`) e o recria a cada
+início: só o uid 0 conecta, e por isso o próprio Wolf UI roda como root.
+O compose roda o PSPStream com o uid 0, mas sem nenhuma capability
+(`cap_drop: ALL`), sem ganhar privilégios (`no-new-privileges`) e com o
+sistema de arquivos só leitura. Para usar o usuário comum da imagem, apague
+`user: "0:0"` e libere o socket a cada início do Wolf:
+`sudo setfacl -m u:10001:rw /var/run/wolf/wolf.sock`. Uma ACL padrão no
+diretório não serve, porque o Wolf cria o socket sem escrita para os outros.
+
+### Limitações
+
+- **Um PSPStream por Wolf.** O Wolf dá o mesmo id a toda sessão criada pela
+  API sem cliente Moonlight. Uma sessão que sobrou de um PSPStream que
+  morreu é encerrada na partida.
+- Cada sessão do PSP faz o Wolf subir um app "dummy": um compositor e um
+  sink de som próprios, que ninguém vê, e um `sleep` em loop. Ele também cria
+  uma pasta vazia `<uuid>/dummy` no diretório de estado do Wolf
+  (`/etc/wolf`) a cada sessão nova.
+- Controles só como controle de Xbox (sem teclado e mouse), sem vibração.
+- Um alvo que é uma sessão Moonlight avulsa (fora de um lobby) é só
+  visualização. Num lobby de um jogador só já ocupado, ou com PIN errado,
+  também: o PSPStream tenta entrar de novo a cada 2 s.
+- No lobby, o PSP conta como um jogador: num lobby "parar quando todos
+  saírem", se o PSP for o último a sair, o lobby fecha (como no Moonlight).
+- START + cima + RB no controle é o atalho do Wolf UI e tira a sessão do
+  lobby; o PSPStream entra de novo sozinho.
+- Quando a sessão do PSP entra no lobby, o log do Wolf mostra "Failed to get
+  video interpipesrc for ...": é esperado. A imagem do PSP segue o alvo e
+  não troca junto com a sessão.
+
+### Problemas comuns
+
+| mensagem ou sintoma | o que fazer |
+|---|---|
+| `o socket da API do Wolf não existe` | as duas linhas no serviço `wolf` (passo 1); `ls -l /var/run/wolf/` no servidor |
+| `sem permissão para abrir /var/run/wolf/wolf.sock` | `user: "0:0"` no serviço `pspstream`, ou o `setfacl` acima |
+| `nenhum lobby aberto no Wolf; esperando um` | abra um jogo pelo Wolf UI |
+| `há vários lobbies abertos` | `--wolf-target "Nome do lobby"` (a lista está na mensagem) |
+| `nenhum frame com a conversão ...` | a conversão não bate com a GPU do Wolf: `--wolf-video-convert` (`nvidia`, `va`, `cpu`) e o erro em `docker logs <wolf>` |
+| `o Wolf não deixou a sessão do PSP entrar no lobby` | `Lobby is full`: lobby de um jogador já ocupado; `Invalid PIN`: `--wolf-pin` |
+| o PSP não acha o servidor | IP da LAN, firewall (5123 UDP e TCP), `network_mode: host` nos dois serviços |
+
 ## Opções do servidor
 
 | opção | o que faz |
@@ -412,6 +572,7 @@ nada nela recebe caminho de arquivo nem pipeline do GStreamer
 | `--source portal` | portal do Wayland (padrão); `--window` captura uma janela |
 | `--source test` / `static --image arq.png` | padrão animado / imagem fixa (testes) |
 | `--source x11` / `gst --gst-src "..."` | sessão X11 / pipeline GStreamer próprio |
+| `--source wolf` | o que roda no Wolf, pela API dele (opções `--wolf-*` na [seção Wolf](#wolf-games-on-whales)) |
 | `--profile xbox` | controles: `jogo` (padrão), `desktop`, `setas`, `xbox`, `xbox-camera`, `xbox-ombros` |
 | `--codec auto` | `h264p` (padrão, se houver openh264), `h264` (só quadros completos) ou `jpeg` |
 | `--h264-encoder auto` | libopenh264 direto, com o GStreamer de reserva (padrão); `gstreamer` força o caminho antigo |
@@ -558,6 +719,13 @@ PPSSPP_HEADLESS=... python3 tools/emu_menu_test.py    # tela de configuração: 
 PPSSPP_HEADLESS=... python3 tools/emu_audio_test.py   # som: o PSP pede, desliga e liga pelo atalho
 ```
 
+**Wolf**: `tests/test_wolf.py` roda contra `tests/fake_wolf.py`, que imita
+a API num socket Unix (campos obrigatórios, `fmt::format` do pipeline, id
+igual para as sessões sem cliente), o ping e os pipelines da sessão, com
+`videotestsrc` e `audiotestsrc` no lugar do `interpipesrc`.
+`packaging/docker-test.sh` faz o mesmo com a imagem Docker. Os bytes dos
+pacotes de controle são conferidos contra as structs do Wolf.
+
 No emulador, a imagem e a lógica valem, mas os **tempos não**: o relógio
 emulado pula o tempo ocioso (com frames P, corre ~30x o real), e a banda e as
 perdas do 802.11b não são simuladas.
@@ -601,12 +769,17 @@ server/                servidor (Python 3)
   transports.py        TCP e UDP (pedaços, NACK, reenvio)
   adaptive.py          qualidade adaptativa
   inject.py, gamepad.py, keymap.json   controles (uinput)
+  wolf_api.py          Wolf: cliente da API (HTTP no socket Unix, só biblioteca padrão)
+  wolf_source.py       Wolf: sessão, pipelines de vídeo e som, alvo, lobby, reconexão
+  wolf_input.py        Wolf: controle de Xbox em pacotes do Moonlight (sessions/input)
   stats.py, sources.py, jpeginfo.py, protocol.py, netcheck.py
-packaging/             .deb e .rpm (install-tree.sh, build-deb.sh, pspstream.spec, build-rpm.sh)
+Dockerfile, docker/    imagem do servidor e o compose de exemplo ao lado do Wolf
+packaging/             .deb e .rpm (install-tree.sh, build-deb.sh, pspstream.spec, build-rpm.sh);
+                       docker-test.sh (a imagem contra o Wolf falso)
 .github/workflows/     build do EBOOT, testes, pacotes e releases
 tools/                 fake_client.py, emu_*.py/sh, h264_probe_clips.py, kms/ (auxiliar KMS)
 docs/                  PROTOCOL.md, MEASUREMENTS.md, UBUNTU.md (guia), WINDOWS.md (plano do servidor de Windows)
-tests/                 testes do servidor e da interface web
+tests/                 testes do servidor e da interface web; fake_wolf.py imita o Wolf
 ```
 
 ### Decisões técnicas

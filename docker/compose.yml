@@ -1,0 +1,62 @@
+# PSPStream ao lado do Wolf (Games on Whales). Junte ao compose (ou à stack do
+# Portainer) em que o Wolf já roda; detalhes no README, seção "Wolf".
+#
+# O que muda no serviço "wolf" que você já tem: as duas linhas marcadas com
+# "<- PSPStream". O socket da API passa a ficar em /var/run/wolf no host, que
+# é onde a configuração padrão do Wolf UI já o procura.
+#
+# O socket da API dá controle total do Wolf (parear clientes, iniciar apps):
+# monte /var/run/wolf só no container do PSPStream, e nunca o exponha por TCP.
+
+services:
+  wolf:
+    image: ghcr.io/games-on-whales/wolf:stable
+    # ... o resto do seu serviço wolf continua igual ...
+    network_mode: host
+    environment:
+      - WOLF_SOCKET_PATH=/var/run/wolf/wolf.sock   # <- PSPStream
+    volumes:
+      - /var/run/wolf:/var/run/wolf                # <- PSPStream
+
+  pspstream:
+    image: pspstream:latest
+    # Compila a imagem a partir do GitHub (Portainer: "Deploy the stack" compila
+    # na primeira vez). Depois do merge, troque o branch por #main.
+    build: https://github.com/k7vinilstorage/PSP-Stream.git#claude/psp-pc-screen-stream-lou5q7
+    # O PSP fala com o PSPStream pela LAN (5123 UDP/TCP), e o Wolf manda a
+    # imagem e o som para 127.0.0.1: os dois containers precisam da rede do host.
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      - wolf
+    # O Wolf cria o socket como root (srwxr-xr-x) e recria a cada início: só o
+    # uid 0 conecta, por isso o próprio Wolf UI roda como root. Aqui o uid é 0,
+    # mas sem nenhuma capability, sem ganhar privilégios e com o sistema de
+    # arquivos só leitura. Para rodar como o usuário comum da imagem (10001),
+    # apague as linhas "user" e libere o socket a cada início do Wolf:
+    #   sudo setfacl -m u:10001:rw /var/run/wolf/wolf.sock
+    user: "0:0"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - /var/run/wolf:/var/run/wolf:ro   # só o diretório do socket (o Wolf o recria a cada início)
+      - pspstream-config:/config         # o que a interface web grava
+    environment:
+      - WOLF_SOCKET_PATH=/var/run/wolf/wolf.sock
+      # Se você mudou as portas de ping no Wolf, as mesmas variáveis aqui:
+      # - WOLF_VIDEO_PING_PORT=48100
+      # - WOLF_AUDIO_PING_PORT=48200
+    # --wolf-video-convert: nvidia (o padrão do Wolf com NVIDIA), va (Intel/AMD),
+    # cpu (Wolf com WOLF_USE_ZERO_COPY=FALSE) ou auto (tenta nessa ordem).
+    # Outros: --wolf-target "Nome do lobby", --wolf-pin 1234, --profile xbox-camera,
+    # --no-audio, --no-input. A interface web fica em http://127.0.0.1:5124 no
+    # servidor (de outro PC: ssh -L 5124:127.0.0.1:5124 usuário@servidor).
+    command: ["--source", "wolf", "--wolf-video-convert", "nvidia"]
+
+volumes:
+  pspstream-config:

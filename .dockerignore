@@ -1,0 +1,6 @@
+# Só o servidor entra na imagem (Dockerfile): o resto fica de fora do contexto.
+*
+!server/
+!assets/
+!LICENSE
+server/__pycache__

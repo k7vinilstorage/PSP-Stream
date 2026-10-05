@@ -147,6 +147,16 @@ de outra versão do protocolo é recusado com aviso no log.
   é só visualização. O `--input-timeout` solta tudo, e ao sair o controle é
   desligado no Wolf. Os bytes foram conferidos contra as structs do Wolf e
   o exemplo dos testes dele.
+- **Wolf, Docker:** `Dockerfile` (Ubuntu 24.04, só o servidor, o GStreamer e
+  a `libopenh264-7` do universe; roda como usuário comum) e
+  `docker/compose.yml` com o serviço `pspstream` ao lado do `wolf` e as duas
+  linhas que mudam no serviço do Wolf (`WOLF_SOCKET_PATH` e o volume
+  `/var/run/wolf`). O socket da API do Wolf é só do root, então o compose
+  usa o uid 0 sem nenhuma capability, sem ganhar privilégios e com o sistema
+  de arquivos só leitura (o usuário comum com `setfacl` também foi testado).
+  O CI compila a imagem e a testa contra o Wolf falso
+  (`packaging/docker-test.sh`). Seção "Wolf" no README; a interface web
+  mostra uma linha "Wolf" com o que está sendo espelhado.
 - O servidor encerra direito no SIGTERM (`docker stop`, `systemctl stop`),
   como no Ctrl+C.
 

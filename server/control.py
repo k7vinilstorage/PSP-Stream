@@ -141,6 +141,7 @@ class Controller:
             "capture": {"source": args.source, "codec": args.codec, "fps_limit": args.fps,
                         "quality": src.quality, "failed": getattr(src, "failed", None)},
             "audio": None,
+            "wolf": src.status() if hasattr(src, "status") else None,
             "input": {"on": server.injector is not None, "profile": args.profile, "note": self.input_note},
             "psp": None,
         }

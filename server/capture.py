@@ -81,7 +81,7 @@ def open_wolf_injector(args, profile):
         except SystemExit as exc:
             raise RuntimeError(str(exc)) from None
     injector = WolfInjector(profile, args.input_dry_run, args.input_timeout)
-    kind = "controle de Xbox virtual no Wolf"
+    kind = "controle de Xbox virtual no Wolf" + (f", com o perfil {name}" if name != args.profile else "")
     log.info("controles: perfil '%s' (%s; a sessão do PSP entra no lobby)%s", name, kind,
              " (dry-run)" if args.input_dry_run else "")
     return injector, kind

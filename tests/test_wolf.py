@@ -412,6 +412,23 @@ class WolfSourceTest(WolfCase):
         self.assertEqual(len(self.wolf.sessions), 1)
 
 
+class WolfStatusTest(WolfCase):
+    def test_status_line(self):
+        with self.wolf.lock:
+            self.wolf.lobbies.clear()
+        src = self.source()
+        src.start()
+        self.assertTrue(self.wolf.wait_for(lambda: "nenhum lobby" in src.status()["text"]))
+        self.assertTrue(src.status()["warn"])
+        with self.wolf.lock:
+            self.wolf.lobbies.append(lobby())
+        self.assertIsNotNone(src.wait_newer(0, 10))
+        st = src.status()
+        self.assertIn("espelhando lobby Steam", st["text"])
+        self.assertIn("conversão cpu", st["text"])
+        self.assertFalse(st["warn"])
+
+
 class WebSuggestionsTest(WolfCase):
     def test_lobby_names(self):
         import control

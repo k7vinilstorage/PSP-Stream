@@ -1,5 +1,7 @@
 # Compila o EBOOT do PSP, roda os testes e gera os pacotes .deb (Ubuntu 22.04+,
-# Debian 12+) e .rpm (Fedora) a cada push e pull request.
+# Debian 12+) e .rpm (Fedora) a cada push e pull request. A imagem Docker
+# (Dockerfile, para usar ao lado do Wolf) é compilada e testada contra o Wolf
+# falso, mas não é publicada.
 #
 # Downloads (Releases do GitHub):
 #   - push na main: a pré-release "nightly" é refeita com o EBOOT e os pacotes
@@ -57,6 +59,16 @@ jobs:
         run: /usr/bin/python3 -m unittest discover -v tests
       - name: ruff
         run: pipx run ruff==0.16.10 check server tools tests  # regras em ruff.toml
+
+  docker:
+    name: imagem Docker
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: compilar
+        run: docker build -t pspstream:test .
+      - name: testar contra o Wolf falso
+        run: sh packaging/docker-test.sh pspstream:test
 
   deb:
     name: pacote .deb

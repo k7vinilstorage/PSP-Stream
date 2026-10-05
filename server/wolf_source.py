@@ -384,7 +384,7 @@ class WolfSource(FrameSource):
         try:
             target, why = resolve_target(self.wanted, self.api.lobbies(), self.api.sessions())
         except WolfApiError as exc:
-            self._say(f"{exc}; tentando de novo a cada {self.poll_s:g} s", logging.WARNING)
+            self._say(str(exc), logging.WARNING)  # a thread tenta de novo a cada poll_s, sem repetir o aviso
         else:
             if target is None:
                 self._say(why)
@@ -415,6 +415,19 @@ class WolfSource(FrameSource):
     @property
     def quality(self):
         return self._quality
+
+    def status(self) -> dict:
+        """Uma linha para a interface web: o que está espelhando, ou por que está esperando."""
+        target, sid = self.target, self.session_id
+        if target is None or sid is None:
+            return {"text": self._said or "conectando ao Wolf", "warn": True}
+        convert = self.working_convert or self.convert
+        text = f"sessão {sid} espelhando {target.describe()}, conversão {convert}"
+        if self.input_target() is not None:
+            text += "; controles no lobby"
+        elif self.input_wanted:
+            text += "; controles: " + (self._input_said or "entrando no lobby")
+        return {"text": text, "warn": bool(self.input_wanted and self._input_said)}
 
     # ---- som ----
 
@@ -560,13 +573,14 @@ class WolfSource(FrameSource):
 
     def _wait_target(self):
         while not self._stop.is_set():
+            level = logging.INFO
             try:
                 target, why = resolve_target(self.wanted, self.api.lobbies(), self.api.sessions())
             except (WolfApiError, TargetError) as exc:
-                target, why = None, str(exc)
+                target, why, level = None, str(exc), logging.WARNING
             if target is not None:
                 return target
-            self._say(why)
+            self._say(why, level)
             self._stop.wait(self.poll_s)
         return None
 
