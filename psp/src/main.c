@@ -423,7 +423,7 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
             /* No UDP não há "conexão": avisa se o PC não responde. */
             if (ui->udp && !stream_completed() && now_us() - t_start > 3 * 1000 * 1000 && !waiting_msg) {
                 status("Sem resposta do PC via UDP. Servidor rodando?");
-                status("Firewall liberado para UDP? (firewall-cmd --add-port=5123/udp)");
+                status("Firewall do PC liberado? Rode no PC: pspstream.py --check");
                 status("SELECT + START + R: tela de configuracao (IP, procurar o PC)");
                 waiting_msg = 1;
             }

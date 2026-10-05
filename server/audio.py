@@ -94,7 +94,7 @@ def ima_decode_block(block: bytes, channels: int) -> list:
 
 def default_monitor() -> str:
     """Monitor da saída padrão (o som que vai para as caixas). pactl existe
-    no Fedora com PipeWire (pipewire-pulseaudio); sem ele, o nome especial."""
+    com PipeWire (pipewire-pulse) e com o PulseAudio; sem ele, o nome especial."""
     if shutil.which("pactl"):
         try:
             sink = subprocess.run(["pactl", "get-default-sink"], capture_output=True, text=True,

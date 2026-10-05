@@ -86,6 +86,21 @@ de outra versão do protocolo é recusado com aviso no log.
 - Servidor reorganizado para isso: `capture.py` (montagem da captura, som e
   controles), `settings.py`, `control.py`, `web.py`. As ferramentas do
   emulador rodam o servidor com `--config` próprio e `--no-web`.
+- **Qualquer Linux, com guia do Ubuntu** ([docs/UBUNTU.md](docs/UBUNTU.md)).
+  `--check` confere tudo o que o servidor usa (Python, PyGObject, cada
+  elemento do GStreamer, libopenh264, portal, uinput, som, auxiliar KMS,
+  firewall, porta) e termina com o comando para a distribuição detectada
+  (apt, dnf, pacman ou zypper). `--setup` roda esses passos, mostrando cada
+  comando e perguntando antes. As mensagens de erro ("falta o X") também dão
+  o comando da distribuição, em vez do `dnf` fixo.
+- Compatibilidade com versões mais antigas: o `n-threads` do `videoscale` e
+  o `always-copy` do `pipewiresrc` só entram se existirem (GStreamer 1.20 do
+  Ubuntu 22.04); testes também no Python 3.10 e 3.13.
+- A `libopenh264` também é procurada em `~/.local/lib`, em `lib/` do projeto
+  e em `PSPSTREAM_OPENH264`: a do Cisco serve onde a distribuição não tem o
+  pacote.
+- No PSP, "Sem resposta do PC" sugere o `--check` em vez do comando do
+  firewalld.
 - Servidor: `--no-audio`, `--audio-device` (`monitor`, `test` ou uma fonte do
   PipeWire), `--audio-rate`, `--audio-mono`.
 - Só pelo UDP (o padrão).

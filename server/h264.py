@@ -8,8 +8,8 @@ cópias, sem Stop, em ~10,6 ms.
 Encoder: openh264. Chamado direto pela libopenh264 (openh264.py, ctypes):
 sem as filas e threads do GStreamer, e o QP muda sem IDR. Se a biblioteca
 faltar ou o layout dela não bater, volta para o openh264enc do GStreamer
-(no Fedora, gstreamer1-plugin-openh264 do repositório fedora-cisco-openh264),
-que só troca o QP refazendo o encoder. O x264enc do GStreamer segura 1 frame
+(pacote em distro.PACKAGES["openh264"]), que só troca o QP refazendo o
+encoder. O x264enc do GStreamer segura 1 frame
 mesmo com tune=zerolatency (medido), e numa tela parada isso esconderia a
 última mudança.
 """

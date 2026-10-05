@@ -22,12 +22,30 @@ CAVLC); um teste compara os dois.
 """
 import ctypes
 import logging
+import os
+from pathlib import Path
 from ctypes import (CFUNCTYPE, POINTER, Structure, byref, c_bool, c_char_p, c_float, c_int, c_longlong, c_ubyte,
                     c_uint, c_ushort, c_void_p, cast, string_at)
 
 log = logging.getLogger("pspstream.openh264")
 
 LIB_NAMES = ("libopenh264.so.8", "libopenh264.so.7", "libopenh264.so.6", "libopenh264.so.5", "libopenh264.so")
+# Sem o pacote da distribuição: a biblioteca do Cisco (github.com/cisco/openh264/releases) em
+# ~/.local/lib ou em lib/ do projeto, ou o caminho em PSPSTREAM_OPENH264.
+LIB_DIRS = (Path.home() / ".local" / "lib", Path(__file__).resolve().parent.parent / "lib")
+
+
+def lib_candidates():
+    env = os.environ.get("PSPSTREAM_OPENH264")
+    if env:
+        yield env
+    yield from LIB_NAMES
+    for d in LIB_DIRS:
+        try:
+            found = sorted(d.glob("libopenh264*.so*"), reverse=True)  # a versão maior primeiro
+        except OSError:
+            continue
+        yield from (str(p) for p in found if not p.name.endswith((".bz2", ".sig")))
 
 MAX_SPATIAL_LAYER_NUM = 4
 MAX_SLICES_NUM_TMP = 35
@@ -139,7 +157,7 @@ def library():
     global _lib, _version
     if _lib is None:
         errors = []
-        for name in LIB_NAMES:
+        for name in lib_candidates():
             try:
                 lib = ctypes.CDLL(name)
                 break

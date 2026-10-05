@@ -62,7 +62,8 @@ class _UInput:
         try:
             from evdev import UInput, ecodes
         except ImportError as exc:
-            raise RuntimeError("python-evdev não instalado (Fedora: sudo dnf install python3-evdev)") from exc
+            import distro
+            raise RuntimeError(f"python-evdev não instalado ({distro.hint('evdev')})") from exc
         self.ec = ecodes
         keys = sorted({getattr(ecodes, c) for c in codes} | {ecodes.BTN_LEFT, ecodes.BTN_RIGHT, ecodes.BTN_MIDDLE})
         caps = {ecodes.EV_KEY: keys, ecodes.EV_REL: [ecodes.REL_X, ecodes.REL_Y, ecodes.REL_WHEEL]}

@@ -8,6 +8,8 @@ import logging
 import time
 from pathlib import Path
 
+import distro
+
 log = logging.getLogger("pspstream.capture")
 
 
@@ -29,12 +31,11 @@ def resolve_codec(args):
     if want == "auto":
         args.codec = "h264p" if ok and tuple(args.size) == (480, 272) else "jpeg"
         if args.codec == "jpeg":
-            log.info("codec: JPEG (%s)", "sem o openh264: sudo dnf install gstreamer1-plugin-openh264"
+            log.info("codec: JPEG (%s)", f"sem o openh264: {distro.hint('openh264')}"
                      if not ok else "--size diferente de 480x272")
     if args.codec in ("h264", "h264p"):
         if not ok:
-            return (f"--codec {args.codec} precisa do openh264. No Fedora: sudo dnf install "
-                    "gstreamer1-plugin-openh264 (repositório fedora-cisco-openh264; traz a libopenh264 junto)")
+            return f"--codec {args.codec} precisa do openh264: {distro.hint('openh264')}"
         if tuple(args.size) != (480, 272):
             return f"--codec {args.codec} só funciona em 480x272 (o decoder do PSP escreve a tela inteira)"
         if args.codec == "h264":
@@ -131,8 +132,7 @@ def open_audio(args, seq0: int = 0):
     except (ImportError, ValueError) as exc:
         raise RuntimeError(str(exc)) from None
     if not audio.available():
-        raise RuntimeError("faltam o pulsesrc e o adpcmenc do GStreamer "
-                           "(sudo dnf install gstreamer1-plugins-good gstreamer1-plugins-bad-free)")
+        raise RuntimeError(f"faltam o pulsesrc e o adpcmenc do GStreamer ({distro.hint('good', 'bad')})")
     try:
         capture = audio.AudioCapture(args.audio_device, args.audio_rate, 1 if args.audio_mono else 2)
         capture.seq = seq0

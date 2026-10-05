@@ -53,30 +53,53 @@ fila na rede, e a latência fica perto de um frame. Detalhes em
 | | testado | deve funcionar |
 |---|---|---|
 | PSP | PSP-3000, firmware 6.61 com ARK-4 | qualquer PSP com firmware customizado que rode homebrew |
-| PC | Fedora 44, GNOME 50 (Wayland), Intel Gen12 | Linux com PipeWire e o portal ScreenCast; KMS precisa de libdrm |
+| PC | Fedora 44, GNOME 50 (Wayland), Intel Gen12; instalação e servidor também num Ubuntu 24.04 | qualquer Linux com Python 3.10+, GStreamer 1.20+, PipeWire ou PulseAudio e o portal ScreenCast (ou X11); KMS precisa de libdrm |
 | rede | roteador em modo misto b/g/n, WPA2 | o PSP só fala 802.11b em 2,4 GHz |
 
 ## Instalação
 
-### 1. PC (Fedora)
+### 1. PC
+
+O jeito mais simples, em qualquer distribuição:
 
 ```sh
-sudo dnf install python3-gobject gstreamer1-plugins-base gstreamer1-plugins-good \
-                 gstreamer1-plugins-bad-free pipewire-gstreamer python3-evdev gstreamer1-plugin-openh264
 git clone https://github.com/k7vinilstorage/PSP-Stream && cd PSP-Stream
+python3 server/pspstream.py --setup
 ```
 
-- `gstreamer1-plugin-openh264` vem do repositório `fedora-cisco-openh264`,
-  já ativo no Fedora Workstation, e traz a `libopenh264`, que o servidor
-  chama direto.
-- `python3-evdev`: os controles (uinput).
-- `gstreamer1-plugins-bad-free`: o `adpcmenc` (som); o `pulsesrc` vem no
-  `-good`. Sem eles, o servidor avisa e roda sem som.
+O `--setup` descobre a distribuição (Ubuntu/Debian e derivadas, Fedora,
+Arch, openSUSE), mostra cada comando (pacotes, permissão dos controles,
+firewall, captura KMS opcional) e pergunta antes de rodar. Para só
+conferir, sem mudar nada: `python3 server/pspstream.py --check`.
 
-**Firewall.** O Fedora bloqueia conexões de entrada por padrão:
+À mão:
+
+| distribuição | comando |
+|---|---|
+| **Ubuntu, Debian, Mint, Pop!_OS** ([guia completo](docs/UBUNTU.md)) | `sudo apt install python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-pipewire gstreamer1.0-gl libopenh264-dev python3-evdev pulseaudio-utils` |
+| **Fedora** | `sudo dnf install python3-gobject gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free pipewire-gstreamer python3-evdev gstreamer1-plugin-openh264` |
+| **Arch, Manjaro, EndeavourOS** (não testado) | `sudo pacman -S --needed python-gobject gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugin-pipewire openh264 python-evdev libpulse` |
+| **openSUSE** (não testado) | `sudo zypper install python3-gobject typelib-1_0-Gst-1_0 typelib-1_0-GstVideo-1_0 typelib-1_0-GstAllocators-1_0 gstreamer-plugins-base gstreamer-plugins-good gstreamer-plugins-bad gstreamer-plugin-pipewire libopenh264-7 python3-evdev pulseaudio-utils` |
+
+- A `libopenh264` (H.264 com frames P) vem do pacote da distribuição. No
+  Fedora, `gstreamer1-plugin-openh264` vem do repositório
+  `fedora-cisco-openh264`, já ativo no Fedora Workstation, e traz a
+  biblioteca junto. Sem pacote, a do Cisco serve
+  ([docs/UBUNTU.md](docs/UBUNTU.md#1-pacotes)); sem nenhuma, o servidor
+  manda JPEG.
+- `evdev`: os controles (uinput).
+- `pulsesrc` (plugins good) e `adpcmenc` (plugins bad): o som. Sem eles, o
+  servidor avisa e roda sem som.
+- Use o Python do sistema: o PyGObject do pacote não aparece num venv,
+  conda ou pyenv (ou crie o venv com `--system-site-packages`).
+
+**Firewall.** O Fedora (firewalld) bloqueia conexões de entrada por padrão;
+o Ubuntu (ufw) vem com o firewall desligado. O `--check` diz qual está
+ativo e o comando:
 
 ```sh
-sudo firewall-cmd --permanent --add-port=5123/tcp --add-port=5123/udp && sudo firewall-cmd --reload
+sudo firewall-cmd --permanent --add-port=5123/tcp --add-port=5123/udp && sudo firewall-cmd --reload   # firewalld
+sudo ufw allow 5123/udp && sudo ufw allow 5123/tcp                                                      # ufw
 ```
 
 **Controles (uinput).** O servidor cria teclado, mouse ou controle virtuais
@@ -100,7 +123,8 @@ que a placa de vídeo está mostrando, como a do Sunshine, e chega a 60 fps.
 Ela usa um auxiliar pequeno com permissão de administrador (`CAP_SYS_ADMIN`):
 
 ```sh
-sudo dnf install gcc libdrm-devel
+sudo apt install gcc make pkg-config libdrm-dev libcap2-bin   # Ubuntu/Debian
+sudo dnf install gcc make libdrm-devel libcap                 # Fedora
 make -C tools/kms          # compila tools/kms/pspstream-kms
 make -C tools/kms cap      # sudo setcap cap_sys_admin+ep (refaça depois de cada make)
 ```
@@ -112,7 +136,8 @@ e a captura é do monitor inteiro (`--kms-monitor 1` escolhe o segundo).
 
 ### 2. PSP
 
-Compile o EBOOT com o [pspdev](https://pspdev.github.io/installation/fedora.html):
+Compile o EBOOT com o [pspdev](https://pspdev.github.io/installation/fedora.html)
+(Fedora abaixo; Ubuntu em [docs/UBUNTU.md](docs/UBUNTU.md#9-compilar-o-eboot-no-ubuntu-opcional)):
 
 ```sh
 sudo dnf -y install @development-tools cmake bsdtar libusb-compat-0.1 gpgme2 fakeroot xz
@@ -373,6 +398,7 @@ nada nela recebe caminho de arquivo nem pipeline do GStreamer
 | `--bench 30,50,70,90` | varre qualidades com o PSP conectado e grava uma tabela |
 | `--web 127.0.0.1:5124`, `--no-web` | endereço da [interface web](#interface-web) (`0.0.0.0:5124` = rede local, sem senha) ou nenhuma |
 | `--config ARQUIVO` | configurações gravadas pela interface web (padrão `~/.config/pspstream/server.json`) |
+| `--check`, `--setup` | confere as dependências e diz o comando da sua distribuição; `--setup` também instala e configura, perguntando antes de cada passo |
 | `-v` | log detalhado |
 
 A cada 2 s, o servidor mostra uma linha de estatística:
@@ -430,7 +456,8 @@ PSP-3000 e Fedora 44 com Wi-Fi 802.11b; detalhes e o histórico em
 
 | sintoma | o que fazer |
 |---|---|
-| "Sem resposta do PC" / "Procurar" não acha | o servidor está rodando? Libere 5123/udp e 5123/tcp no firewall. PC e PSP na mesma rede |
+| "Sem resposta do PC" / "Procurar" não acha | o servidor está rodando? Libere 5123/udp e 5123/tcp no firewall (`--check` diz o comando). PC e PSP na mesma rede, sem isolamento de clientes no roteador |
+| algo falta ou não abre | `python3 server/pspstream.py --check`: lista o que falta e o comando para a sua distribuição |
 | latência alta, FPS oscilando | desligue a Economia de energia WLAN do PSP; deixe o PC no 5 GHz ou no cabo (o servidor avisa se ele divide o canal de 2,4 GHz com o PSP); roteador em modo misto b/g/n |
 | engasgos de vez em quando (h264p) | confira o prefetch (4ª linha do overlay; o padrão `auto` diz "ate 2 frames a frente quando o decode comeca"). Depois, veja os engasgos e a causa na linha do servidor (acima). `perda`/`pedido atrasado`: Wi-Fi (distância, canal de 2,4 GHz cheio, micro-ondas, Bluetooth); `captura`: o PC; `IDR` frequente: perdas seguidas. `--codec h264` aguenta perdas melhor (cada quadro é independente), com 2-3x mais banda |
 | h264p liso, mas com FPS bem abaixo de 60 | com `prefetch=0`, cada frame espera o anterior ser exibido (~45 fps): use `auto`. Veja a `fonte` na linha do servidor: abaixo de 60, é a captura (`--source kms`). Até a v1.1, `auto` ficava em 52-55 com o Wi-Fi oscilando (o pedido chegava depois da captura seguinte) e o limite de `--fps` cortava frames de uma fonte com horários tremidos: atualize servidor e EBOOT |
@@ -507,6 +534,7 @@ psp/                   cliente (C, pspdev)
 server/                servidor (Python 3)
   pspstream.py         sessões, linha de comando, benchmark
   capture.py           monta captura, som e controles (na partida e pela interface web)
+  distro.py, doctor.py distribuição e pacotes; --check e --setup
   settings.py          configurações gerais: esquema, server.json, validação
   control.py           aplica as configurações com o servidor rodando
   web.py, web/         interface web (http.server da biblioteca padrão; HTML, CSS e JS sem dependências)
@@ -519,7 +547,7 @@ server/                servidor (Python 3)
   inject.py, gamepad.py, keymap.json   controles (uinput)
   stats.py, sources.py, jpeginfo.py, protocol.py, netcheck.py
 tools/                 fake_client.py, emu_*.py/sh, h264_probe_clips.py, kms/ (auxiliar KMS)
-docs/                  PROTOCOL.md, MEASUREMENTS.md, WINDOWS.md (plano do servidor de Windows)
+docs/                  PROTOCOL.md, MEASUREMENTS.md, UBUNTU.md (guia), WINDOWS.md (plano do servidor de Windows)
 tests/                 testes do servidor e da interface web
 ```
 

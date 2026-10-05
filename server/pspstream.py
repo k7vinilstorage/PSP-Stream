@@ -578,6 +578,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--config", default=str(settings.default_path()), metavar="ARQUIVO",
                    help="configurações gravadas pela interface web (padrão %(default)s). As opções da linha de "
                         "comando valem mais que o arquivo")
+    p.add_argument("--check", action="store_true",
+                   help="conferir as dependências desta máquina e mostrar o comando para instalar o que falta "
+                        "(apt, dnf, pacman ou zypper), sem iniciar o servidor")
+    p.add_argument("--setup", action="store_true",
+                   help="preparar esta máquina: instala o que o --check aponta (pacotes, uinput, firewall, "
+                        "captura KMS), mostrando cada comando e pedindo confirmação antes")
     p.add_argument("-v", "--verbose", action="store_true")
     return p
 
@@ -614,6 +620,9 @@ def main(argv=None) -> int:
     parser = build_parser()
     argv = sys.argv[1:] if argv is None else list(argv)
     args = parser.parse_args(argv)
+    if args.check or args.setup:
+        import doctor
+        return (doctor.setup if args.setup else doctor.main)(args.port, VERSION)
     # A thread de envio acorda mais rápido quando outra thread Python tem o GIL.
     sys.setswitchinterval(0.001)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,

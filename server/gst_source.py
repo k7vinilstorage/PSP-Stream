@@ -22,6 +22,7 @@ Reduzir antes de converter: o videoconvert trabalha em 480x272 e não em
 bilinear, ~5 ms com lanczos, + ~1 ms do jpegenc.
 """
 import collections
+import functools
 import logging
 import os
 import statistics
@@ -42,6 +43,15 @@ Gst.init(None)
 
 # Reduzir 2240x1400 -> 480x272 com bilinear2: 4,0 ms em 1 thread, 2,5 ms em 4.
 SCALE_THREADS = min(4, os.cpu_count() or 1)
+
+
+@functools.lru_cache(maxsize=None)
+def has_property(factory: str, prop: str) -> bool:
+    """O elemento tem a propriedade nesta versão? (ex.: o n-threads do
+    videoscale e o always-copy do pipewiresrc não existem nas mais antigas;
+    na descrição do pipeline, uma propriedade desconhecida é erro.)"""
+    element = Gst.ElementFactory.make(factory, None)
+    return element is not None and element.find_property(prop) is not None
 
 
 def gpu_size(src_size, width: int, height: int, keep_aspect: bool = True):
@@ -68,11 +78,12 @@ def build_pipeline(src: str, width: int, height: int, fps: int, quality: int,
         head += '! capsfilter caps="video/x-raw(memory:DMABuf)" '
         gpu = ("! glupload ! glcolorconvert ! glcolorscale "
                f"! video/x-raw(memory:GLMemory),format=RGBA,width={gw},height={gh} ! gldownload ")
+    threads = f" n-threads={SCALE_THREADS}" if has_property("videoscale", "n-threads") else ""
     return (
         head +
         "! queue name=q leaky=downstream max-size-buffers=1 max-size-bytes=0 max-size-time=0 "
         f"{gpu}"
-        f"! videoscale method={scale} n-threads={SCALE_THREADS} add-borders={'true' if keep_aspect else 'false'} "
+        f"! videoscale method={scale}{threads} add-borders={'true' if keep_aspect else 'false'} "
         f"! video/x-raw,width={width},height={height},pixel-aspect-ratio=1/1 "
         "! videoconvert ! video/x-raw,format=I420 "
         f"{enc}"
