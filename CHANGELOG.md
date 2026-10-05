@@ -37,7 +37,7 @@ Primeira versão.
 - **`prefetch=auto` (padrão):** sem prefetch com frames P, com prefetch no
   resto. Com frames P e o prefetch desligado, o próximo frame só é pedido
   depois de exibir o atual: um por vez, num ritmo regular, e foi o que deixou
-  o Hollow Knight liso no PSP-3000. No JPEG e no H.264 só com quadros
+  o Hollow Knight liso e perto de 60 fps no PSP-3000. No JPEG e no H.264 só com quadros
   completos, o prefetch continua (1,2-1,7x de FPS, medido). `prefetch=1` ou
   `0` força; SELECT + START + X inverte o que está valendo; a tela de
   configuração tem auto/sim/não; o overlay diz quando o próximo é pedido.

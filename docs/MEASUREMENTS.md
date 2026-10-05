@@ -975,17 +975,24 @@ seguidas) aparece na linha de engasgos do servidor.
 
 **Relato do PSP-3000** (Hollow Knight, KMS, EBOOT e servidor com as mudanças
 acima): ficou excelente, e para isso o **prefetch precisa estar desligado**.
-FPS e latência desse teste ainda não foram anotados.
+Com `prefetch=0`, o FPS fica perto de 60, às vezes 60 cravado. Latência não
+anotada.
 
 Com prefetch, o próximo frame é pedido quando o decode pega o atual e chega
 enquanto ele decodifica: a rede e o decode andam juntos, e o FPS fica perto
 de 60. Mas cada frame depende da ida e volta daquele instante, então uma
 oscilação do Wi-Fi vira um frame que fica 2 ou 3 vblanks na tela entre
 outros que ficam 1. Sem prefetch, o próximo só é pedido depois de exibir o
-atual: um frame por vez, sem nada chegando durante o decode e sem fila. O
-ciclo (ida e volta + espera pela captura + encode + transferência + 10,6 ms
-de decode) passa dos 16,7 ms de um frame, então o stream acerta o passo em
-um frame a cada 2 da captura, sempre igual.
+atual: um frame por vez, sem nada chegando durante o decode e sem fila, e o
+ritmo depende só do ciclo pedido -> frame -> decode, que no PSP-3000 coube
+em ~16,7 ms.
+
+**A simulação errou aqui** [SIM, não bateu com o PSP]: ela previa ~30 fps
+sem prefetch. No modelo, o ciclo (6 ms fixos de ida e volta + espera pela
+captura do clipe + encode + transferência a 450 KB/s + 10,6 ms de decode)
+passava dos 16,7 ms, e o stream ficava em um frame a cada 2 da captura. No
+PSP real (PC no 5 GHz) ele coube num frame. A tabela fica como registro;
+para esta decisão vale o PSP.
 
 Simulação (mesmo cenário da tabela acima, 16 s, `fake_client --prefetch`):
 
@@ -1001,9 +1008,10 @@ TCP; o relógio dele pula o tempo ocioso, então os tempos não valem).
 
 **v1.0: `prefetch=auto` é o padrão.** Sem prefetch com frames P, com prefetch
 no JPEG e no H.264 só com quadros completos, onde ele rende 1,2-1,7x de FPS
-(medido acima) e cada frame é independente. `prefetch=1` volta aos ~60 fps
-com frames P; SELECT + START + X inverte durante o stream, e o overlay diz
-quando o próximo é pedido.
+(medido acima) e cada frame é independente. `prefetch=1` religa com frames P
+(útil se o Wi-Fi for lento a ponto de o ciclo não caber num frame); SELECT +
+START + X inverte durante o stream, e o overlay diz quando o próximo é
+pedido.
 
 ## 1. Tamanho de frame [PC]
 

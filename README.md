@@ -219,11 +219,10 @@ menu_wait=3          # s com a tela de configuração aberta antes de conectar s
 **Prefetch** é pedir o próximo frame antes de decodificar o atual, para rede
 e decode trabalharem juntos. No JPEG e no H.264 só com quadros completos ele
 rende 1,2-1,7x de FPS (medido no PSP-3000). Com frames P, o stream ficou
-**liso com o prefetch desligado** (Hollow Knight, PSP-3000): o próximo frame
-só é pedido depois de exibir o atual, um por vez, num ritmo regular. Por isso
-o padrão `auto` desliga o prefetch só com frames P. Na simulação, isso troca
-~60 fps com tropeços por ~30 fps constantes; quem preferir os 60 fps usa
-`prefetch=1` (ou SELECT + START + X durante o stream).
+**liso e perto de 60 fps com o prefetch desligado** (Hollow Knight,
+PSP-3000): o próximo frame só é pedido depois de exibir o atual, um por vez,
+num ritmo regular. Por isso o padrão `auto` desliga o prefetch só com frames
+P; `prefetch=1` (ou SELECT + START + X durante o stream) religa.
 
 ## Controles
 
@@ -327,7 +326,7 @@ PSP-3000 e Fedora 44 com Wi-Fi 802.11b; detalhes e o histórico em
 | H.264, Minecraft pelo portal (fonte ~38 fps) | 35-37 | 30-38 ms | 5-9 |
 | H.264 + captura KMS, cenas leves / jogo | 43-56 / 40-42 | 32-38 / 55-66 ms | 4 / 8-9 |
 | H.264 com frames P (v0.9), Hollow Knight + KMS (relato) | quase 60, com engasgos de vez em quando | não medida | 1,2-2,5 (70-150 KB/s, contra 400-450 KB/s do H.264 só quadros completos) |
-| H.264 com frames P (v1.0, sem prefetch), Hollow Knight + KMS (relato) | **liso** ("excelente") | não medida | |
+| H.264 com frames P (v1.0, sem prefetch), Hollow Knight + KMS (relato) | **perto de 60, liso** ("excelente") | não medida | |
 
 - Decode no PSP: JPEG 7,9 ms (hardware); H.264 só quadros completos 3,7 ms;
   frame P + 2 cópias 10,6 ms.
@@ -339,7 +338,8 @@ PSP-3000 e Fedora 44 com Wi-Fi 802.11b; detalhes e o histórico em
   perdas no Wi-Fi (cada P precisa do anterior, então uma perda parava o
   stream até o reenvio); a v1.0 manda o último pedaço em dobro e repete o
   pedido, e a linha do servidor mostra o que sobrou e por quê. Com o
-  prefetch desligado (padrão com frames P), o stream ficou liso no PSP-3000.
+  prefetch desligado (padrão com frames P), o stream ficou liso e perto de
+  60 fps no PSP-3000.
 
 ## Solução de problemas
 
@@ -348,7 +348,7 @@ PSP-3000 e Fedora 44 com Wi-Fi 802.11b; detalhes e o histórico em
 | "Sem resposta do PC" / "Procurar" não acha | o servidor está rodando? Libere 5123/udp e 5123/tcp no firewall. PC e PSP na mesma rede |
 | latência alta, FPS oscilando | desligue a Economia de energia WLAN do PSP; deixe o PC no 5 GHz ou no cabo (o servidor avisa se ele divide o canal de 2,4 GHz com o PSP); roteador em modo misto b/g/n |
 | engasgos de vez em quando (h264p) | confira se o prefetch está desligado (última linha do overlay: "depois de exibir"; `prefetch=auto` ou `0`). Depois, veja os engasgos e a causa na linha do servidor (acima). `perda`/`pedido atrasado`: Wi-Fi (distância, canal de 2,4 GHz cheio, micro-ondas, Bluetooth); `captura`: o PC; `IDR` frequente: perdas seguidas. `--codec h264` aguenta perdas melhor (cada quadro é independente), com 2-3x mais banda |
-| h264p liso, mas quer mais FPS | `prefetch=1`: ~60 fps em vez de ~30, com mais chance de tropeço quando o Wi-Fi oscila |
+| h264p liso, mas com FPS bem abaixo de 60 | sem prefetch, cada frame espera o anterior ser exibido; com o Wi-Fi lento, o ciclo não cabe num frame. Teste `prefetch=1` (rede e decode juntos), que tropeça mais quando o Wi-Fi oscila |
 | captura em ~38-40 fps no GNOME 50 | use `--source kms` |
 | KMS: "sem permissão para ler a tela" | `make -C tools/kms cap` de novo (depois de cada `make`); partições montadas com `nosuid` ignoram a permissão |
 | controles não chegam | o log diz "controles desativados": configure o `/dev/uinput` (acima) |
@@ -455,8 +455,8 @@ tests/                 testes do servidor
   simulação, criavam fila no roteador no PSP real.
 - **Frames P sem prefetch (`prefetch=auto`).** Com frames P, o próximo frame
   só é pedido depois de exibir o atual: um frame por vez, sem fila e num
-  ritmo regular. Foi o que deixou o stream liso no PSP-3000; com prefetch o
-  FPS é maior, mas qualquer oscilação do Wi-Fi aparece na tela.
+  ritmo regular. Foi o que deixou o stream liso e perto de 60 fps no
+  PSP-3000; com prefetch, qualquer oscilação do Wi-Fi aparece na tela.
 - **Perdas nos frames P.** Cada P precisa do anterior, então perder um
   pacote para o stream até o reenvio. O servidor manda o último pedaço de
   cada frame P de novo 6 ms depois (perder o último só era notado pelo
