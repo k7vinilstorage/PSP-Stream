@@ -56,7 +56,7 @@ jobs:
       - name: testes
         run: /usr/bin/python3 -m unittest discover -v tests
       - name: ruff
-        run: pipx run ruff check server tools tests
+        run: pipx run ruff==0.16.10 check server tools tests  # regras em ruff.toml
 
   deb:
     name: pacote .deb
