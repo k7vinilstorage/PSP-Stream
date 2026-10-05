@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PSPStream</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">PSPStream <span id="version" class="muted"></span></div>
+  <div id="conn" class="pill wait">conectando ao servidor</div>
+</header>
+
+<main>
+  <section class="card" aria-labelledby="now-title">
+    <h2 id="now-title">Agora</h2>
+    <div class="tiles" id="tiles">
+      <div class="tile"><span class="num" id="t-fps">–</span><span class="cap">fps no PSP</span></div>
+      <div class="tile"><span class="num" id="t-src">–</span><span class="cap">fps da captura</span></div>
+      <div class="tile"><span class="num" id="t-lat">–</span><span class="cap">latência (ms)</span></div>
+      <div class="tile"><span class="num" id="t-wifi">–</span><span class="cap">Wi-Fi (KB/s)</span></div>
+      <div class="tile"><span class="num" id="t-hitch">–</span><span class="cap">engasgos</span></div>
+      <div class="tile"><span class="num" id="t-q">–</span><span class="cap">qualidade</span></div>
+    </div>
+    <dl class="facts" id="facts"></dl>
+  </section>
+
+  <form id="form" novalidate></form>
+
+  <section class="card" aria-labelledby="log-title">
+    <h2 id="log-title">Log</h2>
+    <pre id="log" tabindex="0" aria-label="Log do servidor"></pre>
+  </section>
+
+  <p class="foot muted" id="foot"></p>
+</main>
+
+<div class="bar" id="bar" hidden>
+  <span id="bar-msg">Mudanças ainda não aplicadas</span>
+  <span class="grow"></span>
+  <button type="button" id="undo" class="ghost">Desfazer</button>
+  <button type="button" id="apply" class="primary">Aplicar</button>
+</div>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

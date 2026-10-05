@@ -98,7 +98,8 @@ class _PadUInput:
         try:
             from evdev import AbsInfo, UInput, ecodes
         except ImportError as exc:
-            raise RuntimeError("python-evdev não instalado (Fedora: sudo dnf install python3-evdev)") from exc
+            import distro
+            raise RuntimeError(f"python-evdev não instalado ({distro.hint('evdev')})") from exc
         self.ec = ecodes
         stick = AbsInfo(value=0, min=-32768, max=32767, fuzz=16, flat=128, resolution=0)
         trigger = AbsInfo(value=0, min=0, max=255, fuzz=0, flat=0, resolution=0)

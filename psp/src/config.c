@@ -6,7 +6,7 @@
  *   wifi_profile=1
  *   decoder=auto     (auto | hw | sw)
  *   vsync=1
- *   prefetch=auto    (auto = sim, menos com frames P | 1 | 0)
+ *   prefetch=auto    (auto = sim; frames P: até 2 à frente, pedidos quando o decode começa | 1 | 0)
  *   overlay=1
  *   rcvbuf=64        (KB)
  *   bench=0          (1 = mede decode hw x sw no primeiro frame)
@@ -17,6 +17,7 @@
  *   h264=1           (1 = aceita H.264 do servidor rodando com --codec h264)
  *   h264p=1          (1 = aceita também frames P, do servidor com --codec h264p)
  *   menu_wait=3      (s com a tela de configuração aberta antes de conectar sozinho; 0 = direto)
+ *   audio=1          (1 = toca o som do PC; só pelo UDP)
  */
 #include "config.h"
 #include "decode.h"
@@ -76,6 +77,8 @@ static void set_key(ps_config_t *cfg, const char *key, const char *value)
         cfg->menu_wait = v;
     else if (!strcmp(key, "menu_shot"))
         cfg->menu_shot = v;
+    else if (!strcmp(key, "audio"))
+        cfg->audio = v;
 }
 
 int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen)
@@ -94,6 +97,7 @@ int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen)
     cfg->h264 = 1;
     cfg->h264p = 1;
     cfg->menu_wait = 3;
+    cfg->audio = 1;
 
     char path[256];
     snprintf(path, sizeof(path), "%sserver.txt", dir);
@@ -174,6 +178,7 @@ int config_save(const ps_config_t *cfg, const char *dir, char *err, int errlen)
     fprintf(f, "vsync=%s\n", onoff(cfg->vsync));
     fprintf(f, "overlay=%s\n", onoff(cfg->overlay));
     fprintf(f, "input=%s\n", onoff(cfg->input));
+    fprintf(f, "audio=%s\n", onoff(cfg->audio));
     fprintf(f, "prefetch=%s\n", cfg->prefetch == PREFETCH_AUTO ? "auto" : onoff(cfg->prefetch));
     fprintf(f, "early_kb=%s\n", early);
     fprintf(f, "rxwait=%s\n", cfg->rxwait == RXWAIT_SELECT ? "select" : cfg->rxwait == RXWAIT_POLL ? "poll" : "auto");

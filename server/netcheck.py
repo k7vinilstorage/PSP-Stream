@@ -2,9 +2,20 @@
 import logging
 import os
 import re
+import socket
 import subprocess
 
 log = logging.getLogger("pspstream.netcheck")
+
+
+def local_ip() -> str:
+    """IP da interface usada para sair para a rede (nenhum pacote é enviado)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.connect(("10.255.255.255", 1))
+            return s.getsockname()[0]
+        except OSError:
+            return "127.0.0.1"
 
 
 def _iface_for(ip: str):

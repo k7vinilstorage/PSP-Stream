@@ -45,6 +45,18 @@ def recv_exact(conn: socket.socket, size: int) -> bytes:
     return bytes(buf)
 
 
+DSCP = {"ef": 0xB8, "cs5": 0xA0, "af41": 0x88, "0": 0}
+
+
+def set_dscp(sock: socket.socket, name: str) -> None:
+    """Marca os pacotes do servidor (WMM): com EF, a placa Wi-Fi do PC e o
+    roteador usam a fila de voz, que disputa o ar com prioridade."""
+    try:
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, DSCP[name])
+    except OSError as exc:
+        log.debug("DSCP não aplicado: %s", exc)
+
+
 class TcpTransport:
     name = "tcp"
 
@@ -135,6 +147,8 @@ class UdpTransport:
                     self._resend(*nack)
                     self.retry_resends += 1
                 req.flags &= ~protocol.REQ_FRAME  # o pedido já foi atendido
+            else:
+                req.want_frame = nack[0]  # frames P: o PSP aceita até este frame (Session.on_request)
         elif nack is not None:
             self._resend(*nack)
         self.session.on_request(req)
@@ -186,6 +200,11 @@ class UdpTransport:
                 _, _, datagram = heapq.heappop(self._later)
             self._send(datagram)
             self.redundant_chunks += 1
+
+    def send_audio(self, datagram: bytes) -> int:
+        """Pacote de som (protocol.pack_audio), da thread da captura."""
+        self._send(datagram)
+        return len(datagram)
 
     def _resend(self, frame_no: int, missing) -> None:
         entry = self.recent.get(frame_no)

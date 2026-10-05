@@ -22,6 +22,7 @@ Reduzir antes de converter: o videoconvert trabalha em 480x272 e não em
 bilinear, ~5 ms com lanczos, + ~1 ms do jpegenc.
 """
 import collections
+import functools
 import logging
 import os
 import statistics
@@ -42,6 +43,15 @@ Gst.init(None)
 
 # Reduzir 2240x1400 -> 480x272 com bilinear2: 4,0 ms em 1 thread, 2,5 ms em 4.
 SCALE_THREADS = min(4, os.cpu_count() or 1)
+
+
+@functools.lru_cache(maxsize=None)
+def has_property(factory: str, prop: str) -> bool:
+    """O elemento tem a propriedade nesta versão? (ex.: o n-threads do
+    videoscale e o always-copy do pipewiresrc não existem nas mais antigas;
+    na descrição do pipeline, uma propriedade desconhecida é erro.)"""
+    element = Gst.ElementFactory.make(factory, None)
+    return element is not None and element.find_property(prop) is not None
 
 
 def gpu_size(src_size, width: int, height: int, keep_aspect: bool = True):
@@ -68,11 +78,12 @@ def build_pipeline(src: str, width: int, height: int, fps: int, quality: int,
         head += '! capsfilter caps="video/x-raw(memory:DMABuf)" '
         gpu = ("! glupload ! glcolorconvert ! glcolorscale "
                f"! video/x-raw(memory:GLMemory),format=RGBA,width={gw},height={gh} ! gldownload ")
+    threads = f" n-threads={SCALE_THREADS}" if has_property("videoscale", "n-threads") else ""
     return (
         head +
         "! queue name=q leaky=downstream max-size-buffers=1 max-size-bytes=0 max-size-time=0 "
         f"{gpu}"
-        f"! videoscale method={scale} n-threads={SCALE_THREADS} add-borders={'true' if keep_aspect else 'false'} "
+        f"! videoscale method={scale}{threads} add-borders={'true' if keep_aspect else 'false'} "
         f"! video/x-raw,width={width},height={height},pixel-aspect-ratio=1/1 "
         "! videoconvert ! video/x-raw,format=I420 "
         f"{enc}"
@@ -92,22 +103,37 @@ SOURCES = {
 
 
 class RateLimiter:
-    """Até `fps` frames por segundo pelo pts, com 25% de tolerância no
-    intervalo: uma fonte de 60 Hz com horários tremidos passa inteira com
-    --fps 60, e uma de 144 Hz fica em ~60-70."""
+    """Até `fps` frames por segundo pelo pts, numa grade fixa: um frame passa
+    se chega até meio período antes da vez dele (meio período da fonte, se
+    ela for mais rápida), e a vez seguinte conta da vez, não do frame. Um
+    frame atrasado não empurra a grade, e o seguinte, no horário, não é
+    cortado. O limite anterior contava a vez seguinte do frame, com 25% de
+    tolerância: com os horários tremidos em 2-3 ms (jogo, compositor), uma
+    fonte de 60 Hz virava 55-59 fps com --fps 60 (o padrão) e 38-39 com
+    --fps 40; 75 Hz com --fps 60 dava 56, e 60 Hz com --fps 50 dava 46-48.
+    A grade recomeça quando fica para trás (fonte parada ou mais lenta)."""
 
     def __init__(self, fps: float):
         self.period = int(Gst.SECOND / max(1.0, fps))
-        self.tol = self.period // 4
         self.next = None
+        self.last = None
+        self.intervals = collections.deque(maxlen=16)  # entre frames da fonte (ns)
 
     def keep(self, pts: int) -> bool:
         if pts == Gst.CLOCK_TIME_NONE:
             return True
-        if self.next is not None and pts < self.next - self.tol:
+        if self.last is not None and 0 < pts - self.last < Gst.SECOND // 10:
+            self.intervals.append(pts - self.last)
+        self.last = pts
+        if self.next is None or pts < self.next - 2 * self.period:  # início, ou o pts voltou
+            self.next = pts + self.period
+            return True
+        src = sorted(self.intervals)[len(self.intervals) // 2] if self.intervals else self.period
+        if pts < self.next - min(self.period, src) // 2:
             return False
-        base = pts if self.next is None else self.next
-        self.next = max(base + self.period, pts + self.period - self.tol)
+        self.next += self.period
+        if self.next <= pts:  # a grade ficou para trás: recomeça deste frame
+            self.next = pts + self.period
         return True
 
 
@@ -269,6 +295,11 @@ class GstSource(FrameSource):
         self.pipeline.set_state(Gst.State.NULL)
         if self.h264 is not None:
             self.h264.close()
+
+    def set_fps(self, fps: int) -> None:
+        """Limite de FPS novo com o pipeline rodando (interface web)."""
+        self.fps = fps
+        self._limiter = RateLimiter(fps)
 
     def set_quality(self, quality: int) -> None:
         # jpegenc aceita mudar a qualidade com o pipeline rodando; o H.264 troca o QP no próximo frame.

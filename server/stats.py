@@ -60,6 +60,7 @@ class Window:
         self.early = []    # bytes que faltavam quando o PSP pediu o próximo (0 = só no fim)
         self.lost0 = None  # contador de frames perdidos do PSP no início da janela
         self.lost1 = 0
+        self.audio_bytes = 0  # pacotes de som enviados
         self.hitches = []  # (intervalo ms, causa) dos engasgos
         self.idrs = 0      # frames IDR enviados no modo P (pedidos pelo PSP ou encoder refeito)
 
@@ -105,6 +106,7 @@ class Window:
             "hitch_max_ms": max((g for g, _ in self.hitches), default=0.0),
             "hitch_causes": {c: n for c in HITCH_CAUSES if (n := sum(1 for _, k in self.hitches if k == c))},
             "idrs": self.idrs,
+            "audio_kbps": self.audio_bytes / elapsed / 1024,
         }
 
 
@@ -133,6 +135,8 @@ def format_summary(s: dict) -> str:
         line += f" | {s['resent_pct']:.1f}% pedaços UDP reenviados"
     if s["lost"]:
         line += f" | {s['lost']} frames perdidos"
+    if s.get("audio_kbps"):
+        line += f" | som {s['audio_kbps']:.0f} KB/s"
     if s.get("idrs"):
         line += f" | {s['idrs']} IDR"
     if s.get("hitches"):
@@ -192,6 +196,10 @@ class SessionStats:
             w.idrs += idr
         self.total_frames += 1
         self.total_bytes += size
+
+    def on_audio(self, nbytes: int) -> None:
+        for w in (self.window, self.phase):
+            w.audio_bytes += nbytes
 
     def on_ack(self, req, recv_ms: int) -> None:
         for w in (self.window, self.phase):

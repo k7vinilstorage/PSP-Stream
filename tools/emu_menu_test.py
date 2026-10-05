@@ -43,7 +43,7 @@ def main():
     cfg.write_text(f"# sem IP: a tela de configuracao abre\nport={port}\nexit_after=200\n")
 
     log_path = work / "server.log"
-    server = subprocess.Popen([python, str(ROOT / "server/pspstream.py"), "--source", "static", "--port", str(port),
+    server = subprocess.Popen([python, str(ROOT / "server/pspstream.py"), "--config", str(work / "server.json"), "--no-web", "--source", "static", "--port", str(port),
                                "--no-input"], stdout=open(log_path, "w"), stderr=subprocess.STDOUT)
     time.sleep(1.5)
     emu = subprocess.Popen([headless, f"--memstick={work / 'ms'}", "--graphics=software", "--timeout=60",

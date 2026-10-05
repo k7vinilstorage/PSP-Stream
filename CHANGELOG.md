@@ -4,6 +4,110 @@ As versões do EBOOT e do servidor andam juntas. O protocolo tem a própria
 versão (`PSC5` = v5) e só muda quando o formato das mensagens muda; um EBOOT
 de outra versão do protocolo é recusado com aviso no log.
 
+## 1.1 (em desenvolvimento)
+
+- **Som do PC no PSP.** O servidor captura o que sai nas caixas (monitor da
+  saída padrão do PipeWire/PulseAudio, `pulsesrc`), codifica em IMA ADPCM
+  (`adpcmenc`, 4 bits por amostra) e empurra um pacote UDP a cada 20 ms: 44,1
+  kHz estéreo (a taxa do PSP), ~46 KB/s, ~2% de um núcleo no PC. O PSP decodifica no CPU
+  (somas e deslocamentos, sem o Media Engine do H.264) e toca pelo
+  `sceAudioSRC`, com um buffer que se ajusta sozinho entre 30 e 120 ms.
+  Pacote perdido vira 20 ms de silêncio; o vídeo e o som não dependem um do
+  outro.
+- **Liga e desliga pelo PSP:** `audio=1/0` no `server.txt`, item "Som do PC"
+  na tela de configuração e SELECT + START + cima durante o stream.
+  Desligado, o PSP para de pedir som (`wflags & 0x10`) e o PC para de mandar.
+- **Zumbido "de abelha" no som (primeiro teste no PSP-3000):** a thread de
+  som reaproveitava o único buffer de saída enquanto o hardware ainda o
+  tocava (a saída bloqueante volta quando o pedaço entra na fila, e o DMA lê
+  depois), estragando o fim de cada pedaço de 8 ms: ~125 Hz. Agora são dois
+  buffers alternados, e cada pedaço sai do cache antes. No PPSSPP não
+  aparecia (ele copia na hora da chamada).
+- Som a **44,1 kHz** por padrão (era 32 kHz): é a taxa do hardware do PSP,
+  então ele não reamostra; numa música de jogo, 0,3-1,8 dB a mais de
+  fidelidade e agudos até 22 kHz, por ~12 KB/s a mais.
+- O overlay mostra o som (buffer, alvo, perdidos, vazio, pulos), e a linha
+  do servidor, os KB/s de som.
+- **Frames P pedidos quando o decode começa (`prefetch=auto`).** O relato
+  "ligar e desligar o prefetch leva de ~45 a ~60 fps" (Hollow Knight) achou
+  dois erros:
+  - `prefetch=0` esperava o decode por um semáforo binário que podia guardar
+    um sinal velho (ligar/desligar o prefetch, ou dois frames publicados de
+    uma vez). Com o sinal, o próximo saía quando o decode começava (~60
+    fps); sem ele, depois de exibir (~45 fps). Agora quem decide é o estado
+    dos frames, e `0` é sempre "depois de exibir".
+  - Com prefetch e frames P, a thread de decode soltava o "pedido adiado"
+    antes de contar o pedido que fez; a thread de rede (que olha a cada 1
+    ms) podia pedir o mesmo frame de novo, e o pedido fantasma travava o
+    seguinte até o RTO. Era o engasgo do prefetch com frames P.
+  O padrão `auto` agora é o modo bom, de propósito: com frames P, o próximo
+  é pedido quando o decode pega o atual, sem pedido antecipado no meio do
+  frame. `1` acrescenta o pedido antecipado (na simulação, ~59 fps contra
+  ~55 do `auto` antes da janela, abaixo). SELECT + START + X alterna auto,
+  sim e não.
+- **Frames P sem pular capturas: janela de 2 frames.** Relato: 52-55 fps
+  em vez de 60, e ~35 com `--fps 40`, com o Wi-Fi bem abaixo do limite. O
+  pedido do N+1 saía quando o decode pegava o N e tinha de chegar ao PC
+  antes da captura seguinte (16,7 ms a 60 fps); com o Wi-Fi oscilando, o
+  servidor perdia capturas. Agora, com `prefetch=auto` no UDP, o pedido
+  autoriza até o N+2 (FRAME + NACK "até o frame F"; o servidor guarda o
+  crédito, no máximo 2 à frente) e o frame sai na hora da captura. Na
+  simulação com a ida e volta oscilando: 53-55 → 59,4-60 fps, mesma latência.
+  Nesse modo o pedido não é mais repetido depois de 6 ms (o seguinte cobre
+  um perdido): um pacote a menos por frame na subida.
+- Frame P perdido inteiro com a janela: o seguinte chega antes do pedido
+  repetido; o PSP nota o buraco na numeração e pede o reenvio na hora, em
+  vez de um IDR.
+- **`--fps` exato.** O limite contava a vez do frame seguinte a partir do
+  frame que chegou, com 25% de tolerância: com os horários da captura
+  tremendo 2-3 ms, uma tela de 60 Hz dava 55-59 fps com `--fps 60` (o
+  padrão) e 38-39 com `--fps 40` (75 Hz com `--fps 60`: ~56; 60 Hz com
+  `--fps 50`: 46-48). Agora é uma grade fixa: a taxa pedida, e um frame
+  atrasado não empurra os seguintes.
+- `--fps 40` de uma tela de 60 Hz é 2 de cada 3 frames: intervalos de 17 e
+  33 ms. Para um movimento uniforme, `--fps 30` ou 60 (README).
+- **Som que não voltava depois de mexer na configuração** ("erro" até
+  reiniciar o app): o PSP só solta o canal de som com a fila vazia, o erro
+  era ignorado e o canal ficava preso; o stream seguinte não conseguia
+  reservá-lo. Agora espera a fila esvaziar antes de soltar, e tenta de novo
+  ao reservar. Reproduzido e corrigido no PPSSPP: o
+  `tools/emu_audio_test.py` confere o log do PSP, liga e desliga o som e
+  volta da tela de configuração.
+- `fake_client`: `--rtt-jitter-ms` (ida e volta oscilando, exponencial),
+  `--no-window` (sem a janela) e "P perdidos inteiros".
+- **Interface web das configurações gerais** (http://localhost:5124): captura,
+  codec, qualidade, som, controles e rede mudam com o PSP conectado. A
+  captura nova sobe antes de a velha parar e entra na mesma sessão (a
+  numeração dos frames continua, e o primeiro frame P é um IDR); se não
+  subir, a velha continua. Estado do stream e log na página. As mudanças
+  ficam em `~/.config/pspstream/server.json`; a linha de comando vale mais
+  que o arquivo. Só no próprio PC por padrão (`--web`, `--no-web`), com
+  proteção contra pedidos de outros sites. Só a biblioteca padrão do Python.
+- Servidor reorganizado para isso: `capture.py` (montagem da captura, som e
+  controles), `settings.py`, `control.py`, `web.py`. As ferramentas do
+  emulador rodam o servidor com `--config` próprio e `--no-web`.
+- **Qualquer Linux, com guia do Ubuntu** ([docs/UBUNTU.md](docs/UBUNTU.md)).
+  `--check` confere tudo o que o servidor usa (Python, PyGObject, cada
+  elemento do GStreamer, libopenh264, portal, uinput, som, auxiliar KMS,
+  firewall, porta) e termina com o comando para a distribuição detectada
+  (apt, dnf, pacman ou zypper). `--setup` roda esses passos, mostrando cada
+  comando e perguntando antes. As mensagens de erro ("falta o X") também dão
+  o comando da distribuição, em vez do `dnf` fixo.
+- Compatibilidade com versões mais antigas: o `n-threads` do `videoscale` e
+  o `always-copy` do `pipewiresrc` só entram se existirem (GStreamer 1.20 do
+  Ubuntu 22.04); testes também no Python 3.10 e 3.13.
+- A `libopenh264` também é procurada em `~/.local/lib`, em `lib/` do projeto
+  e em `PSPSTREAM_OPENH264`: a do Cisco serve onde a distribuição não tem o
+  pacote.
+- No PSP, "Sem resposta do PC" sugere o `--check` em vez do comando do
+  firewalld.
+- Servidor: `--no-audio`, `--audio-device` (`monitor`, `test` ou uma fonte do
+  PipeWire), `--audio-rate`, `--audio-mono`.
+- Só pelo UDP (o padrão).
+- `fake_client --audio`, `tools/emu_audio_test.py`, e o decoder do PSP
+  (`psp/src/ima.c`) testado no PC contra a referência.
+- O README dizia `--p-redundancy-ms 4`; o padrão é 6.
+
 ## 1.0
 
 Primeira versão.

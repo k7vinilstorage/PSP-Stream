@@ -6,16 +6,21 @@
  * sempre pega o mais novo.
  *
  * Com prefetch, o próximo pedido sai assim que um frame chega, antes do
- * decode: rede e decode trabalham ao mesmo tempo. Sem prefetch, o próximo é
- * pedido só depois de exibir o atual. prefetch=auto (padrão): sem prefetch
- * com frames P (um frame por vez, ritmo regular: o que ficou liso no PSP),
- * com prefetch no resto.
+ * decode: rede e decode trabalham ao mesmo tempo. Sem prefetch (prefetch=0),
+ * o próximo é pedido só depois de exibir o atual. Com frames P e o padrão
+ * prefetch=auto, o pedido sai quando o decode pega o atual, nunca no meio
+ * de um frame chegando (pedido antecipado): ~60 fps lisos no PSP-3000
+ * (Hollow Knight). O pedido antecipado com frames P (prefetch=1) engasgava.
+ * No UDP, esse pedido autoriza até 2 frames à frente (P_WINDOW): o frame
+ * sai do PC na hora da captura, sem esperar a ida e volta do pedido.
  *
  * Frames P (H.264 IPPP, o pacote começa com um AUD): cada frame é referência
  * do seguinte, então nenhum é descartado. Os prontos ficam numa fila, em
  * ordem, e o próximo só é pedido quando o decode pega o último da fila (quem
  * pede é a thread de decode): ele chega enquanto o atual decodifica, sem
- * fila crescendo. Frame perdido = pede IDR e pula os P até ele chegar.
+ * fila crescendo. Frame perdido inteiro: pede o reenvio (pedido repetido, ou
+ * na hora, quando o seguinte chega antes); se não volta, pede IDR e pula os P
+ * até ele chegar.
  *
  * Transportes:
  *  - TCP: cabeçalho + JPEG num fluxo.
@@ -48,6 +53,7 @@
  * mais novo completa, o mais velho incompleto é abandonado.
  */
 #include "stream.h"
+#include "audio.h"
 #include "config.h"
 #include "net.h"
 #include "protocol.h"
@@ -84,9 +90,20 @@
  * frame novo leva o número do frame que ele vai trazer (FRAME + NACK, como o
  * pedido repetido) e vai de novo depois disto se nada chegou. O servidor
  * reconhece a cópia: frame ainda não enviado = o pedido que já está esperando;
- * enviado há menos de 15 ms = já está no ar (transports.RETRY_GUARD_S). */
+ * enviado há menos de 15 ms = já está no ar (transports.RETRY_GUARD_S). Com a
+ * janela (abaixo) não repete: o pedido seguinte cobre o perdido. */
 #define REQ_DUP_US (6 * 1000)
 #define DEFER_POLL_US 1000 /* com o pedido adiado para a thread de decode: reavalia a cada 1 ms */
+/* Janela dos frames P com prefetch=auto (UDP): quando o decode pega o frame
+ * N, o PSP autoriza o servidor a mandar até o N+2. Com só o N+1, o pedido
+ * saía quando o N chegava e tinha de chegar ao PC antes da captura seguinte
+ * (16,7 ms a 60 fps): ida e volta + encode + transferência davam ~12 ms, e
+ * qualquer oscilação do Wi-Fi atrasava o frame ou fazia o servidor pular uma
+ * captura (52-55 fps com a fonte a 60 no PSP-3000). Com o N+2, o pedido fica
+ * esperando no PC e o frame sai na hora da captura. Na fila, no máximo um
+ * frame pronto a mais (só se a rede entregar dois de uma vez). Um frame que
+ * se perde inteiro é notado quando o seguinte chega (reenvio, sem IDR). */
+#define P_WINDOW 2
 
 enum { SLOT_FREE, SLOT_RECV, SLOT_READY, SLOT_DECODING };
 
@@ -112,6 +129,7 @@ static volatile int stopping;
 
 static volatile int wifi_signal, wifi_flags;
 static volatile int cap_h264 = 1, cap_h264p = 1;
+static volatile int cap_audio; /* UDP: pede o som (PS_CAP_AUDIO) */
 /* Frames P (o pacote começa com AUD): nenhum frame pode ser pulado. Quando
  * um se perde, todo frame P a partir de need_idr_from fica sem referência
  * até chegar um IDR; o PSP pede (PS_REQ_IDR) e pula os P até lá. */
@@ -127,6 +145,7 @@ static int ask_deferred;                  /* com o lock */
 static volatile unsigned dec_asks, dec_ask_t; /* pedidos feitos pela thread de decode e o horário do último */
 static volatile uint32_t dec_ask_frame;       /* ... e o frame que ele pediu (0 = pedido simples) */
 static volatile uint32_t seen_max;            /* maior frame visto (completo, abandonado ou chegando) */
+static volatile uint32_t req_max;             /* maior frame já pedido (frames P) */
 /* Estimativas (us), como o RTO do TCP: média móvel e desvio médio. */
 static int gap_avg = 3000, gap_dev = 3000;   /* entre pedaços seguidos de um frame */
 static int rtt_avg = 30000, rtt_dev = 10000; /* pedido -> primeiro pedaço */
@@ -211,7 +230,7 @@ static int send_req(uint16_t flags, const ps_nack_t *nack)
     r->early_b = clamp_u16(early_cur);
     r->signal = wifi_signal;
     r->wflags = wifi_flags | (rx_poll ? PS_WIFI_RX_POLL : 0) | (cap_h264 ? PS_CAP_H264 : 0) |
-                (cap_h264 && cap_h264p ? PS_CAP_H264P : 0);
+                (cap_h264 && cap_h264p ? PS_CAP_H264P : 0) | (cap_audio && g_udp ? PS_CAP_AUDIO : 0);
     r->lost = lost > 0xFFFF ? 0xFFFF : lost;
     r->hdr_have = hdr_have;
     r->ping_select = clamp_u16(ping_sel_us / 100);
@@ -233,28 +252,58 @@ static int send_req(uint16_t flags, const ps_nack_t *nack)
 /* Pede um frame novo. Frames P no UDP: com o número dele (o seguinte ao
  * maior já visto), para o pedido repetido ser reconhecido. *want = esse
  * número, ou 0 (pedido simples). */
+static int send_upto_req(uint32_t upto)
+{
+    ps_nack_t nk;
+    memset(&nk, 0xFF, sizeof(nk));
+    nk.frame_no = upto;
+    if (upto > req_max)
+        req_max = upto;
+    return send_req(PS_REQ_FRAME, &nk);
+}
+
 static int send_new_req(uint32_t *want)
 {
     *want = 0;
     if (!pmode || !g_udp) /* o TCP lê só o pedido, sem NACK */
         return send_req(PS_REQ_FRAME, NULL);
-    ps_nack_t nk;
-    memset(&nk, 0xFF, sizeof(nk));
-    nk.frame_no = seen_max + 1;
-    *want = nk.frame_no;
-    return send_req(PS_REQ_FRAME, &nk);
+    *want = (seen_max > req_max ? seen_max : req_max) + 1;
+    return send_upto_req(*want);
 }
 
-/* definida no fim do arquivo (depende de pmode, que o stream descobre) */
-static int prefetch_on(void);
+/* Frames P com prefetch=auto no UDP: a janela (P_WINDOW). */
+static int window_mode(void)
+{
+    return pmode && g_udp && g_prefetch == PREFETCH_AUTO;
+}
+
+static int prefetch_on(void)
+{
+    return g_prefetch != 0; /* 1 ou PREFETCH_AUTO */
+}
+
+/* Frames que a thread de decode ainda não devolveu (prontos ou decodificando). */
+static int frames_out(void)
+{
+    lock();
+    int n = 0;
+    for (int i = 0; i < NUM_SLOTS; i++)
+        n += state[i] == SLOT_READY || state[i] == SLOT_DECODING;
+    unlock();
+    return n;
+}
 
 static void wait_want(void)
 {
-    /* Sem prefetch: espera o decode terminar antes de pedir o próximo. */
-    while (*g_running && !stopping && !prefetch_on()) {
-        SceUInt timeout = 100 * 1000;
-        if (sceKernelWaitSema(want_sema, 1, &timeout) == 0)
-            return;
+    /* Sem prefetch: espera o decode devolver todos os frames antes de pedir o
+     * próximo. O want_sema só acorda esta espera: ele é binário e podia
+     * guardar um sinal velho (um par de frames publicado de uma vez, ou
+     * ligar e desligar o prefetch com SELECT + START + X), e aí o pedido saía
+     * antes de exibir. No PSP-3000, isso fazia o mesmo prefetch=0 dar ~45 ou
+     * ~60 fps conforme a história; quem decide agora é o estado dos slots. */
+    while (*g_running && !stopping && !prefetch_on() && frames_out() > 0) {
+        SceUInt timeout = 20 * 1000;
+        sceKernelWaitSema(want_sema, 1, &timeout);
     }
 }
 
@@ -457,6 +506,10 @@ static int send_nack(asm_t *a)
             nk.missing[i / 32] |= 1u << (i % 32);
             a->nack_last = i;
         }
+    if (a->count == 0) { /* frame que não chegou nada: tamanho desconhecido, pede todos */
+        memset(nk.missing, 0xFF, sizeof(nk.missing));
+        a->nack_last = PS_MAX_CHUNKS - 1;
+    }
     a->nacks++;
     nacks++;
     a->t_nack = now_us();
@@ -780,7 +833,11 @@ static int net_thread_udp(void)
 
         /* ---- nada chegando ---- */
         if (as[0].idx < 0 && as[1].idx < 0) {
-            if (pending == 0 && !ask_deferred) { /* ninguém pediu o próximo (ex.: desistiu de um frame) */
+            /* ninguém pediu o próximo (ex.: desistiu de um frame); dec_asks: um
+             * pedido da thread de decode que esta volta ainda não contou */
+            /* janela: com frame pronto ou decodificando, o decode pede ao pegar o próximo */
+            int dec_will_ask = ask_deferred || dec_asks != dec_seen || (window_mode() && frames_out() > 0);
+            if (pending == 0 && !dec_will_ask) {
                 ASK(PS_REQ_FRAME);
                 continue;
             }
@@ -789,7 +846,7 @@ static int net_thread_udp(void)
              * mais, e contava como perda no overlay ("repet"). Só volta logo
              * para ver o pedido dela (dec_asks) e marcar a repetição a tempo:
              * sem pacote chegando, o select() dormiria até o teto. */
-            if (ask_deferred) {
+            if (ask_deferred || dec_asks != dec_seen || (pending == 0 && dec_will_ask)) { /* o pedido do decode ainda vai sair, ou já saiu e a próxima volta conta */
                 if (DEFER_POLL_US < timeout)
                     timeout = DEFER_POLL_US;
             } else {
@@ -834,6 +891,12 @@ static int net_thread_udp(void)
             live_pong(pkt);
             continue;
         }
+        uint32_t magic;
+        memcpy(&magic, pkt, sizeof(magic));
+        if (magic == PS_MAGIC_AUDIO) { /* som: empurrado pelo PC, vai direto para o anel do audio.c */
+            audio_packet(pkt, n);
+            continue;
+        }
         if (n < (int)sizeof(ps_chunk_hdr_t))
             continue;
 
@@ -854,7 +917,7 @@ static int net_thread_udp(void)
             as[0].held = as[1].held = 0;
             done = 0;
             last_pub = 0;
-            seen_max = 0;
+            seen_max = req_max = 0;
         }
         if (h.frame_no <= done)
             continue; /* atrasado ou duplicado */
@@ -887,6 +950,24 @@ static int net_thread_udp(void)
             if (as[1].idx >= 0) {
                 as[0] = as[1];
                 as[1].idx = -1;
+            }
+            if (pmode && as[0].idx < 0 && h.frame_no == done + 2) {
+                /* Frames P: o servidor numera em sequência e manda em ordem.
+                 * Chegou o done+2 sem nada do done+1: ele se perdeu inteiro
+                 * (um frame pequeno é um pacote só). Pede o reenvio já, num
+                 * lugar guardado em as[0] (count = 0 até o primeiro pedaço), e
+                 * o done+2 espera por ele. Com a janela (P_WINDOW), o done+2
+                 * chega antes do pedido repetido (rto), e sem isso virava IDR. */
+                asm_t *m = &as[0];
+                memset(m, 0, sizeof(*m));
+                m->idx = claim_slot();
+                if (m->idx >= 0) {
+                    m->frame_no = done + 1;
+                    m->last_rx = m->t_first = m->t_req = now_us();
+                    slots[m->idx].frame_no = m->frame_no;
+                    if (send_nack(m) < 0)
+                        return -1;
+                }
             }
             const hdr_entry_t *cached = NULL;
             if (h.hdr & PS_HDR_STRIPPED) {
@@ -939,6 +1020,14 @@ static int net_thread_udp(void)
 
         if (a->held)
             continue; /* completo, esperando o mais velho: pedaço repetido */
+        if (a->count == 0) { /* primeiro pedaço do frame perdido inteiro (o reenvio) */
+            a->count = h.count;  /* frames P não usam o cache de cabeçalho (só JPEG) */
+            a->hdr = h.hdr;
+            a->nack_last = h.count - 1;
+            a->t_first = now_us();
+            slots[a->idx].size = h.size;
+            slots[a->idx].send_ts = h.send_ts;
+        }
         unsigned t_rx = now_us();
         if (h.chunk == 0) /* o pacote de frames P começa com um AUD */
             pmode = is_aud(pkt + sizeof(h), plen);
@@ -999,6 +1088,8 @@ static int net_thread_udp(void)
             } else if (!prefetch_on()) {
                 wait_want();
                 ASK(PS_REQ_FRAME);
+            } else if (window_mode()) {
+                /* quem pede é a thread de decode, ao pegar cada frame (P_WINDOW) */
             } else if (!asked && pending == 0 && !defer_ask()) {
                 ASK(PS_REQ_FRAME);
             }
@@ -1019,7 +1110,9 @@ static int net_thread_udp(void)
          * buraco num mais velho (o seguinte depende dele), nem com frame
          * esperando o decode (quem pede é a thread de decode). */
         asm_t *older = (a == &as[1]) ? &as[0] : &as[1];
-        int blocked = pmode && ((older->idx >= 0 && older->frame_no < a->frame_no) || ready_n > 0);
+        /* Frames P: só com prefetch=1 (no auto, o próximo é pedido quando o
+         * decode pega este; antecipar no meio do frame engasgava no PSP). */
+        int blocked = pmode && (g_prefetch != 1 || (older->idx >= 0 && older->frame_no < a->frame_no) || ready_n > 0);
         if (a->idx >= 0 && a->got < a->count && a->got == a->hi && !blocked && prefetch_on() && g_early &&
             !a->asked_next && pending == 0 &&
             (int)slots[a->idx].size - a->base - a->got * PS_CHUNK_PAYLOAD <= early_threshold()) {
@@ -1064,7 +1157,7 @@ int stream_start(int sock, int udp, const struct sockaddr_in *dest, int prefetch
     last_pub = 0;
     need_idr_from = 0;
     ask_deferred = 0;
-    seen_max = 0;
+    seen_max = req_max = 0;
     dec_ask_frame = 0;
     memset(&last_ack, 0, sizeof(last_ack));
     for (int i = 0; i < NUM_SLOTS; i++) {
@@ -1097,17 +1190,45 @@ ps_frame_t *stream_take(unsigned timeout_us)
     }
     int more = ready_n > 0;
     int ask = ask_deferred && !more;
-    if (ask)
-        ask_deferred = 0;
     unlock();
     if (more) /* o semáforo é binário: avisa de novo que ainda há prontos */
         sceKernelSignalSema(ready_sema, 1);
-    if (ask && !net_error && !stopping) { /* frames P: o próximo chega enquanto este decodifica */
-        uint32_t want;
-        dec_ask_t = now_us();
-        send_new_req(&want);
-        dec_ask_frame = want;
-        dec_asks++;
+    if (idx >= 0 && window_mode()) {
+        /* Janela: autoriza até o frame deste + P_WINDOW. Contado (dec_asks)
+         * para a thread de rede saber que há pedido no ar. */
+        uint32_t upto = slots[idx].frame_no + P_WINDOW;
+        if (upto > req_max && !net_error && !stopping) {
+            dec_ask_t = now_us();
+            send_upto_req(upto);
+            /* Sem a repetição (REQ_DUP_US): o frame sai na captura, não na
+             * hora do pedido, e um pedido perdido é coberto pelo seguinte
+             * (o crédito é "até o frame F"). Um pacote a menos por frame. */
+            dec_ask_frame = 0;
+            dec_asks++;
+        }
+        if (ask) {
+            lock();
+            ask_deferred = 0;
+            unlock();
+        }
+        return &slots[idx];
+    }
+    if (ask) { /* frames P: o próximo chega enquanto este decodifica */
+        /* Ordem: o pedido é contado (dec_asks) ANTES de ask_deferred voltar a
+         * 0. Ao contrário, a thread de rede (que olha a cada 1 ms) podia ver
+         * "ninguém pediu" no meio e pedir o mesmo frame de novo: ficava um
+         * pedido fantasma, o frame seguinte não era pedido, e o stream
+         * esperava o RTO (>= 30 ms). Era o engasgo do prefetch com frames P. */
+        if (!net_error && !stopping) {
+            uint32_t want;
+            dec_ask_t = now_us();
+            send_new_req(&want);
+            dec_ask_frame = want;
+            dec_asks++;
+        }
+        lock();
+        ask_deferred = 0;
+        unlock();
     }
     return idx >= 0 ? &slots[idx] : NULL;
 }
@@ -1135,6 +1256,11 @@ void stream_ping(unsigned *select_us, unsigned *poll_us, int *polling, unsigned 
 void stream_set_h264(int on)
 {
     cap_h264 = on;
+}
+
+void stream_set_audio(int on)
+{
+    cap_audio = on;
 }
 
 void stream_set_h264p(int on)
@@ -1186,14 +1312,14 @@ int stream_send_input(void)
     return send_req(0, NULL);
 }
 
-static int prefetch_on(void)
-{
-    return g_prefetch == PREFETCH_AUTO ? !pmode : g_prefetch;
-}
-
 int stream_prefetch_on(void)
 {
     return prefetch_on();
+}
+
+int stream_p_mode(void)
+{
+    return pmode;
 }
 
 void stream_set_prefetch(int mode)

@@ -28,9 +28,9 @@ PSP                                   PC
   menos vezes e recebe sempre o frame mais atual.
 - Pedir antes de decodificar ("prefetch") sobrepõe rede e decode. Nesse modo,
   quem limita o FPS é o mais lento dos dois, não a soma. Com `prefetch=auto`
-  (padrão), o PSP faz isso no JPEG e no H.264 só com quadros completos; com
-  frames P, pede o próximo só depois de exibir o atual (ritmo regular, o que
-  ficou liso no PSP-3000).
+  (padrão), o PSP pede antes do fim do frame que chega no JPEG e no H.264 só
+  com quadros completos; com frames P, pede o próximo quando o decode pega o
+  atual (~60 fps lisos no PSP-3000). `prefetch=0` pede depois de exibir.
 
 ## PSP -> PC: pedido (52 bytes)
 
@@ -50,7 +50,7 @@ PSP                                   PC
 | 28 | u16 | first_t | 0,1 ms: pedido -> primeiro pedaço/byte do frame (ida e volta + reação do servidor) |
 | 30 | u16 | burst_t | 0,1 ms: primeiro -> último pedaço (dá a vazão real do enlace) |
 | 32 | u8 | signal | sinal do Wi-Fi do PSP, % |
-| 33 | u8 | wflags | `0x1` = "Economia de energia WLAN" ligada no XMB; `0x2` = esperando pacotes por consulta, não `select()`; `0x4` = decodifica H.264; `0x8` = aceita frames P (v0.9) |
+| 33 | u8 | wflags | `0x1` = "Economia de energia WLAN" ligada no XMB; `0x2` = esperando pacotes por consulta, não `select()`; `0x4` = decodifica H.264; `0x8` = aceita frames P (v0.9); `0x10` = toca o som (v1.1, só UDP; abaixo) |
 | 34 | u16 | lost | UDP: frames abandonados incompletos desde o início do stream |
 | 36 | u32 | hdr_have | UDP: id do cabeçalho JPEG guardado no PSP (0 = nenhum) |
 | 40 | u16 | ping_select | 0,1 ms: ida e volta pura medida no início, esperando com `select()` |
@@ -99,11 +99,16 @@ Regras, porque cada P depende do anterior:
   codificado), e numera em sequência.
 - O PSP decodifica todos, em ordem: prontos ficam numa fila, e um frame
   completo que chega antes de um mais velho incompleto espera o reenvio dele.
-  Com prefetch, o próximo é pedido quando o decode pega o último da fila
-  (nunca vários frames adiantados); sem prefetch (o padrão com frames P),
-  depois de exibir o atual.
-- Buraco na numeração, frame abandonado depois de 3 NACKs ou erro de decode:
-  os P seguintes ficam sem referência. O PSP pula esses P e manda `IDR`
+  O próximo é pedido quando o decode pega o último da fila; no UDP, com
+  `prefetch=auto`, esse pedido autoriza até 2 frames à frente (a janela, em
+  [UDP](#udp)); com `prefetch=1`, também antes do fim do frame que chega;
+  com `prefetch=0`, depois de exibir o atual. O pedido feito pela
+  thread de decode é contado antes de o "pedido adiado" ser solto: na ordem
+  inversa, a thread de rede via "ninguém pediu" e pedia o mesmo frame de
+  novo, o pedido fantasma travava o seguinte até o RTO (o engasgo do
+  prefetch com frames P até a v1.0).
+- Frame abandonado depois de 3 NACKs, buraco na numeração que o reenvio não
+  cobriu, ou erro de decode: os P seguintes ficam sem referência. O PSP pula esses P e manda `IDR`
   (0x20) em todo pedido até decodificar um IDR. O servidor ignora pedidos de
   IDR por 150 ms depois de mandar um (é o que ainda está a caminho).
 - Um EBOOT sem `0x8` recebe todo frame IDR (como `--codec h264`).
@@ -187,6 +192,27 @@ o frame sai 6 ms depois em vez de esperar o RTO (>= 30 ms) com o stream
 parado (um P não pode ser pulado). O pedido repetido por falta de resposta
 continua igual, com o NACK do último completo + 1.
 
+**Janela de 2 frames** (v1.1, frames P com `prefetch=auto` no UDP): o
+número no FRAME + NACK passa a valer como "pode mandar **até** este frame".
+Quando a thread de decode pega o frame N, o PSP manda FRAME + NACK(N+2). O
+servidor guarda o crédito (`want_upto`, no máximo o último enviado + 2) e,
+enquanto `frame_no < want_upto`, manda cada frame novo na hora em que ele é
+capturado. Um pedido simples (sem NACK) continua valendo "o seguinte"; cópias
+e pedidos velhos não somam (o crédito só sobe). Com só o N+1 autorizado, o
+pedido saía quando o N chegava e tinha de chegar ao PC, e o frame ser
+codificado, antes da captura seguinte (16,7 ms a 60 fps); com o Wi-Fi
+oscilando, o servidor perdia capturas (52-55 fps no PSP-3000 com a fonte a
+60). Nesse modo o pedido **não** vai de novo depois de 6 ms: o frame sai na
+captura, não na hora do pedido, e o pedido seguinte cobre um perdido.
+
+**Frame perdido inteiro com a janela:** o N+1 pode sumir e o N+2 chegar antes
+de qualquer pedido repetido. O servidor numera os frames em sequência e manda
+em ordem, então o PSP sabe: chegou o `done + 2` sem nenhum pedaço do
+`done + 1`. Ele manda na hora um NACK com todos os pedaços do `done + 1`
+(tamanho ainda desconhecido; o servidor reenvia os que existem), e o `done +
+2` completo espera por ele, como espera um mais velho incompleto. Se o
+reenvio não vier depois de 3 NACKs, pede IDR.
+
 **Último pedaço em dobro** (frames P, servidor v1.0): o último pedaço de cada
 pacote P vai de novo 6 ms depois (`--p-redundancy-ms`; o PSP ignora o que já
 tem). Perder o último pedaço era o caso lento: sem pedaço seguinte, o PSP só
@@ -207,9 +233,10 @@ encerra a sessão na hora (no UDP não existe "fechar conexão").
 | chegou o último pedaço do reenvio e ainda faltam outros | NACK de novo na hora |
 | 3 NACKs sem completar | desiste do frame (conta em "perdidos") e pede outro |
 | hora do NACK, mas um frame mais novo já está chegando | desiste do frame sem NACK: o reenvio viria na fila atrás do mais novo (frames P: manda o NACK, o mais novo depende dele) |
-| frames P: pedido de frame novo sem nenhum pedaço dele em 6 ms | manda o mesmo pedido de novo, uma vez (ver acima) |
+| frames P: pedido de frame novo sem nenhum pedaço dele em 6 ms | manda o mesmo pedido de novo, uma vez (ver acima; com a janela, não) |
+| frames P: chega o `done + 2` sem nada do `done + 1` | NACK do `done + 1` inteiro na hora; o `done + 2` espera (ver acima) |
 | pedido sem nenhuma resposta por uma ida e volta medida (média + 4 desvios do pedido -> 1º pedaço, 30-200 ms) | reenvia o pedido (frames P: com NACK do frame esperado, ver acima) |
-| frames P: frame pronto esperando o decode | o próximo é pedido pela thread de decode quando ela pega esse frame; até lá não há pedido para repetir |
+| frames P: frame pronto esperando o decode | o próximo é pedido pela thread de decode quando ela pega esse frame (com a janela, até 2 à frente); até lá não há pedido para repetir |
 | 3 s sem completar nenhum frame | o pedido vai com HELLO (o servidor pode ter reiniciado) |
 | pedaço de frame mais antigo ou duplicado | ignorado |
 
@@ -230,13 +257,45 @@ conta a partir de quando o rádio ficou livre para aquele frame
 (`max(pedido, frame anterior completo)`).
 
 Do lado do servidor, há no máximo **um pedido pendente**: pedidos repetidos
-enquanto ele espera um frame novo não viram uma rajada de frames. Uma sessão
+enquanto ele espera um frame novo não viram uma rajada de frames. A exceção
+é a janela dos frames P (acima): um crédito de até 2 frames, dado pelo
+número no pedido. Uma sessão
 UDP começa com um HELLO (ou com qualquer pedido, se não houver sessão ativa)
 e é identificada pelo IP:porta do PSP.
 
 **Controles no UDP:** cada mudança é mandada duas vezes (na amostra seguinte
 de novo). Enquanto algo está segurado, o estado é reafirmado a cada ~100 ms,
 em TCP e UDP.
+
+## Som (UDP, v1.1)
+
+O som não segue o modelo pull: enquanto o pedido mais recente do PSP tiver
+`wflags & 0x10`, o servidor **empurra** um pacote a cada ~20 ms para o
+endereço da sessão UDP. Sem o bit (`audio=0` no `server.txt`, ou desligado
+com SELECT + START + cima), nenhum pacote de som sai, e um EBOOT antigo
+nunca recebe som.
+
+| offset | tipo | campo | descrição |
+|---|---|---|---|
+| 0 | char[4] | magic | `PSA1` |
+| 4 | u32 | seq | +1 por pacote; um buraco é um pacote perdido |
+| 8 | u32 | pos | amostra (por canal) do início do bloco |
+| 12 | u16 | rate | Hz: 22050, 32000, 44100 (padrão, a do PSP) ou 48000 |
+| 14 | u8 | channels | 1 ou 2 |
+| 15 | u8 | codec | `1` = IMA ADPCM, bloco do WAV (o `adpcmenc` do GStreamer, layout dvi) |
+| 16 | u16 | samples | amostras por canal no bloco (881 a 44,1 kHz: 1 + 8 x 110) |
+| 18 | u16 | reservado | 0 |
+| 20 | | bloco | por canal, 4 bytes (1ª amostra int16, índice do passo, 0); depois grupos de 4 bytes (8 amostras) alternando os canais, nibble baixo primeiro |
+
+Cada bloco decodifica sozinho. O PSP decodifica num anel e toca pelo
+`sceAudioSRC` (canal com conversão de taxa), em pedaços de 256 amostras,
+alternando dois buffers (o hardware lê o pedaço enquanto toca). O
+anel começa a tocar com 40 ms e se ajusta: +10 ms a cada vez que esvazia,
+-5 ms a cada 10 s sem faltar, entre 30 e 120 ms. Pacote perdido (até 5
+seguidos) vira silêncio do mesmo tamanho; um buraco maior, ou o `seq`
+voltando (servidor reiniciado), recomeça o anel. Som acima de alvo + 40 ms é
+descartado até o alvo, para o atraso não crescer (rajadas depois de um
+atraso, ou o relógio do PC um pouco mais rápido que o do PSP).
 
 ## Conexão
 

@@ -8,7 +8,7 @@ typedef struct {
     int decoder;      /* DEC_AUTO, DEC_SW ou DEC_HW */
     int vsync;        /* 1 = troca de buffer no vblank (sem rasgo, +0..16 ms) */
     int prefetch;     /* 1 = pede o próximo frame antes de decodificar o atual; 0 = depois de exibir;
-                       * PREFETCH_AUTO = sim, menos com frames P */
+                       * PREFETCH_AUTO = sim, e com frames P só quando o decode pega o atual */
     int overlay;      /* 1 = mostra FPS/estatísticas */
     int rcvbuf_kb;    /* buffer de recepção TCP em KB */
     int bench;        /* 1 = mede decode hw x sw com o primeiro frame */
@@ -21,12 +21,15 @@ typedef struct {
     int exit_after;   /* testes: sai depois de exibir N frames (0 = nunca) */
     int menu_wait;    /* s até conectar sozinho com a tela de configuração aberta (0 = conecta direto) */
     int menu_shot;    /* testes: desenha a tela de configuração, tira o screenshot e sai */
+    int audio;        /* 1 = toca o som do PC (só UDP) */
 } ps_config_t;
 
-/* prefetch=auto (padrão). Com frames P, pedir o próximo só depois de exibir
- * o atual deixou o stream liso no PSP-3000 (Hollow Knight): sem fila, um
- * frame por vez, ritmo regular. No JPEG e no H.264 só com quadros completos,
- * o prefetch vale 1,2-1,7x de FPS (medido) e continua ligado. */
+/* prefetch=auto (padrão). Com frames P, o próximo é pedido quando o decode
+ * pega o atual (nunca no meio de um frame chegando): ~60 fps lisos no
+ * PSP-3000 (Hollow Knight). Pedir só depois de exibir (prefetch=0) dava ~45
+ * fps, e o pedido antecipado com frames P (prefetch=1) engasgava. No JPEG e
+ * no H.264 só com quadros completos, auto = prefetch completo (1,2-1,7x de
+ * FPS, medido). */
 #define PREFETCH_AUTO (-1)
 
 /* Como a thread de rede espera pacotes (UDP). */

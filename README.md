@@ -1,8 +1,9 @@
 # PSPStream
 
-Transmite a tela do PC para um PSP pelo Wi-Fi e manda os botões do PSP de
-volta ao PC, como teclado e mouse ou como um controle de Xbox. O vídeo vai em
-H.264 com frames P, decodificado pelo hardware do PSP. Inspirado no
+Transmite a tela e o som do PC para um PSP pelo Wi-Fi e manda os botões do
+PSP de volta ao PC, como teclado e mouse ou como um controle de Xbox. O vídeo
+vai em H.264 com frames P, decodificado pelo hardware do PSP, e o som em IMA
+ADPCM. Inspirado no
 [RNDS-Stream](https://github.com/gavff64/RNDS-Stream), que faz o mesmo para o
 Nintendo DSi.
 
@@ -30,6 +31,9 @@ fila na rede, e a latência fica perto de um frame. Detalhes em
   MJPEG, para EBOOTs antigos.
 - **Captura a 60 fps** no GNOME 50 pela KMS (direto da placa de vídeo), ou
   pelo portal do Wayland (GNOME, KDE).
+- **Som do PC** (o que sai nas caixas, pelo PipeWire): IMA ADPCM a 44,1 kHz
+  estéreo, ~46 KB/s, em pacotes de 20 ms, com buffer adaptativo no PSP. Liga
+  e desliga pelo PSP (tela de configuração ou SELECT + START + cima).
 - **UDP com recuperação de perdas** (NACK, pedido repetido, último pedaço de
   cada frame P em dobro, IDR só quando precisa), **qualidade adaptativa** à
   vazão do Wi-Fi e **pedido antecipado**, para não ficar tempo morto entre
@@ -40,34 +44,62 @@ fila na rede, e a latência fica perto de um frame. Detalhes em
   Wi-Fi, transporte e opções, gravados no `server.txt`.
 - **Overlay** com FPS, KB por frame, tempos de decode e rede; estatísticas
   completas no log do servidor.
+- **Interface web** no PC (http://localhost:5124): as configurações gerais
+  (captura, codec, qualidade, som, controles, rede) mudam com o PSP
+  conectado, e ficam gravadas. Mostra também o estado do stream e o log.
 
 ## Requisitos
 
 | | testado | deve funcionar |
 |---|---|---|
 | PSP | PSP-3000, firmware 6.61 com ARK-4 | qualquer PSP com firmware customizado que rode homebrew |
-| PC | Fedora 44, GNOME 50 (Wayland), Intel Gen12 | Linux com PipeWire e o portal ScreenCast; KMS precisa de libdrm |
+| PC | Fedora 44, GNOME 50 (Wayland), Intel Gen12; instalação e servidor também num Ubuntu 24.04 | qualquer Linux com Python 3.10+, GStreamer 1.20+, PipeWire ou PulseAudio e o portal ScreenCast (ou X11); KMS precisa de libdrm |
 | rede | roteador em modo misto b/g/n, WPA2 | o PSP só fala 802.11b em 2,4 GHz |
 
 ## Instalação
 
-### 1. PC (Fedora)
+### 1. PC
+
+O jeito mais simples, em qualquer distribuição:
 
 ```sh
-sudo dnf install python3-gobject gstreamer1-plugins-base gstreamer1-plugins-good \
-                 pipewire-gstreamer python3-evdev gstreamer1-plugin-openh264
 git clone https://github.com/k7vinilstorage/PSP-Stream && cd PSP-Stream
+python3 server/pspstream.py --setup
 ```
 
-- `gstreamer1-plugin-openh264` vem do repositório `fedora-cisco-openh264`,
-  já ativo no Fedora Workstation, e traz a `libopenh264`, que o servidor
-  chama direto.
-- `python3-evdev`: os controles (uinput).
+O `--setup` descobre a distribuição (Ubuntu/Debian e derivadas, Fedora,
+Arch, openSUSE), mostra cada comando (pacotes, permissão dos controles,
+firewall, captura KMS opcional) e pergunta antes de rodar. Para só
+conferir, sem mudar nada: `python3 server/pspstream.py --check`.
 
-**Firewall.** O Fedora bloqueia conexões de entrada por padrão:
+À mão:
+
+| distribuição | comando |
+|---|---|
+| **Ubuntu, Debian, Mint, Pop!_OS** ([guia completo](docs/UBUNTU.md)) | `sudo apt install python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-pipewire gstreamer1.0-gl libopenh264-dev python3-evdev pulseaudio-utils` |
+| **Fedora** | `sudo dnf install python3-gobject gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free pipewire-gstreamer python3-evdev gstreamer1-plugin-openh264` |
+| **Arch, Manjaro, EndeavourOS** (não testado) | `sudo pacman -S --needed python-gobject gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugin-pipewire openh264 python-evdev libpulse` |
+| **openSUSE** (não testado) | `sudo zypper install python3-gobject typelib-1_0-Gst-1_0 typelib-1_0-GstVideo-1_0 typelib-1_0-GstAllocators-1_0 gstreamer-plugins-base gstreamer-plugins-good gstreamer-plugins-bad gstreamer-plugin-pipewire libopenh264-7 python3-evdev pulseaudio-utils` |
+
+- A `libopenh264` (H.264 com frames P) vem do pacote da distribuição. No
+  Fedora, `gstreamer1-plugin-openh264` vem do repositório
+  `fedora-cisco-openh264`, já ativo no Fedora Workstation, e traz a
+  biblioteca junto. Sem pacote, a do Cisco serve
+  ([docs/UBUNTU.md](docs/UBUNTU.md#1-pacotes)); sem nenhuma, o servidor
+  manda JPEG.
+- `evdev`: os controles (uinput).
+- `pulsesrc` (plugins good) e `adpcmenc` (plugins bad): o som. Sem eles, o
+  servidor avisa e roda sem som.
+- Use o Python do sistema: o PyGObject do pacote não aparece num venv,
+  conda ou pyenv (ou crie o venv com `--system-site-packages`).
+
+**Firewall.** O Fedora (firewalld) bloqueia conexões de entrada por padrão;
+o Ubuntu (ufw) vem com o firewall desligado. O `--check` diz qual está
+ativo e o comando:
 
 ```sh
-sudo firewall-cmd --permanent --add-port=5123/tcp --add-port=5123/udp && sudo firewall-cmd --reload
+sudo firewall-cmd --permanent --add-port=5123/tcp --add-port=5123/udp && sudo firewall-cmd --reload   # firewalld
+sudo ufw allow 5123/udp && sudo ufw allow 5123/tcp                                                      # ufw
 ```
 
 **Controles (uinput).** O servidor cria teclado, mouse ou controle virtuais
@@ -91,7 +123,8 @@ que a placa de vídeo está mostrando, como a do Sunshine, e chega a 60 fps.
 Ela usa um auxiliar pequeno com permissão de administrador (`CAP_SYS_ADMIN`):
 
 ```sh
-sudo dnf install gcc libdrm-devel
+sudo apt install gcc make pkg-config libdrm-dev libcap2-bin   # Ubuntu/Debian
+sudo dnf install gcc make libdrm-devel libcap                 # Fedora
 make -C tools/kms          # compila tools/kms/pspstream-kms
 make -C tools/kms cap      # sudo setcap cap_sys_admin+ep (refaça depois de cada make)
 ```
@@ -103,7 +136,8 @@ e a captura é do monitor inteiro (`--kms-monitor 1` escolhe o segundo).
 
 ### 2. PSP
 
-Compile o EBOOT com o [pspdev](https://pspdev.github.io/installation/fedora.html):
+Compile o EBOOT com o [pspdev](https://pspdev.github.io/installation/fedora.html)
+(Fedora abaixo; Ubuntu em [docs/UBUNTU.md](docs/UBUNTU.md#9-compilar-o-eboot-no-ubuntu-opcional)):
 
 ```sh
 sudo dnf -y install @development-tools cmake bsdtar libusb-compat-0.1 gpgme2 fakeroot xz
@@ -140,6 +174,9 @@ Sem `--source kms`, a captura é pelo portal: na primeira vez o GNOME/KDE
 pergunta qual monitor ou janela transmitir, e a escolha fica salva
 (`--forget` pergunta de novo).
 
+As configurações também mudam pelo navegador, em **http://localhost:5124**
+(ver [Interface web](#interface-web)).
+
 ## No PSP
 
 ### Tela de configuração
@@ -154,9 +191,9 @@ para a contagem), com **SELECT + START + R** durante o stream e com
 - **Perfil de Wi-Fi**: mostra o nome salvo no XMB.
 - **Procurar o PC na rede**: liga o Wi-Fi e manda um ping em broadcast; o
   servidor responde e o IP dele entra no lugar.
-- Transporte, H.264, frames P, decoder, vsync, overlay, controles, prefetch
-  (auto/sim/não) e os ajustes de rede: as mesmas opções do `server.txt`
-  (abaixo).
+- Transporte, H.264, frames P, decoder, vsync, overlay, controles, som,
+  prefetch (auto/sim/não) e os ajustes de rede: as mesmas opções do
+  `server.txt` (abaixo).
 - **START** grava o `server.txt` e conecta; **O** conecta sem gravar. Ao
   gravar, os comentários do arquivo antigo somem.
 
@@ -169,7 +206,8 @@ Segure **SELECT + START** e aperte:
 | triângulo | liga/desliga o overlay |
 | quadrado | decoder do JPEG hardware/software |
 | círculo | vsync |
-| X | prefetch: inverte o que está valendo (com `prefetch=auto`, desligado nos frames P) |
+| cima | liga/desliga o som (o PC para de mandar quando desliga) |
+| X | prefetch: auto -> sim -> não (ver `server.txt` abaixo) |
 | L | troca o transporte TCP/UDP (reconecta) |
 | R | abre a tela de configuração |
 
@@ -182,12 +220,24 @@ sozinho antes do START chega ao PC.
  41.3 fps   1.2 KB  52 KB/s
 dec 10.6 ms (h264p) rede 9.8 ms udp drop 0
 perdidos 0 nack 1 repet 0 idr 0 ping 7.1 ms (min 5.2, ini 6.3 sel)
-pede o proximo depois de exibir (sem prefetch, auto)
+pede ate 2 frames a frente quando o decode comeca (auto)
 ```
 
-A última linha diz quando o próximo frame é pedido: depois de exibir o atual
-(sem prefetch, o padrão com frames P) ou quando faltam tantos KB do atual
-(com prefetch: JPEG e H.264 só com quadros completos).
+A 4ª linha diz quando o próximo frame é pedido: quando o decode começa,
+autorizando até 2 à frente (frames P com `prefetch=auto`; o frame sai do PC
+na hora da captura), quando faltam tantos KB do atual (pedido
+antecipado: JPEG e H.264 só com quadros completos, ou `prefetch=1`) ou
+depois de exibir (`prefetch=0`). A 5ª é o som:
+
+```
+som 44.1 kHz buf 38 ms (alvo 40) perdidos 0 vazio 0 pulos 0
+```
+
+`buf` é o som recebido esperando para tocar, e `alvo`, quanto o PSP tenta
+manter (começa em 40 ms; sobe 10 ms a cada vez que o buffer esvazia,
+`vazio`, e desce 5 ms a cada 10 s sem faltar, entre 30 e 120 ms). `perdidos`
+são pacotes que não chegaram (viram 20 ms de silêncio) e `pulos`, som
+descartado porque acumulou demais (o atraso não cresce).
 
 `h264p` = H.264 com frames P (`h264`: só quadros completos; `hw`/`sw`:
 JPEG). `idr` conta os quadros completos pedidos depois de uma perda, e
@@ -208,7 +258,8 @@ decoder=auto         # JPEG: auto (hardware com reserva em software) | hw | sw
 vsync=1              # 1 = sem rasgo na imagem (+0 a 16 ms); 0 = troca imediata
 overlay=1            # FPS, KB/frame, tempos
 input=1              # controles do PSP -> PC
-prefetch=auto        # auto (padrão) = sim, menos com frames P; 1 = sempre; 0 = nunca (ver abaixo)
+audio=1              # som do PC (só pelo UDP); 0 = o PC nem manda
+prefetch=auto        # auto (padrão) | 1 | 0 (ver abaixo)
 early_kb=auto        # UDP: pede o próximo frame quando faltar isso do atual (auto = ida e volta x vazão; 0 = no fim)
 rxwait=auto          # UDP: auto | select | poll
 rcvbuf=64            # buffer de recepção do socket (KB)
@@ -216,13 +267,27 @@ bench=0              # 1 = mede o decode JPEG hw x sw no próprio PSP ao conecta
 menu_wait=3          # s com a tela de configuração aberta antes de conectar sozinho (0 = direto)
 ```
 
-**Prefetch** é pedir o próximo frame antes de decodificar o atual, para rede
-e decode trabalharem juntos. No JPEG e no H.264 só com quadros completos ele
-rende 1,2-1,7x de FPS (medido no PSP-3000). Com frames P, o stream ficou
-**liso e perto de 60 fps com o prefetch desligado** (Hollow Knight,
-PSP-3000): o próximo frame só é pedido depois de exibir o atual, um por vez,
-num ritmo regular. Por isso o padrão `auto` desliga o prefetch só com frames
-P; `prefetch=1` (ou SELECT + START + X durante o stream) religa.
+**Prefetch** é pedir o próximo frame antes de terminar o atual, para rede e
+decode trabalharem juntos:
+
+| `prefetch=` | JPEG e H.264 só com quadros completos | frames P |
+|---|---|---|
+| `auto` (padrão) | pede antes do fim do frame que chega (1,2-1,7x de FPS, medido no PSP-3000) | pede quando o decode pega o atual: **~60 fps lisos** no PSP-3000 (Hollow Knight). No UDP, autoriza até 2 frames à frente (v1.1): o frame sai na hora da captura |
+| `1` | igual | também pede antes do fim do frame que chega (pedido antecipado) |
+| `0` | pede depois de exibir o atual | pede depois de exibir o atual: ~45 fps no mesmo teste |
+
+SELECT + START + X troca entre os três durante o stream, e o overlay mostra
+qual está valendo. Até a v1.0, o `0` dava 45 ou 60 fps conforme a história
+(um sinal velho fazia ele pedir quando o decode começava), e o `1` com frames
+P engasgava por um erro na contagem dos pedidos; os dois foram corrigidos
+na v1.1.
+
+A janela de 2 frames (v1.1): com só o seguinte autorizado, o pedido tinha de
+ir e o frame ser codificado antes da captura seguinte (16,7 ms a 60 fps);
+com o Wi-Fi oscilando, o servidor perdia capturas e o PSP-3000 ficava em
+52-55 fps com a fonte a 60. Com 2 à frente, o pedido já está esperando no PC
+(simulação: 53-55 → 59,5-60 fps, mesma latência). Na fila do PSP fica no
+máximo um frame pronto a mais, e só se a rede entregar dois de uma vez.
 
 ## Controles
 
@@ -270,6 +335,45 @@ Os perfis ficam em `server/keymap.json` (as chaves `_ajuda` explicam o
 formato), com zona morta, curva e velocidade ajustáveis. Se o PSP sumir com
 algo apertado, tudo é solto em 0,5 s (`--input-timeout`).
 
+## Interface web
+
+Com o servidor rodando, abra **http://localhost:5124** no PC. A página mostra
+o estado (PSP conectado, FPS no PSP e da captura, latência, Wi-Fi,
+engasgos, qualidade), as configurações gerais e o log.
+
+| grupo | o que muda |
+|---|---|
+| Captura | fonte (portal, kms, x11, test, static), monitor do KMS, janela e cursor do portal, limite de FPS, filtro de redução, esticar |
+| Vídeo | codec, qualidade adaptativa ou fixa, alvo e limites da adaptativa |
+| Som | ligado, fonte (o que sai nas caixas, tom de teste ou uma fonte do PipeWire), taxa, mono |
+| Controles | ligados, perfil, velocidade do mouse |
+| Rede | prioridade no Wi-Fi (DSCP), cópia do último pedaço, porta |
+
+Cada campo diz quando a mudança vale:
+
+- **na hora**: qualidade, limite de FPS, DSCP;
+- **refaz a captura**, com o PSP continuando conectado: fonte, codec,
+  filtro. A captura nova sobe antes de a velha parar; se não subir (ex.: KMS
+  sem o auxiliar), a velha continua e a página mostra o motivo. Com frames P,
+  o primeiro frame da captura nova é um IDR;
+- **refaz o som** ou **os controles** (as teclas seguradas são soltas);
+- **na próxima conexão do PSP** (cópia do último pedaço) ou **ao reiniciar o
+  servidor** (porta: mude também o `server.txt` do PSP).
+
+As mudanças ficam em `~/.config/pspstream/server.json` (só o que difere do
+padrão; `--config` escolhe outro arquivo). Na partida, a ordem é padrão <
+arquivo < linha de comando: uma opção dada na linha de comando vale mais que
+o arquivo, e a página marca esses campos com "linha de comando". Se a
+captura gravada no arquivo não subir, o servidor usa a da linha de comando e
+avisa no log, e a página continua acessível para trocar.
+
+Por padrão, a página só abre no próprio PC (127.0.0.1). `--web
+0.0.0.0:5124` abre para a rede local (do celular, por exemplo), **sem
+senha**: qualquer um na rede muda as configurações. `--no-web` desliga.
+A página recusa pedidos vindos de outros sites (ver `server/web.py`), e
+nada nela recebe caminho de arquivo nem pipeline do GStreamer
+(`--source gst` e `--image` só pela linha de comando).
+
 ## Opções do servidor
 
 | opção | o que faz |
@@ -283,12 +387,18 @@ algo apertado, tudo é solto em 0,5 s (`--input-timeout`).
 | `--h264-encoder auto` | libopenh264 direto, com o GStreamer de reserva (padrão); `gstreamer` força o caminho antigo |
 | `--fixed-quality -q 70` | qualidade fixa em vez de adaptativa |
 | `--target-fps 20`, `--q-min 25 --q-max 90` | alvo e limites da qualidade adaptativa |
-| `--fps 60` | taxa de captura |
+| `--fps 60` | taxa máxima de captura. De uma tela de 60 Hz, 30 é um frame sim, um não (uniforme); 40 é 2 de cada 3 (intervalos de 17 e 33 ms: a média dá 40, mas o movimento é menos uniforme que a 30 ou 60) |
 | `--scale bilinear2` | filtro de redução (padrão; `lanczos` deixa o texto um pouco mais nítido) |
 | `--input-dry-run` | só mostrar no log o que seria injetado |
 | `--dscp ef` | marca os pacotes para a fila de voz do Wi-Fi (WMM); `0` desliga |
-| `--p-redundancy-ms 4` | frames P: o último pedaço de cada frame vai de novo depois disso, e a perda dele não trava o stream; `0` desliga |
+| `--p-redundancy-ms 6` | frames P: o último pedaço de cada frame vai de novo depois disso, e a perda dele não trava o stream; `0` desliga |
+| `--no-audio` | sem som (o PSP também desliga pelo `audio=0` ou SELECT + START + cima) |
+| `--audio-device NOME` | fonte do som: `monitor` (padrão, o que sai nas caixas), `test` (tom de 440 Hz) ou uma fonte do `pactl list short sources` |
+| `--audio-rate 44100`, `--audio-mono` | taxa (22050, 32000, 44100 ou 48000 Hz; 44100 é a do PSP) e mono: ~46 KB/s a 44,1 kHz estéreo, ~34 a 32 kHz, metade em mono |
 | `--bench 30,50,70,90` | varre qualidades com o PSP conectado e grava uma tabela |
+| `--web 127.0.0.1:5124`, `--no-web` | endereço da [interface web](#interface-web) (`0.0.0.0:5124` = rede local, sem senha) ou nenhuma |
+| `--config ARQUIVO` | configurações gravadas pela interface web (padrão `~/.config/pspstream/server.json`) |
+| `--check`, `--setup` | confere as dependências e diz o comando da sua distribuição; `--setup` também instala e configura, perguntando antes de cada passo |
 | `-v` | log detalhado |
 
 A cada 2 s, o servidor mostra uma linha de estatística:
@@ -326,7 +436,8 @@ PSP-3000 e Fedora 44 com Wi-Fi 802.11b; detalhes e o histórico em
 | H.264, Minecraft pelo portal (fonte ~38 fps) | 35-37 | 30-38 ms | 5-9 |
 | H.264 + captura KMS, cenas leves / jogo | 43-56 / 40-42 | 32-38 / 55-66 ms | 4 / 8-9 |
 | H.264 com frames P (v0.9), Hollow Knight + KMS (relato) | quase 60, com engasgos de vez em quando | não medida | 1,2-2,5 (70-150 KB/s, contra 400-450 KB/s do H.264 só quadros completos) |
-| H.264 com frames P (v1.0, sem prefetch), Hollow Knight + KMS (relato) | **perto de 60, liso** ("excelente") | não medida | |
+| H.264 com frames P (v1.0), Hollow Knight + KMS (relato), pedido quando o decode começa | **perto de 60, liso** ("excelente") | não medida | |
+| o mesmo, pedido depois de exibir (`prefetch=0` de verdade) | ~45 | não medida | |
 
 - Decode no PSP: JPEG 7,9 ms (hardware); H.264 só quadros completos 3,7 ms;
   frame P + 2 cópias 10,6 ms.
@@ -338,20 +449,27 @@ PSP-3000 e Fedora 44 com Wi-Fi 802.11b; detalhes e o histórico em
   perdas no Wi-Fi (cada P precisa do anterior, então uma perda parava o
   stream até o reenvio); a v1.0 manda o último pedaço em dobro e repete o
   pedido, e a linha do servidor mostra o que sobrou e por quê. Com o
-  prefetch desligado (padrão com frames P), o stream ficou liso e perto de
-  60 fps no PSP-3000.
+  próximo frame pedido quando o decode começa (`prefetch=auto`), o stream
+  fica liso e perto de 60 fps no PSP-3000.
 
 ## Solução de problemas
 
 | sintoma | o que fazer |
 |---|---|
-| "Sem resposta do PC" / "Procurar" não acha | o servidor está rodando? Libere 5123/udp e 5123/tcp no firewall. PC e PSP na mesma rede |
+| "Sem resposta do PC" / "Procurar" não acha | o servidor está rodando? Libere 5123/udp e 5123/tcp no firewall (`--check` diz o comando). PC e PSP na mesma rede, sem isolamento de clientes no roteador |
+| algo falta ou não abre | `python3 server/pspstream.py --check`: lista o que falta e o comando para a sua distribuição |
 | latência alta, FPS oscilando | desligue a Economia de energia WLAN do PSP; deixe o PC no 5 GHz ou no cabo (o servidor avisa se ele divide o canal de 2,4 GHz com o PSP); roteador em modo misto b/g/n |
-| engasgos de vez em quando (h264p) | confira se o prefetch está desligado (última linha do overlay: "depois de exibir"; `prefetch=auto` ou `0`). Depois, veja os engasgos e a causa na linha do servidor (acima). `perda`/`pedido atrasado`: Wi-Fi (distância, canal de 2,4 GHz cheio, micro-ondas, Bluetooth); `captura`: o PC; `IDR` frequente: perdas seguidas. `--codec h264` aguenta perdas melhor (cada quadro é independente), com 2-3x mais banda |
-| h264p liso, mas com FPS bem abaixo de 60 | sem prefetch, cada frame espera o anterior ser exibido; com o Wi-Fi lento, o ciclo não cabe num frame. Teste `prefetch=1` (rede e decode juntos), que tropeça mais quando o Wi-Fi oscila |
+| engasgos de vez em quando (h264p) | confira o prefetch (4ª linha do overlay; o padrão `auto` diz "ate 2 frames a frente quando o decode comeca"). Depois, veja os engasgos e a causa na linha do servidor (acima). `perda`/`pedido atrasado`: Wi-Fi (distância, canal de 2,4 GHz cheio, micro-ondas, Bluetooth); `captura`: o PC; `IDR` frequente: perdas seguidas. `--codec h264` aguenta perdas melhor (cada quadro é independente), com 2-3x mais banda |
+| h264p liso, mas com FPS bem abaixo de 60 | com `prefetch=0`, cada frame espera o anterior ser exibido (~45 fps): use `auto`. Veja a `fonte` na linha do servidor: abaixo de 60, é a captura (`--source kms`). Até a v1.1, `auto` ficava em 52-55 com o Wi-Fi oscilando (o pedido chegava depois da captura seguinte) e o limite de `--fps` cortava frames de uma fonte com horários tremidos: atualize servidor e EBOOT |
+| `--fps 40` não dá 40 | até a v1.1, o limite de `--fps` cortava frames com os horários da captura tremendo (~38) e o PSP pulava capturas (~35): atualize. 40 de uma tela de 60 Hz alterna 17 e 33 ms; para um movimento uniforme, `--fps 30` |
+| som some depois de mexer na configuração ("som: erro no canal de audio") | EBOOT 1.1 antes da correção: o canal de som não era solto com som na fila. Atualize o EBOOT |
 | captura em ~38-40 fps no GNOME 50 | use `--source kms` |
 | KMS: "sem permissão para ler a tela" | `make -C tools/kms cap` de novo (depois de cada `make`); partições montadas com `nosuid` ignoram a permissão |
 | controles não chegam | o log diz "controles desativados": configure o `/dev/uinput` (acima) |
+| sem som | o log do servidor diz `som: ...` ao iniciar: sem `pulsesrc`/`adpcmenc`, instale `gstreamer1-plugins-good` e `gstreamer1-plugins-bad-free`. No PSP, a 5ª linha do overlay: "desligado" = SELECT + START + cima; "esperando o PC" = o servidor não está mandando. Só pelo UDP |
+| som picotando | `vazio` subindo no overlay: Wi-Fi oscilando (o buffer aumenta sozinho até 120 ms). `--audio-rate 32000`, `22050` ou `--audio-mono` aliviam a rede |
+| zumbido no som (EBOOT 1.1 antes da correção) | era o buffer de saída reaproveitado enquanto tocava; atualize o EBOOT |
+| o PC continua tocando o som | o servidor grava o que sai nas caixas. Para o som ir só para o PSP: `pactl load-module module-null-sink sink_name=psp`, escolha "Null Output" como saída nas configurações de som e rode o servidor com `--audio-device psp.monitor` |
 | o servidor avisa "EBOOT antigo" ou "não aceita frames P" | atualize o EBOOT (v1.0) |
 | imagem torta ou com cores erradas (JPEG) | `decoder=sw` |
 | algo estranho no H.264 do PC | `--h264-encoder gstreamer` usa o caminho antigo; mande o log |
@@ -367,11 +485,12 @@ python3 tools/fake_client.py --transport udp --h264p --seconds 10 --kbps 450 --d
 ```
 
 `tools/fake_client.py` imita as threads do PSP (fila em ordem, NACK, IDR,
-pedido antecipado e repetido, `--prefetch auto|on|off` como no `server.txt`)
-e confere que nenhum frame P é decodificado sem o anterior; `--kbps`,
-`--rtt-ms`, `--loss`, `--loss-up`, `--loss-burst-ms` (rajadas de
-interferência) e `--decode-ms` simulam o Wi-Fi e o PSP, e o resumo conta os
-engasgos. `FAKE_TRACE=1` mostra cada pedido, pedaço, perda e NACK. Os
+pedido antecipado e repetido, `--prefetch auto|on|off` como no `server.txt`,
+janela de 2 frames; `--no-window` tira a janela) e confere que nenhum frame
+P é decodificado sem o anterior; `--kbps`, `--rtt-ms`, `--rtt-jitter-ms`
+(ida e volta oscilando, como no Wi-Fi), `--loss`, `--loss-up`,
+`--loss-burst-ms` (rajadas de interferência) e `--decode-ms` simulam o Wi-Fi
+e o PSP, e o resumo conta os engasgos. `FAKE_TRACE=1` mostra cada pedido, pedaço, perda e NACK. Os
 números dele são simulados.
 
 **PPSSPPHeadless** (compile o PPSSPP com `cmake -DHEADLESS=ON`; o H.264
@@ -381,6 +500,7 @@ precisa de `tools/ppsspp-pmp-fix.patch`):
 PPSSPP_HEADLESS=/caminho/PPSSPPHeadless tools/emu_test.sh tela.png --source static
 PPSSPP_HEADLESS=... python3 tools/emu_input_test.py   # controles; precisa de: pip install websocket-client
 PPSSPP_HEADLESS=... python3 tools/emu_menu_test.py    # tela de configuração: procurar o PC, salvar, conectar
+PPSSPP_HEADLESS=... python3 tools/emu_audio_test.py   # som: o PSP pede, desliga e liga pelo atalho
 ```
 
 No emulador, a imagem e a lógica valem, mas os **tempos não**: o relógio
@@ -405,6 +525,7 @@ psp/                   cliente (C, pspdev)
   src/stream.c         thread de rede, slots, modelo pull, fila em ordem dos frames P
   src/decode.c         sceJpeg (hw), libjpeg-turbo (sw) e H.264 (sceMpegAvcDecode)
   src/menu.c           tela de configuração (IP, Wi-Fi, opções, procurar o PC)
+  src/audio.c, ima.c   som: anel com buffer adaptativo, sceAudioSRC, decoder IMA ADPCM
   src/net.c            módulos de rede, Wi-Fi (apctl), TCP/UDP, broadcast
   src/display.c        framebuffer 8888, triple buffering, texto
   src/config.c         server.txt (ler e gravar)
@@ -412,16 +533,22 @@ psp/                   cliente (C, pspdev)
   probe/               teste do decoder H.264 no hardware
 server/                servidor (Python 3)
   pspstream.py         sessões, linha de comando, benchmark
+  capture.py           monta captura, som e controles (na partida e pela interface web)
+  distro.py, doctor.py distribuição e pacotes; --check e --setup
+  settings.py          configurações gerais: esquema, server.json, validação
+  control.py           aplica as configurações com o servidor rodando
+  web.py, web/         interface web (http.server da biblioteca padrão; HTML, CSS e JS sem dependências)
   gst_source.py        pipeline GStreamer (captura -> 480x272 -> JPEG/H.264/I420)
   kms.py, portal.py    captura KMS e pelo portal ScreenCast
+  audio.py             som: captura (pulsesrc), IMA ADPCM (adpcmenc), pacotes
   h264.py, openh264.py encoders H.264 (libopenh264 direto por ctypes; GStreamer de reserva)
   transports.py        TCP e UDP (pedaços, NACK, reenvio)
   adaptive.py          qualidade adaptativa
   inject.py, gamepad.py, keymap.json   controles (uinput)
   stats.py, sources.py, jpeginfo.py, protocol.py, netcheck.py
 tools/                 fake_client.py, emu_*.py/sh, h264_probe_clips.py, kms/ (auxiliar KMS)
-docs/                  PROTOCOL.md, MEASUREMENTS.md
-tests/                 testes do servidor
+docs/                  PROTOCOL.md, MEASUREMENTS.md, UBUNTU.md (guia), WINDOWS.md (plano do servidor de Windows)
+tests/                 testes do servidor e da interface web
 ```
 
 ### Decisões técnicas
@@ -453,15 +580,31 @@ tests/                 testes do servidor
   falta do atual leva uma ida e volta para chegar (ping do início x vazão,
   ~2-3 KB no PSP-3000). Valores fixos maiores, que pareciam bons na
   simulação, criavam fila no roteador no PSP real.
-- **Frames P sem prefetch (`prefetch=auto`).** Com frames P, o próximo frame
-  só é pedido depois de exibir o atual: um frame por vez, sem fila e num
-  ritmo regular. Foi o que deixou o stream liso e perto de 60 fps no
-  PSP-3000; com prefetch, qualquer oscilação do Wi-Fi aparece na tela.
+- **Frames P pedidos quando o decode começa (`prefetch=auto`).** O próximo
+  chega enquanto o atual decodifica, sem nunca ter dois frames na fila e sem
+  pedir no meio de um frame chegando. ~60 fps lisos no PSP-3000. Pedir só
+  depois de exibir dava ~45 fps. No UDP, o pedido autoriza até 2 frames à
+  frente (v1.1): o servidor guarda o crédito e manda cada frame na hora da
+  captura, sem esperar a ida e volta daquele pedido.
 - **Perdas nos frames P.** Cada P precisa do anterior, então perder um
   pacote para o stream até o reenvio. O servidor manda o último pedaço de
   cada frame P de novo 6 ms depois (perder o último só era notado pelo
-  silêncio), e o PSP repete o pedido de frame novo depois de 6 ms, com o
-  número do frame para o servidor reconhecer a cópia.
+  silêncio). Sem a janela, o PSP repete o pedido de frame novo depois de 6
+  ms, com o número do frame para o servidor reconhecer a cópia; com ela, o
+  pedido seguinte cobre um perdido, e um frame que some inteiro é notado
+  quando o seguinte chega (o PSP pede o reenvio na hora).
+- **`--fps` numa grade fixa.** O limite conta a vez de cada frame a partir
+  da vez anterior, não do frame que chegou: um frame atrasado pela captura
+  não empurra os seguintes, e a taxa sai exata (o limite anterior cortava
+  frames com os horários tremendo 2-3 ms).
+- **Som em IMA ADPCM, empurrado.** 4 bits por amostra (~46 KB/s a 44,1 kHz
+  estéreo, a taxa do PSP: o PSP não reamostra), codificado em C pelo
+  `adpcmenc` (~2% de um núcleo no PC), e
+  decodificado no CPU do PSP com somas e deslocamentos. MP3 ou ATRAC
+  pesariam menos na rede, mas somariam 50-100 ms de atraso e disputariam o
+  Media Engine com o H.264. O som não depende do pedido de vídeo (uma
+  travada no vídeo não corta o som), e vai em pacotes de 20 ms: com 10 ms,
+  seriam 100 pacotes por segundo disputando o ar do 802.11b com o vídeo.
 - **GStreamer em vez de ffmpeg** para a captura: o portal entrega PipeWire,
   que o GStreamer lê nativamente, e tudo roda dentro do processo.
 - **Escrita direta no framebuffer** (stride 512), sem sceGu: os decoders
@@ -475,7 +618,11 @@ tests/                 testes do servidor
 ## Limitações conhecidas
 
 - Um PSP por vez. Sem autenticação nem criptografia: use só na rede local.
-- Sem áudio.
+  A interface web também não tem senha (por padrão, só abre no próprio PC).
+- Servidor só para Linux por enquanto. O plano do servidor de Windows está
+  em [docs/WINDOWS.md](docs/WINDOWS.md).
+- Sem microfone (o som vai só do PC para o PSP).
+- O som só vai pelo UDP (o padrão).
 - 480x272 fixo para H.264; resoluções menores (só JPEG) aparecem
   centralizadas, sem ampliação.
 - A captura KMS não mostra o cursor do mouse.

@@ -54,7 +54,8 @@ class ScreenCastSession:
         Cada pipeline recebe uma cópia do fd, para dar para refazer o pipeline
         (ex.: --dmabuf que não funcionou) sem abrir outra sessão do portal."""
         fd = os.dup(self.fd)
-        copy = "" if dmabuf else " always-copy=true"
+        from gst_source import has_property
+        copy = "" if dmabuf or not has_property("pipewiresrc", "always-copy") else " always-copy=true"
         return f"pipewiresrc fd={fd} path={self.node_id} do-timestamp=true{copy}"
 
     def close(self):

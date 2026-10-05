@@ -3,7 +3,7 @@
 #   make dist       -> dist/PSP/GAME/PSPStream/ pronto para copiar no memory stick
 
 TARGET = PSPStream
-OBJS = src/main.o src/config.o src/net.o src/display.o src/decode.o src/stream.o src/menu.o
+OBJS = src/main.o src/config.o src/net.o src/display.o src/decode.o src/stream.o src/menu.o src/audio.o src/ima.o
 
 INCDIR =
 # -MMD -MP: recompila o .c quando um .h muda (o build.mak não rastreia isso)
@@ -19,7 +19,7 @@ LDFLAGS =
 # depois da libc. Listados aqui também, os stubs de um mesmo módulo seriam
 # puxados em dois blocos separados, e o carregador (PSP e PPSSPP) leria NIDs
 # errados. Foi assim que socket()/connect() quebraram no primeiro teste.
-LIBS = -lturbojpeg -lpspmpeg -lpspmpegbase -lpspjpeg -lpsppower
+LIBS = -lturbojpeg -lpspmpeg -lpspmpegbase -lpspjpeg -lpsppower -lpspaudio
 
 EXTRA_TARGETS = EBOOT.PBP
 PSP_EBOOT_TITLE = PSPStream

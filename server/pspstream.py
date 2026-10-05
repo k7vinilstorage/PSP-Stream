@@ -16,17 +16,27 @@ import time
 from pathlib import Path
 
 import protocol
+from capture import build_source, open_injector, resolve_codec, start_audio, start_source  # noqa: F401
+from netcheck import local_ip
 from protocol import REQ_FRAME, REQ_HELLO, Request
-from stats import SessionStats, format_summary, now_ms
+import settings
+from stats import SessionStats, Window, format_summary, now_ms
 import transports
-from transports import TcpTransport, UdpTransport, parse_datagram
+from transports import DSCP, TcpTransport, UdpTransport, parse_datagram, set_dscp
 
 log = logging.getLogger("pspstream")
 
 # Sem frame novo por este tempo, reenvia o último para a conexão não morrer
 # (no Wayland o compositor só manda frames quando a tela muda).
-VERSION = "1.0"
+VERSION = "1.1"
 KEEPALIVE_S = 1.0
+# Frames que o PSP pode autorizar além do último enviado. Com frames P e
+# prefetch=auto, o PSP autoriza o N+2 quando o decode pega o N: o pedido fica
+# esperando aqui e o frame sai na hora da captura, sem depender da ida e volta
+# daquele instante. Teto para um pedido estranho (PSP de outra sessão) não
+# virar uma enxurrada de frames.
+MAX_CREDIT = 2
+WEB_DEFAULT = "127.0.0.1:5124"
 P_PACKET_START = b"\x00\x00\x00\x01\x09"  # pacote de frames P: começa com um AUD (h264.AUD)
 
 
@@ -36,20 +46,10 @@ def p_packet_is_idr(packet: bytes) -> bool:
     return 0 <= i and i + 3 < len(packet) and packet[i + 3] & 0x1F in (5, 7)
 
 
-def local_ip() -> str:
-    """IP da interface usada para sair para a rede (nenhum pacote é enviado)."""
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-        try:
-            s.connect(("10.255.255.255", 1))
-            return s.getsockname()[0]
-        except OSError:
-            return "127.0.0.1"
-
-
 class Session:
     """Um PSP conectado. O transporte (TCP/UDP) entrega pedidos e envia frames."""
 
-    def __init__(self, transport, source, args, injector=None):
+    def __init__(self, transport, source, args, injector=None, audio=None):
         self.transport = transport
         transport.session = self  # antes de qualquer pedido chegar (UDP entrega na hora)
         self.source = source
@@ -61,8 +61,8 @@ class Session:
             adaptive = AdaptiveQuality(source, args.target_fps, args.q_min, args.q_max)
         self.stats = SessionStats(args.stats_interval, adaptive, source, transport)
         self.cond = threading.Condition()
-        self.pending = False   # há um pedido de frame esperando resposta
-        self.arrived = 0.0     # quando esse pedido chegou
+        self.want_upto = 0     # o PSP aceita frames até este número (pedidos de frame)
+        self.arrived = 0.0     # quando o pedido ainda não atendido chegou
         self.alive = True
         self.frame_no = 0
         self.hello_seen = False
@@ -73,10 +73,19 @@ class Session:
         self.encoder_p = None     # o encoder atual faz frames P (o PSP aceita)?
         self.p_capable = False    # o PSP informou PS_CAP_H264P
         self.idr_wanted = True    # o PSP pediu IDR (ou a sessão acabou de começar)
+        self.audio = audio        # AudioCapture (som do PC) ou None
+        self.audio_on = None      # o PSP pede som (CAP_AUDIO)? None = ainda não disse
+        self.audio_listening = False  # a sessão manda som (UDP, rodando)
+        self.started = time.monotonic()
 
     def run(self) -> None:
         log.info("PSP conectado via %s: %s:%d", self.transport.name.upper(), *self.transport.addr)
         self.transport.start(self)
+        audio_listening = hasattr(self.transport, "send_audio")  # o som só vai pelo UDP
+        with self.cond:
+            if self.audio is not None and audio_listening:
+                self.audio.add_listener(self._on_audio)
+            self.audio_listening = audio_listening
         if self.args.bench:
             threading.Thread(target=self._bench, name="bench", daemon=True).start()
         try:
@@ -86,6 +95,10 @@ class Session:
                 log.info("envio falhou: %s", exc)
         finally:
             self.close()
+            with self.cond:
+                self.audio_listening = False
+                if self.audio is not None:
+                    self.audio.remove_listener(self._on_audio)
             if self.encoder is not None:
                 self.encoder.close()
             if self.injector:
@@ -94,6 +107,27 @@ class Session:
             log.info("PSP desconectado (%d frames, %.1f MB enviados%s)",
                      self.stats.total_frames, self.stats.total_bytes / 1e6,
                      f", {saved / 1024:.0f} KB de cabeçalho JPEG economizados" if saved else "")
+
+    def set_source(self, source) -> None:
+        """Captura nova com o PSP conectado (interface web): a numeração dos
+        frames continua, e o próximo frame P é um IDR (o encoder recomeça)."""
+        with self.cond:
+            self.source = source
+            self.stats.source = source
+            self.stats.window = Window(source, self.transport)
+            self.stats.phase = Window(source, self.transport)
+            if self.stats.adaptive is not None:
+                self.stats.adaptive.source = source
+            self.cond.notify_all()
+
+    def set_audio(self, audio) -> None:
+        """Captura de som nova (ou None) com o PSP conectado."""
+        with self.cond:
+            if self.audio is not None:
+                self.audio.remove_listener(self._on_audio)
+            self.audio = audio
+            if audio is not None and self.audio_listening:
+                audio.add_listener(self._on_audio)
 
     def close(self) -> None:
         with self.cond:
@@ -119,6 +153,7 @@ class Session:
         if req.signal:
             self._wifi(req.signal, req.wflags)
         self.p_capable = bool(req.wflags & protocol.CAP_H264P)
+        self._audio_wanted(bool(req.wflags & protocol.CAP_AUDIO))
         if req.flags & (protocol.REQ_IDR | REQ_HELLO):
             self.idr_wanted = True
         if self.args.codec in ("h264", "h264p") and not req.wflags & protocol.CAP_H264 and not self.h264_warned:
@@ -134,12 +169,39 @@ class Session:
             self.stats.on_ack(req, now_ms())
         if req.flags & REQ_FRAME:
             with self.cond:
-                # No máximo um pedido pendente: pedidos repetidos (o PSP reenvia
-                # no UDP se a resposta demora) não viram uma rajada de frames.
-                if not self.pending:
-                    self.pending = True
-                    self.arrived = time.monotonic()
+                # Pedido simples = o próximo frame: pedidos repetidos (o PSP
+                # reenvia no UDP se a resposta demora) não viram uma rajada de
+                # frames. Frames P: o pedido diz até qual frame (want_frame),
+                # e as cópias do mesmo pedido não somam.
+                upto = min(req.want_frame or self.frame_no + 1, self.frame_no + MAX_CREDIT)
+                if upto > self.want_upto:
+                    if self.want_upto <= self.frame_no:
+                        self.arrived = time.monotonic()
+                    self.want_upto = upto
                 self.cond.notify_all()
+
+    def _audio_wanted(self, on: bool) -> None:
+        """O PSP liga e desliga o som (audio= no server.txt, tela de configuração
+        ou SELECT + START + cima): sem CAP_AUDIO, nenhum pacote de som sai."""
+        if on == self.audio_on:
+            return
+        self.audio_on = on
+        if not hasattr(self.transport, "send_audio"):
+            return  # TCP: o PSP nem pede som (só vai pelo UDP)
+        if not on:
+            if self.audio is not None:
+                log.info("som: desligado no PSP")
+        elif self.audio is None:
+            log.info("som: o PSP pediu, mas o servidor está sem som (--no-audio, ou a captura não abriu)")
+        else:
+            log.info("som: ligado no PSP (%d Hz, %s, ~%.0f KB/s)", self.audio.rate,
+                     "estéreo" if self.audio.channels == 2 else "mono", self.audio.kbps)
+
+    def _on_audio(self, seq, pos, rate, channels, samples, block) -> None:
+        """Thread da captura de som: um bloco para o PSP, se ele quer som."""
+        if self.alive and self.audio_on:
+            self.stats.on_audio(self.transport.send_audio(
+                protocol.pack_audio(seq, pos, rate, channels, samples, block)))
 
     def _wifi(self, signal: int, flags: int) -> None:
         old = self.wifi
@@ -152,37 +214,49 @@ class Session:
                 log.warning("a economia de energia WLAN do PSP segura os pacotes no roteador e aumenta "
                             "muito a latência: desligue em Ajustes > Ajustes de economia de energia")
 
-    def _next_frame(self, last_seq: int):
-        """Frame mais novo que last_seq; após KEEPALIVE_S reenvia o último.
-        Devolve (seq, jpeg, ready_t, reenvio) ou None."""
-        if self.source.repeat:
-            return (*self.source.latest(), False)
+    def _next_frame(self, source, last_seq: int):
+        """Frame de `source` mais novo que last_seq; após KEEPALIVE_S reenvia o
+        último. Devolve (seq, jpeg, ready_t, reenvio), False se a captura foi
+        trocada no meio da espera, ou None (sessão encerrada)."""
+        if source.repeat:
+            return (*source.latest(), False)
         deadline = time.monotonic() + KEEPALIVE_S
         while self.alive:
+            if self.source is not source:
+                return False
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                return (*self.source.latest(), True)
-            got = self.source.wait_newer(last_seq, min(remaining, 0.1))
+                return (*source.latest(), True)
+            got = source.wait_newer(last_seq, min(remaining, 0.1))
             if got:
                 return (*got, False)
         return None
 
     def _sender(self) -> None:
         last_seq = 0
+        sending_from = self.source
         while True:
             with self.cond:
-                self.cond.wait_for(lambda: self.pending or not self.alive)
+                self.cond.wait_for(lambda: self.frame_no < self.want_upto or not self.alive)
                 if not self.alive:
                     return
                 arrived = self.arrived
-            got = self._next_frame(last_seq)
+                source = self.source
+            if source is not sending_from:  # captura trocada (interface web)
+                sending_from, last_seq = source, 0
+                if self.encoder is not None:  # o encoder recomeça: o próximo frame P é um IDR
+                    self.encoder.close()
+                    self.encoder = None
+            got = self._next_frame(source, last_seq)
+            if got is False:
+                continue
             if got is None:
                 return
             seq, jpeg, ready_t, resend = got
             if jpeg is None:  # fonte ainda não produziu nada
                 time.sleep(0.01)
                 continue
-            if self.source.raw_i420:
+            if source.raw_i420:
                 jpeg = self._encode(jpeg)
             if len(jpeg) > protocol.MAX_JPEG:
                 log.warning("frame de %d KB excede o limite de %d KB; descartado",
@@ -190,18 +264,19 @@ class Session:
                 last_seq = seq
                 continue
             with self.cond:
-                self.pending = False
+                self.frame_no += 1  # usa o pedido; um pedido simples a partir daqui é do seguinte
+                if self.frame_no < self.want_upto:
+                    self.arrived = time.monotonic()  # o próximo já está pedido
             last_seq = seq
-            self.frame_no += 1
             send_ms = now_ms()
-            age_ms = (time.monotonic() - ready_t) * 1000 if not self.source.repeat else 0.0
+            age_ms = (time.monotonic() - ready_t) * 1000 if not source.repeat else 0.0
             wait_ms = (time.monotonic() - arrived) * 1000
             # frames P (o pacote começa com AUD): cópia do último pedaço no UDP
             p_packet = jpeg[:5] == P_PACKET_START
             sent = self.transport.send_frame(self.frame_no, jpeg, send_ms, redundant=p_packet)
-            self.stats.on_send(self.frame_no, send_ms, age_ms, sent, wait_ms, self.source.capture_ms, resend,
+            self.stats.on_send(self.frame_no, send_ms, age_ms, sent, wait_ms, source.capture_ms, resend,
                                idr=p_packet and p_packet_is_idr(jpeg))
-            self.stats.maybe_report(self.source.quality)
+            self.stats.maybe_report(source.quality)
 
     def _encode(self, i420: bytes) -> bytes:
         """--codec h264p: frames P se o PSP aceita, senão todo frame IDR (EBOOT antigo)."""
@@ -294,30 +369,46 @@ def format_ping(select_t: int, poll_t: int, polling: int) -> str:
     return ", ".join(parts) + f"; PSP usando {'consulta' if polling else 'select()'}"
 
 
-DSCP = {"ef": 0xB8, "cs5": 0xA0, "af41": 0x88, "0": 0}
-
-
-def set_dscp(sock: socket.socket, name: str) -> None:
-    """Marca os pacotes do servidor (WMM): com EF, a placa Wi-Fi do PC e o
-    roteador usam a fila de voz, que disputa o ar com prioridade."""
-    try:
-        sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, DSCP[name])
-    except OSError as exc:
-        log.debug("DSCP não aplicado: %s", exc)
-
-
 class Server:
     """Um PSP por vez. Uma conexão nova (TCP ou HELLO por UDP) derruba a
     anterior: o PSP pode ter reiniciado o app e deixado a sessão velha pendurada."""
 
-    def __init__(self, source, args, injector):
+    def __init__(self, source, args, injector, audio=None):
         self.source = source
         self.args = args
         self.injector = injector
+        self.audio = audio
         self.lock = threading.Lock()
         self.current = None  # (Session, Thread)
         self.running = True
         self.old_warned = set()  # endereços de PSPs com EBOOT antigo já avisados
+
+    def session(self):
+        """A sessão ativa, ou None."""
+        with self.lock:
+            cur = self.current[0] if self.current else None
+        return cur if cur is not None and cur.alive else None
+
+    def set_source(self, source) -> None:
+        with self.lock:
+            self.source = source
+            cur = self.current[0] if self.current else None
+        if cur is not None:
+            cur.set_source(source)
+
+    def set_audio(self, audio) -> None:
+        with self.lock:
+            self.audio = audio
+            cur = self.current[0] if self.current else None
+        if cur is not None:
+            cur.set_audio(audio)
+
+    def set_injector(self, injector) -> None:
+        with self.lock:
+            self.injector = injector
+            cur = self.current[0] if self.current else None
+        if cur is not None:
+            cur.injector = injector
 
     def replace(self, transport):
         """None se o servidor está fechando (um pedido que chegou junto com o Ctrl+C)."""
@@ -328,7 +419,7 @@ class Server:
             old = self.current
             if old is not None:
                 old[0].close()
-            session = Session(transport, self.source, self.args, self.injector)
+            session = Session(transport, self.source, self.args, self.injector, self.audio)
             thread = threading.Thread(target=session.run, name="session", daemon=True)
             self.current = (session, thread)
         if old is not None:
@@ -395,103 +486,7 @@ def parse_size(text: str):
     return w, h
 
 
-def build_source(args, portal=None):
-    """portal: sessão do portal já aberta (refazer o pipeline sem novo diálogo)."""
-    w, h = args.size
-    if args.source == "static":
-        from sources import StaticSource
-        try:
-            from gst_source import transcode_image
-        except (ImportError, ValueError):
-            # Sem GStreamer: envia o arquivo como está (precisa ser JPEG 4:2:0
-            # de até 480x272) e a qualidade não muda.
-            return StaticSource(Path(args.image).read_bytes())
-
-        if args.codec == "h264p":
-            from h264 import image_to_i420
-            return StaticSource(image_to_i420(args.image, w, h, not args.stretch, args.scale),
-                                quality=args.quality, raw_i420=True)
-        if args.codec == "h264":
-            from h264 import H264Encoder, image_to_i420
-            raw = image_to_i420(args.image, w, h, not args.stretch, args.scale)
-            enc = H264Encoder(w, h, args.quality)
-
-            def reencode(q):
-                enc.set_quality(q)
-                return enc.encode(raw)
-        else:
-            def reencode(q):
-                return transcode_image(args.image, w, h, q, not args.stretch, args.scale)
-
-        return StaticSource(reencode(args.quality), reencode, args.quality)
-
-    if args.source == "kms":
-        from kms import KmsSource
-        return KmsSource(w, h, args.fps, args.quality, args.scale, not args.stretch, args.codec,
-                         args.kms_card, args.kms_monitor)
-
-    from gst_source import SOURCES, GstSource
-    keepalive, gpu_from = portal, None
-    if args.source == "portal":
-        if keepalive is None:
-            keepalive = open_portal(args)
-        if args.dmabuf:
-            gpu_from = tuple(keepalive.size) if keepalive.size else (w, h)
-            if not keepalive.size and not args.stretch:
-                log.warning("--dmabuf: o portal não disse o tamanho da tela; a imagem pode sair esticada")
-        src = keepalive.gst_source(dmabuf=args.dmabuf)
-    elif args.source == "gst":
-        if not args.gst_src:
-            raise SystemExit("--source gst precisa de --gst-src \"<elementos GStreamer>\"")
-        src = args.gst_src
-    else:
-        src = SOURCES[args.source]
-    return GstSource(src, w, h, args.fps, args.quality, args.scale, not args.stretch, keepalive, args.codec,
-                     gpu_from)
-
-
-DMABUF_FIRST_FRAME_S = 5
-
-
-def open_portal(args):
-    from portal import open_screencast
-    return open_screencast(window=args.window, cursor=not args.no_cursor, remember=not args.forget)
-
-
-def start_source(args, portal=None):
-    """--dmabuf é experimental: se o pipeline não sobe ou não sai frame em
-    alguns segundos (DMA-BUF ou OpenGL indisponível), volta para a captura
-    pela memória comum na mesma sessão do portal (sem outro diálogo)."""
-    if args.source == "portal" and portal is None:
-        portal = open_portal(args)
-    if not args.dmabuf:
-        source = build_source(args, portal)
-        source.start()
-        return source
-    source = None
-    try:
-        source = build_source(args, portal)
-        source.start()
-        deadline = time.monotonic() + DMABUF_FIRST_FRAME_S
-        got = None
-        while not got and not source.failed and time.monotonic() < deadline:
-            got = source.wait_newer(0, 0.1)
-        reason = source.failed or (None if got else f"nenhum frame em {DMABUF_FIRST_FRAME_S} s")
-    except Exception as exc:  # pipeline que não monta (GLib.Error) ou não inicia
-        reason = str(exc)
-    if reason is None:
-        log.info("captura: DMA-BUF + redução na GPU (OpenGL), --dmabuf")
-        return source
-    log.warning("--dmabuf não funcionou (%s); voltando para a captura pela memória comum", reason)
-    if source is not None:
-        source.stop()
-    args.dmabuf = False
-    fallback = build_source(args, portal)
-    fallback.start()
-    return fallback
-
-
-def parse_args(argv=None):
+def build_parser() -> argparse.ArgumentParser:
     here = Path(__file__).resolve().parent
     p = argparse.ArgumentParser(description="PSPStream: transmite a tela do PC para o PSP (H.264 ou MJPEG).")
     p.add_argument("--version", action="version", version=f"PSPStream {VERSION}")
@@ -553,6 +548,13 @@ def parse_args(argv=None):
                         "sozinho para o modo normal")
     p.add_argument("--no-cursor", action="store_true", help="portal: não desenhar o cursor")
     p.add_argument("--forget", action="store_true", help="portal: não reutilizar/guardar a escolha de tela")
+    p.add_argument("--no-audio", action="store_true", help="não capturar nem mandar o som")
+    p.add_argument("--audio-device", default="monitor", metavar="NOME",
+                   help="som: fonte do PipeWire/PulseAudio (pactl list short sources); monitor (padrão) = o que "
+                        "sai nas caixas; test = tom de 440 Hz")
+    p.add_argument("--audio-rate", type=int, default=44100, choices=[22050, 32000, 44100, 48000],
+                   help="som: taxa (padrão %(default)s Hz, a do PSP; IMA ADPCM estéreo ~ taxa/1000 KB/s)")
+    p.add_argument("--audio-mono", action="store_true", help="som: mono (metade dos bytes)")
     p.add_argument("--no-input", action="store_true", help="não injetar os controles do PSP no PC")
     p.add_argument("--input-dry-run", action="store_true",
                    help="só mostrar no log as teclas/movimentos que seriam injetados")
@@ -569,89 +571,151 @@ def parse_args(argv=None):
                    help="benchmark: quando o PSP conectar, roda cada qualidade por --bench-seconds e salva "
                         "uma tabela em bench_*.md (padrão 30,50,70,90)")
     p.add_argument("--bench-seconds", type=float, default=10)
+    p.add_argument("--web", default=WEB_DEFAULT, metavar="HOST:PORTA",
+                   help="interface web das configurações (padrão %(default)s, só neste PC; 0.0.0.0:5124 abre "
+                        "para a rede local, sem senha)")
+    p.add_argument("--no-web", action="store_true", help="sem a interface web")
+    p.add_argument("--config", default=str(settings.default_path()), metavar="ARQUIVO",
+                   help="configurações gravadas pela interface web (padrão %(default)s). As opções da linha de "
+                        "comando valem mais que o arquivo")
+    p.add_argument("--check", action="store_true",
+                   help="conferir as dependências desta máquina e mostrar o comando para instalar o que falta "
+                        "(apt, dnf, pacman ou zypper), sem iniciar o servidor")
+    p.add_argument("--setup", action="store_true",
+                   help="preparar esta máquina: instala o que o --check aponta (pacotes, uinput, firewall, "
+                        "captura KMS), mostrando cada comando e pedindo confirmação antes")
     p.add_argument("-v", "--verbose", action="store_true")
-    return p.parse_args(argv)
+    return p
+
+
+def parse_args(argv=None):
+    return build_parser().parse_args(argv)
+
+
+def load_config(parser, args, argv):
+    """Junta o arquivo de configuração aos args: padrão < arquivo < linha de comando.
+    Devolve (store, opções dadas na linha de comando, chaves que vieram do arquivo)."""
+    explicit = settings.explicit_dests(parser, argv)
+    defaults = parser.parse_args([])
+    defaults.codec_choice = defaults.codec
+    store = settings.ConfigStore(args.config, {s.key: settings.arg_value(s, defaults) for s in settings.SETTINGS})
+    from_file, overridden = [], []
+    for key, value in store.load().items():
+        setting = settings.BY_KEY[key]
+        if settings.cli_dest(setting) in explicit:
+            overridden.append(setting.flag)
+            continue
+        settings.set_arg(setting, args, value)
+        from_file.append(key)
+    if "codec" in from_file:
+        args.codec = args.codec_choice
+    if from_file:
+        log.info("configuração: %s (%s)", store.path, ", ".join(f"{k} = {store.values[k]}" for k in from_file))
+    if overridden:
+        log.info("configuração: a linha de comando vale mais que o arquivo para %s", ", ".join(overridden))
+    return store, explicit, from_file
 
 
 def main(argv=None) -> int:
-    args = parse_args(argv)
+    parser = build_parser()
+    argv = sys.argv[1:] if argv is None else list(argv)
+    args = parser.parse_args(argv)
+    if args.check or args.setup:
+        import doctor
+        return (doctor.setup if args.setup else doctor.main)(args.port, VERSION)
     # A thread de envio acorda mais rápido quando outra thread Python tem o GIL.
     sys.setswitchinterval(0.001)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
-    want = args.codec
-    ok = False
-    if want in ("auto", "h264", "h264p"):
-        try:
-            import h264
-            h264.BACKEND = args.h264_encoder
-            ok = h264.available()  # o openh264enc do GStreamer: o --codec h264 codifica dentro da captura
-            if args.codec != "h264" and args.h264_encoder != "gstreamer":
-                import openh264
-                ok = ok or openh264.available()  # frames P: a libopenh264 direto basta
-        except (ImportError, ValueError):
-            ok = False
-        if want == "auto":
-            args.codec = "h264p" if ok and tuple(args.size) == (480, 272) else "jpeg"
-            if args.codec == "jpeg":
-                log.info("codec: JPEG (%s)", "sem o openh264: sudo dnf install gstreamer1-plugin-openh264"
-                         if not ok else "--size diferente de 480x272")
-    if args.codec in ("h264", "h264p"):
-        if not ok:
-            log.error("--codec %s precisa do openh264. No Fedora: sudo dnf install gstreamer1-plugin-openh264 "
-                      "(repositório fedora-cisco-openh264; traz a libopenh264 junto)", args.codec)
-            return 1
-        if tuple(args.size) != (480, 272):
-            log.error("--codec %s só funciona em 480x272 (o decoder do PSP escreve a tela inteira)", args.codec)
-            return 1
-        if args.codec == "h264":
-            log.info("codec: H.264 (todo frame IDR, decoder de hardware do PSP)")
-        else:
-            log.info("codec: H.264 com frames P (codificado na hora de enviar; EBOOT v0.9+, senão só IDR)")
+    from web import LogRing
+    ring = LogRing()
+    ring.setLevel(logging.INFO)
+    logging.getLogger().addHandler(ring)
+    args.codec_choice = args.codec
+    store, explicit, from_file = load_config(parser, args, argv)
+
+    capture_keys = [k for k in from_file if settings.BY_KEY[k].apply == "capture"]
+    err = resolve_codec(args)
+    if err and "codec" in from_file:
+        log.warning("%s; o codec do arquivo de configuração foi ignorado (mude na interface web)", err)
+        args.codec = args.codec_choice = parser.get_default("codec")
+        err = resolve_codec(args)
+    if err:
+        log.error("%s", err)
+        return 1
     if args.dmabuf and args.source != "portal":
         log.warning("--dmabuf só vale para --source portal; ignorado")
         args.dmabuf = False
     try:
         source = start_source(args)
     except Exception as exc:  # erros de portal/GStreamer: mensagem curta, sem traceback
-        if args.verbose:
+        if args.verbose and not capture_keys:
             raise
-        log.error("não foi possível iniciar a captura: %s", exc)
-        return 1
-
-    injector = None
-    if not args.no_input:
-        from inject import Injector, load_profile
+        if not capture_keys:
+            log.error("não foi possível iniciar a captura: %s", exc)
+            return 1
+        # A captura escolhida na interface web não subiu (ex.: KMS sem o
+        # auxiliar): volta para a da linha de comando, e a interface continua
+        # acessível para trocar de novo.
+        log.warning("a captura do arquivo de configuração não subiu (%s); usando a padrão", exc)
+        for key in capture_keys:
+            setting = settings.BY_KEY[key]
+            if key != "codec":  # o codec já foi conferido acima
+                setattr(args, setting.dest, parser.get_default(setting.dest))
         try:
-            profile = load_profile(args.keymap, args.profile)
-            if profile.get("type") == "gamepad":
-                from gamepad import GamepadInjector
-                injector = GamepadInjector(profile, args.input_dry_run, args.input_timeout)
-                kind = "controle de Xbox 360 virtual"
-            else:
-                injector = Injector(profile, args.input_dry_run, args.mouse_speed, args.input_timeout)
-                kind = "teclado e mouse"
-            log.info("controles: perfil '%s' (%s)%s", args.profile, kind,
-                     " (dry-run)" if args.input_dry_run else "")
+            source = start_source(args)
+        except Exception as exc2:
+            log.error("não foi possível iniciar a captura: %s", exc2)
+            return 1
+
+    injector, input_note = None, "desligados (--no-input)"
+    if not args.no_input:
+        try:
+            injector, input_note = open_injector(args)
         except RuntimeError as exc:
+            input_note = f"desativados: {exc}"
             log.warning("controles desativados: %s", exc)
+
+    audio, audio_note = None, "desligado (--no-audio)"
+    if not args.no_audio:
+        audio = start_audio(args)
+        if audio is None:
+            audio_note = "a captura não abriu (veja o log)"
 
     srv = socket.create_server((args.bind, args.port))
     udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1 << 20)
     set_dscp(udp, args.dscp)
     udp.bind((args.bind, args.port))
-    server = Server(source, args, injector)
+    server = Server(source, args, injector, audio)
     threading.Thread(target=server.serve_udp, args=(udp,), name="udp", daemon=True).start()
     log.info("PSPStream %s: aguardando o PSP em %s:%d, TCP e UDP (no PSP: 'Procurar o PC na rede', ou este IP "
              "no server.txt)", VERSION, local_ip(), args.port)
+
+    from control import Controller
+    ctl = Controller(args, store, server, udp, explicit, VERSION, local_ip, input_note, audio_note)
+    web = None
+    if not args.no_web:
+        from web import WebServer, parse_addr
+        try:
+            host, port = parse_addr(args.web)
+            web = WebServer(ctl, host, port, ring)
+            web.start()
+            ctl.web_url = web.url
+            log.info("configurações: %s%s", web.url,
+                     " (aberto para a rede local, sem senha)" if web.public else "")
+        except (OSError, ValueError) as exc:
+            log.warning("interface web desativada (%s): %s", args.web, exc)
+            web = None
+
     from netcheck import check_pc_wifi
     check_pc_wifi(local_ip())
     srv.settimeout(0.5)
     try:
         while True:
-            if getattr(source, "failed", None):
-                log.error("captura parou: %s", source.failed)
+            failed = getattr(server.source, "failed", None)  # a interface web pode trocar a captura
+            if failed:
+                log.error("captura parou: %s", failed)
                 return 1
             try:
                 conn, addr = srv.accept()
@@ -663,10 +727,14 @@ def main(argv=None) -> int:
     except KeyboardInterrupt:
         log.info("encerrando")
     finally:
+        if web is not None:
+            web.close()
         server.close()
-        if injector:
-            injector.close()
-        source.stop()
+        if server.injector:
+            server.injector.close()
+        if server.audio is not None:
+            server.audio.stop()
+        server.source.stop()
         srv.close()
         udp.close()
     return 0
