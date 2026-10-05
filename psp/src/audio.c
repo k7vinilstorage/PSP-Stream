@@ -26,6 +26,7 @@
 
 #include <pspaudio.h>
 #include <pspkernel.h>
+#include <stdio.h>
 #include <string.h>
 
 #define AUDIO_PRIO 0x20       /* acima da rede (0x24): o canal não pode ficar sem amostras */
@@ -184,6 +185,31 @@ static void fill_out(int16_t *buf, unsigned now)
     }
 }
 
+/* Solta o canal SRC. No PSP, o sceAudioSRCChRelease falha (canal ocupado)
+ * enquanto ainda há amostras na fila; antes o erro era ignorado, o canal
+ * ficava preso, e o próximo stream (reconectar depois da tela de
+ * configuração, ou desligar e ligar o som) não conseguia reservá-lo: "som:
+ * erro" até reiniciar o app. Espera a fila esvaziar (< 30 ms) e tenta de novo. */
+static void src_release(void)
+{
+    for (int i = 0; i < 50; i++) { /* até ~100 ms */
+        if (sceAudioOutput2GetRestSample() <= 0 && sceAudioSRCChRelease() >= 0)
+            return;
+        sceKernelDelayThread(2 * 1000);
+    }
+    sceAudioSRCChRelease();
+}
+
+static int src_reserve(int freq)
+{
+    int r = sceAudioSRCChReserve(OUT_SAMPLES, freq, 2);
+    if (r < 0) { /* preso por uma versão/sessão anterior que não conseguiu soltar */
+        src_release();
+        r = sceAudioSRCChReserve(OUT_SAMPLES, freq, 2);
+    }
+    return r;
+}
+
 static int audio_thread(SceSize args, void *argp)
 {
     int reserved = 0, cur = 0;
@@ -193,15 +219,18 @@ static int audio_thread(SceSize args, void *argp)
         unlock();
         if (want != reserved) {
             if (reserved)
-                sceAudioSRCChRelease();
+                src_release();
             reserved = 0;
             if (want) {
-                int r = sceAudioSRCChReserve(OUT_SAMPLES, want, 2);
+                int r = src_reserve(want);
                 if (r < 0) {
+                    if (last_error != r) /* no PSPLink e no log do emulador (tools/emu_audio_test.py) */
+                        printf("som: sceAudioSRCChReserve(%d Hz) falhou: 0x%08X\n", want, r);
                     last_error = r;
                     sceKernelDelayThread(1000 * 1000);
                     continue;
                 }
+                printf("som: canal aberto a %d Hz\n", want);
                 last_error = 0;
                 reserved = want;
             }
@@ -220,7 +249,7 @@ static int audio_thread(SceSize args, void *argp)
         cur ^= 1;
     }
     if (reserved)
-        sceAudioSRCChRelease();
+        src_release();
     return 0;
 }
 
@@ -251,8 +280,9 @@ void audio_stop(void)
     if (thid < 0)
         return;
     running = 0;
-    SceUInt timeout = 500 * 1000;
-    sceKernelWaitThreadEnd(thid, &timeout);
+    SceUInt timeout = 1000 * 1000; /* sai em < 20 ms; o src_release pode esperar até ~100 ms */
+    if (sceKernelWaitThreadEnd(thid, &timeout) < 0)
+        sceKernelTerminateThread(thid); /* não deveria acontecer */
     sceKernelDeleteThread(thid);
     thid = -1;
 }

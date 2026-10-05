@@ -135,6 +135,8 @@ class UdpTransport:
                     self._resend(*nack)
                     self.retry_resends += 1
                 req.flags &= ~protocol.REQ_FRAME  # o pedido já foi atendido
+            else:
+                req.want_frame = nack[0]  # frames P: o PSP aceita até este frame (Session.on_request)
         elif nack is not None:
             self._resend(*nack)
         self.session.on_request(req)

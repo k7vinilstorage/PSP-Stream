@@ -72,6 +72,7 @@ class Request:
     ping_live_min: int = 0  # 0,1 ms: o menor dos últimos 8
     idle_t: int = -0x8000  # 0,1 ms: fim do frame anterior -> 1º pedaço deste no PSP (< 0 = em fila; IDLE_NONE)
     early_b: int = 0  # UDP: o PSP pede o próximo quando faltam estes bytes do atual (0 = só no fim)
+    want_frame: int = 0  # não vai no pacote: frame pedido com FRAME + NACK (transports.UdpTransport.feed)
 
     def pack(self) -> bytes:
         return REQ_STRUCT.pack(

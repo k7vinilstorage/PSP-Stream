@@ -57,7 +57,7 @@ static const char *const help[IT_COUNT] = {
     "Mostra FPS, KB e tempos no canto da tela",
     "Botoes do PSP viram controle/teclado no PC",
     "Toca o som do PC (~46 KB/s). No stream: SELECT+START+cima",
-    "auto: frames P pedidos quando o decode comeca. 0: depois de exibir",
+    "auto: P ate 2 a frente, pedidos no decode. 0: depois de exibir",
     "Pede o proximo frame antes do fim do atual (auto = medido)",
     "auto mede select e consulta no inicio e usa o mais rapido",
     "Grava o server.txt e conecta (START faz o mesmo)",

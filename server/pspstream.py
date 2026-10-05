@@ -27,6 +27,12 @@ log = logging.getLogger("pspstream")
 # (no Wayland o compositor só manda frames quando a tela muda).
 VERSION = "1.1"
 KEEPALIVE_S = 1.0
+# Frames que o PSP pode autorizar além do último enviado. Com frames P e
+# prefetch=auto, o PSP autoriza o N+2 quando o decode pega o N: o pedido fica
+# esperando aqui e o frame sai na hora da captura, sem depender da ida e volta
+# daquele instante. Teto para um pedido estranho (PSP de outra sessão) não
+# virar uma enxurrada de frames.
+MAX_CREDIT = 2
 P_PACKET_START = b"\x00\x00\x00\x01\x09"  # pacote de frames P: começa com um AUD (h264.AUD)
 
 
@@ -61,8 +67,8 @@ class Session:
             adaptive = AdaptiveQuality(source, args.target_fps, args.q_min, args.q_max)
         self.stats = SessionStats(args.stats_interval, adaptive, source, transport)
         self.cond = threading.Condition()
-        self.pending = False   # há um pedido de frame esperando resposta
-        self.arrived = 0.0     # quando esse pedido chegou
+        self.want_upto = 0     # o PSP aceita frames até este número (pedidos de frame)
+        self.arrived = 0.0     # quando o pedido ainda não atendido chegou
         self.alive = True
         self.frame_no = 0
         self.hello_seen = False
@@ -142,11 +148,15 @@ class Session:
             self.stats.on_ack(req, now_ms())
         if req.flags & REQ_FRAME:
             with self.cond:
-                # No máximo um pedido pendente: pedidos repetidos (o PSP reenvia
-                # no UDP se a resposta demora) não viram uma rajada de frames.
-                if not self.pending:
-                    self.pending = True
-                    self.arrived = time.monotonic()
+                # Pedido simples = o próximo frame: pedidos repetidos (o PSP
+                # reenvia no UDP se a resposta demora) não viram uma rajada de
+                # frames. Frames P: o pedido diz até qual frame (want_frame),
+                # e as cópias do mesmo pedido não somam.
+                upto = min(req.want_frame or self.frame_no + 1, self.frame_no + MAX_CREDIT)
+                if upto > self.want_upto:
+                    if self.want_upto <= self.frame_no:
+                        self.arrived = time.monotonic()
+                    self.want_upto = upto
                 self.cond.notify_all()
 
     def _audio_wanted(self, on: bool) -> None:
@@ -202,7 +212,7 @@ class Session:
         last_seq = 0
         while True:
             with self.cond:
-                self.cond.wait_for(lambda: self.pending or not self.alive)
+                self.cond.wait_for(lambda: self.frame_no < self.want_upto or not self.alive)
                 if not self.alive:
                     return
                 arrived = self.arrived
@@ -221,9 +231,10 @@ class Session:
                 last_seq = seq
                 continue
             with self.cond:
-                self.pending = False
+                self.frame_no += 1  # usa o pedido; um pedido simples a partir daqui é do seguinte
+                if self.frame_no < self.want_upto:
+                    self.arrived = time.monotonic()  # o próximo já está pedido
             last_seq = seq
-            self.frame_no += 1
             send_ms = now_ms()
             age_ms = (time.monotonic() - ready_t) * 1000 if not self.source.repeat else 0.0
             wait_ms = (time.monotonic() - arrived) * 1000

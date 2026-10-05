@@ -1128,6 +1128,87 @@ comparar com o ffmpeg, que só aceita potências de 2):
   PSP. Fica para depois: o `adpcmenc` não tem trellis, e o do ffmpeg exige
   blocos de potência de 2 e um processo à parte.
 
+#### Som que não voltava depois de mexer na configuração (v1.1) [PSP relato + EMU]
+
+**Relato:** depois de mudar qualquer opção numa sessão já aberta e
+aplicar, o som dava erro e só voltava reiniciando o app.
+
+**Causa:** o canal `sceAudioSRC` só é solto (`sceAudioSRCChRelease`) com a
+fila de saída vazia; com som na fila, a chamada falha. O retorno era
+ignorado, o canal ficava reservado, e o stream seguinte (depois da tela de
+configuração, ou desligando e ligando o som) não conseguia reservá-lo: o
+`sceAudioSRCChReserve` falhava (0x80268002). O PPSSPP tem a mesma regra, e
+o `tools/emu_audio_test.py`, que antes só olhava o log do servidor, agora
+confere o log do PSP e reproduziu a falha. **Correção:** antes de soltar,
+espera a fila esvaziar (`sceAudioOutput2GetRestSample`, < 30 ms) e tenta de
+novo por até ~100 ms; ao reservar, se falhar, solta e tenta mais uma vez.
+No emulador: desligar e ligar (SELECT + START + cima) e voltar da tela de
+configuração reabrem o canal, sem nenhuma falha. A confirmar no PSP.
+
+#### Frames P: janela de 2 frames e `--fps` exato (v1.1) [PSP relato + SIM]
+
+**Relato** (frames P, `prefetch=auto`, Wi-Fi abaixo de 150 KB/s, ou seja, a
+banda não é o limite): com `--fps 40`, o PSP raramente fica em 40, fica
+por volta de 35 com quedas; sem limite, 52-55 em vez de 60, também com
+quedas de vez em quando.
+
+**Causa 1: o pedido corria contra a captura.** No `auto`, o PSP pedia o
+N+1 quando o decode pegava o N, e o servidor só manda um frame pedido. O
+pedido tinha de ir, e o frame ser codificado, antes da captura seguinte
+(16,7 ms a 60 fps): ida e volta + encode + transferência davam ~12 ms, e
+qualquer oscilação do Wi-Fi atrasava o frame ou fazia o servidor pular uma
+captura. O simulador com ida e volta fixa não mostrava isso; com a ida e
+volta oscilando (4 ms + exponencial de média 3 ms, `--rtt-jitter-ms`), deu
+53-55 fps, como no PSP. **Correção: a janela.** O pedido feito no decode
+autoriza até o N+2 (FRAME + NACK "até o frame F"; o servidor guarda o
+crédito, no máximo 2 à frente) e o frame sai na hora da captura. Um frame P
+que se perde inteiro é notado quando o seguinte chega (buraco na numeração),
+e o PSP pede o reenvio na hora, em vez de um IDR.
+
+**Causa 2: o limite de `--fps` cortava frames.** O `RateLimiter` contava a
+vez do frame seguinte a partir do frame que chegou, com 25% de tolerância.
+Um frame atrasado empurrava a vez dos seguintes, e o seguinte, no horário,
+era cortado. Fonte de 60 Hz com o horário de cada frame tremendo (normal de
+desvio σ), 100 s:
+
+| | limite antigo | grade fixa (v1.1) |
+|---|---|---|
+| `--fps 60`, σ 2 ms / 3 ms | 59,0 / 55,5 | 60,0 / 59,9 |
+| `--fps 40`, σ 2 ms / 3 ms | 39,0 / 38,3 | 40,0 / 40,0 |
+| `--fps 50`, σ 0-3 ms | 45,7-48,0 | 50,0 |
+| fonte de 75 Hz, `--fps 60` | 54,5-56,2 | 59,9-60,0 |
+| fonte de 144 Hz, `--fps 60`, σ 3 ms | 58,7 | 60,0 |
+| `--fps 30` | 30,0 | 30,0 |
+
+A grade conta cada vez a partir da anterior; um frame passa se chega até
+meio período antes da vez dele (meio período da fonte, se ela for mais
+rápida), e a grade só recomeça quando fica para trás (fonte parada ou mais
+lenta). O pior intervalo entre frames também caiu (fonte de 60 Hz,
+`--fps 60`, σ 3 ms: 43 → 38 ms).
+
+**Simulação** (`fake_client`, clipe de jogo com movimento, 450 KB/s, decode de
+10,6 ms, ida e volta de 4 ms + oscilação de 3 ms, 12 s):
+
+| `--fps` | sem a janela | janela de 2 |
+|---|---|---|
+| 60 | 53-55 fps | 59,4-60 fps |
+| 60, 2% de perda (3 rodadas) | 52,5-53,7 fps, 5 engasgos (287 ms) | 59,0-59,7 fps, 4 engasgos (328 ms) |
+| 40 | 39,9 | 39,8-39,9 |
+| 30 | 29,9 | 29,9 |
+
+A latência não muda (rede ~17-25 ms nos dois). Sem a janela, o PSP também
+repetia cada pedido depois de 6 ms (~60 pacotes/s a mais na subida); com
+ela, não precisa (o pedido seguinte cobre um perdido).
+
+**40 de 60 Hz não é uniforme.** A tela só tem frames a cada 16,7 ms, então
+`--fps 40` é 2 de cada 3: intervalos de 17 e 33 ms, sempre. Somado ao tempo
+de transferência, que varia com o tamanho de cada frame, alguns intervalos
+na tela passam de 50 ms (na simulação, p99 de ~52 ms com e sem a janela).
+Para um movimento uniforme: `--fps 30` (um sim, um não) ou 60.
+
+**No PSP, a medir:** FPS com `--fps 60` e `--fps 40` (o overlay e a linha
+`fonte` do servidor, que mostra a taxa da captura depois do limite).
+
 ## 1. Tamanho de frame [PC]
 
 Mesmo pipeline do servidor (`videoscale` -> I420 -> `jpegenc`), saída 480x272

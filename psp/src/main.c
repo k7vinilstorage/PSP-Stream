@@ -306,7 +306,7 @@ static void draw_overlay(const ui_t *ui, const stats_t *s)
             if (!stream_prefetch_on())
                 display_text(0, 3, 0xFF00FF00, "pede o proximo depois de exibir (sem prefetch)");
             else if (stream_p_mode() && ui->prefetch == PREFETCH_AUTO)
-                display_text(0, 3, 0xFF00FF00, "pede o proximo quando o decode comeca (auto)");
+                display_text(0, 3, 0xFF00FF00, "pede ate 2 frames a frente quando o decode comeca (auto)");
             else if (early)
                 display_text(0, 3, 0xFF00FF00, "pede o proximo faltando %.1f KB%s", early / 1024.0f,
                              ui->early_auto ? " (auto)" : "");

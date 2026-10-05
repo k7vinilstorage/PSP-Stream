@@ -43,8 +43,38 @@ de outra versão do protocolo é recusado com aviso no log.
   O padrão `auto` agora é o modo bom, de propósito: com frames P, o próximo
   é pedido quando o decode pega o atual, sem pedido antecipado no meio do
   frame. `1` acrescenta o pedido antecipado (na simulação, ~59 fps contra
-  ~55 do `auto`; no PSP, a medir). SELECT + START + X alterna auto, sim e
-  não.
+  ~55 do `auto` antes da janela, abaixo). SELECT + START + X alterna auto,
+  sim e não.
+- **Frames P sem pular capturas: janela de 2 frames.** Relato: 52-55 fps
+  em vez de 60, e ~35 com `--fps 40`, com o Wi-Fi bem abaixo do limite. O
+  pedido do N+1 saía quando o decode pegava o N e tinha de chegar ao PC
+  antes da captura seguinte (16,7 ms a 60 fps); com o Wi-Fi oscilando, o
+  servidor perdia capturas. Agora, com `prefetch=auto` no UDP, o pedido
+  autoriza até o N+2 (FRAME + NACK "até o frame F"; o servidor guarda o
+  crédito, no máximo 2 à frente) e o frame sai na hora da captura. Na
+  simulação com a ida e volta oscilando: 53-55 → 59,4-60 fps, mesma latência.
+  Nesse modo o pedido não é mais repetido depois de 6 ms (o seguinte cobre
+  um perdido): um pacote a menos por frame na subida.
+- Frame P perdido inteiro com a janela: o seguinte chega antes do pedido
+  repetido; o PSP nota o buraco na numeração e pede o reenvio na hora, em
+  vez de um IDR.
+- **`--fps` exato.** O limite contava a vez do frame seguinte a partir do
+  frame que chegou, com 25% de tolerância: com os horários da captura
+  tremendo 2-3 ms, uma tela de 60 Hz dava 55-59 fps com `--fps 60` (o
+  padrão) e 38-39 com `--fps 40` (75 Hz com `--fps 60`: ~56; 60 Hz com
+  `--fps 50`: 46-48). Agora é uma grade fixa: a taxa pedida, e um frame
+  atrasado não empurra os seguintes.
+- `--fps 40` de uma tela de 60 Hz é 2 de cada 3 frames: intervalos de 17 e
+  33 ms. Para um movimento uniforme, `--fps 30` ou 60 (README).
+- **Som que não voltava depois de mexer na configuração** ("erro" até
+  reiniciar o app): o PSP só solta o canal de som com a fila vazia, o erro
+  era ignorado e o canal ficava preso; o stream seguinte não conseguia
+  reservá-lo. Agora espera a fila esvaziar antes de soltar, e tenta de novo
+  ao reservar. Reproduzido e corrigido no PPSSPP: o
+  `tools/emu_audio_test.py` confere o log do PSP, liga e desliga o som e
+  volta da tela de configuração.
+- `fake_client`: `--rtt-jitter-ms` (ida e volta oscilando, exponencial),
+  `--no-window` (sem a janela) e "P perdidos inteiros".
 - Servidor: `--no-audio`, `--audio-device` (`monitor`, `test` ou uma fonte do
   PipeWire), `--audio-rate`, `--audio-mono`.
 - Só pelo UDP (o padrão).

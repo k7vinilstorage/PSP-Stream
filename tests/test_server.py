@@ -119,7 +119,8 @@ class UdpEndToEndTest(unittest.TestCase):
     """Servidor UDP de verdade + cliente falso (mesma lógica do PSP) com perda."""
 
     def run_stream(self, early_kb, loss=0.05, seconds=2.0, rtt_ms=0, source=None, hdr_cache=True,
-                   codec="jpeg", h264p=False, decode_ms=5, p_redundancy_ms=6, req_dup=True, prefetch="auto"):
+                   codec="jpeg", h264p=False, decode_ms=5, p_redundancy_ms=6, req_dup=True, prefetch="auto",
+                   no_window=False):
         import pspstream
         from sources import StaticSource
         import fake_client
@@ -139,7 +140,7 @@ class UdpEndToEndTest(unittest.TestCase):
                                              seconds=seconds,
                                              input_demo=False, rtt_ms=rtt_ms, early_kb=early_kb, loss_up=0,
                                              h264p=h264p, loss_burst_ms=0, no_req_dup=not req_dup,
-                                             old_retry=False, req_dup_ms=6)
+                                             old_retry=False, req_dup_ms=6, no_window=no_window)
             summary, jpeg = fake_client.FakePSP(client_args).run()
             self.session = server.current[0] if server.current else None
         finally:
@@ -236,28 +237,39 @@ class UdpEndToEndTest(unittest.TestCase):
     def test_h264p_survives_loss(self):
         # --codec h264p com perda: nenhum frame P pode ser decodificado sem o
         # anterior (imagem errada no PSP). Sem as cópias (v0.9), o frame pequeno
-        # perdido inteiro volta pelo pedido repetido com NACK, sem precisar de IDR.
+        # perdido inteiro volta sem precisar de IDR. Sem a janela, pelo pedido
+        # repetido com NACK; com ela (v1.1, prefetch=auto), o seguinte chega
+        # primeiro e o PSP pede o reenvio na hora.
         import fake_client
-        summary, got, _ = self.h264p_with_loss(p_redundancy_ms=0, req_dup=False)
-        self.assertGreater(summary["frames"], 30, summary)
-        self.assertEqual(summary["broken"], 0, summary)
-        self.assertEqual(fake_client.h264_packet_kind(got), 1)  # frame P (imagem parada: quase nada)
-        self.assertLess(summary["kb_per_frame"], 1.0, summary)
-        self.assertGreater(summary["retries"], 0, summary)  # perdas de frame inteiro aconteceram
-        self.assertLessEqual(summary["idr_requests"], 2, summary)
-        self.assertGreater(self.session.transport.retry_resends, 0)
+        for no_window in (True, False):
+            with self.subTest(no_window=no_window):
+                summary, got, _ = self.h264p_with_loss(p_redundancy_ms=0, req_dup=False, no_window=no_window)
+                self.assertGreater(summary["frames"], 30, summary)
+                self.assertEqual(summary["broken"], 0, summary)
+                self.assertEqual(fake_client.h264_packet_kind(got), 1)  # frame P (imagem parada: quase nada)
+                self.assertLess(summary["kb_per_frame"], 1.0, summary)
+                self.assertLessEqual(summary["idr_requests"], 2, summary)
+                if no_window:  # perdas de frame inteiro aconteceram e voltaram pelo pedido repetido
+                    self.assertGreater(summary["retries"], 0, summary)
+                    self.assertGreater(self.session.transport.retry_resends, 0)
+                else:
+                    self.assertGreater(summary["whole_lost"], 0, summary)
 
     def test_h264p_redundancy_under_loss(self):
         # v1.0: último pedaço em dobro (servidor) e pedido em dobro (PSP): a
-        # corrente continua inteira, com o prefetch=auto (desligado nos frames
-        # P, o padrão) e ligado.
-        for prefetch in ("auto", "on"):
-            with self.subTest(prefetch=prefetch):
-                summary, _, _ = self.h264p_with_loss(prefetch=prefetch)
+        # corrente continua inteira, com o prefetch=auto (com e sem a janela da
+        # v1.1) e ligado. A janela não repete o pedido: o seguinte cobre um
+        # pedido perdido.
+        for prefetch, no_window in (("auto", False), ("auto", True), ("on", False)):
+            with self.subTest(prefetch=prefetch, no_window=no_window):
+                summary, _, _ = self.h264p_with_loss(prefetch=prefetch, no_window=no_window)
                 self.assertGreater(summary["frames"], 30, summary)
                 self.assertEqual(summary["broken"], 0, summary)
                 self.assertLessEqual(summary["idr_requests"], 2, summary)
-                self.assertGreater(summary["req_dups"], 0, summary)
+                if prefetch == "auto" and not no_window:
+                    self.assertEqual(summary["req_dups"], 0, summary)
+                else:
+                    self.assertGreater(summary["req_dups"], 0, summary)
                 self.assertGreater(self.session.transport.redundant_chunks, 0)
 
     def test_h264p_old_eboot_gets_intra(self):
@@ -337,9 +349,10 @@ class UdpEndToEndTest(unittest.TestCase):
 
 class CaptureRateTest(unittest.TestCase):
     """O portal entrega taxa variável com horários tremidos: o limite de --fps
-    não pode cortar uma fonte de 60 Hz (o videorate deixava ~38 fps)."""
+    não pode cortar uma fonte de 60 Hz (o videorate deixava ~38 fps), e com
+    --fps abaixo da fonte tem de dar a taxa pedida (v1.1: grade fixa)."""
 
-    def rate(self, src_hz, fps, jitter_ms=2.0, seconds=10):
+    def rate(self, src_hz, fps, jitter_ms=2.0, seconds=10, gaps=None):
         try:
             import gst_source
         except (ImportError, ValueError):
@@ -347,19 +360,37 @@ class CaptureRateTest(unittest.TestCase):
         import random
         rnd = random.Random(1)
         lim = gst_source.RateLimiter(fps)
-        n = int(src_hz * seconds)
-        kept = sum(lim.keep(int(max(0.0, i / src_hz + rnd.uniform(-jitter_ms, jitter_ms) / 1000) * 1e9))
-                   for i in range(n))
+        kept, last = 0, None
+        for i in range(int(src_hz * seconds)):
+            t = max(0.0, i / src_hz + rnd.uniform(-jitter_ms, jitter_ms) / 1000)
+            if lim.keep(int(t * 1e9)):
+                kept += 1
+                if gaps is not None and last is not None:
+                    gaps.append((t - last) * 1000)
+                last = t
         return kept / seconds
 
     def test_60hz_source_passes_whole(self):
         self.assertGreater(self.rate(60, 60), 59.5)
         self.assertGreater(self.rate(59.94, 60, jitter_ms=3), 59.4)
+        self.assertGreater(self.rate(60, 60, jitter_ms=5), 59.5)  # o limite antigo dava ~56
 
     def test_limits_faster_sources(self):
-        self.assertLess(self.rate(144, 60), 75)
-        self.assertGreater(self.rate(144, 60), 55)
-        self.assertAlmostEqual(self.rate(60, 30), 30, delta=1.5)
+        self.assertLess(self.rate(144, 60), 61)
+        self.assertGreater(self.rate(144, 60), 59)
+        self.assertAlmostEqual(self.rate(60, 30), 30, delta=0.5)
+        self.assertAlmostEqual(self.rate(75, 60, jitter_ms=3), 60, delta=0.5)  # o limite antigo dava ~55
+
+    def test_fractional_rate_from_60hz(self):
+        # 40 de 60 Hz: 2 de cada 3 frames (intervalos de 17 e 33 ms, o que a
+        # tela de 60 Hz permite); o limite antigo dava ~38 com horários tremidos
+        gaps = []
+        self.assertAlmostEqual(self.rate(60, 40, jitter_ms=3, gaps=gaps), 40, delta=0.3)
+        self.assertLess(max(gaps), 45)
+        self.assertAlmostEqual(self.rate(60, 50, jitter_ms=2), 50, delta=0.3)
+        gaps = []
+        self.rate(60, 30, jitter_ms=3, gaps=gaps)
+        self.assertLess(max(gaps), 45)  # sempre um sim, um não: nada de 50 ms
 
     def test_slower_source_untouched(self):
         self.assertGreater(self.rate(40, 60, jitter_ms=4), 39.5)

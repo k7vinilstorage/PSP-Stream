@@ -189,11 +189,12 @@ sozinho antes do START chega ao PC.
  41.3 fps   1.2 KB  52 KB/s
 dec 10.6 ms (h264p) rede 9.8 ms udp drop 0
 perdidos 0 nack 1 repet 0 idr 0 ping 7.1 ms (min 5.2, ini 6.3 sel)
-pede o proximo quando o decode comeca (auto)
+pede ate 2 frames a frente quando o decode comeca (auto)
 ```
 
-A 4ª linha diz quando o próximo frame é pedido: quando o decode começa
-(frames P com `prefetch=auto`), quando faltam tantos KB do atual (pedido
+A 4ª linha diz quando o próximo frame é pedido: quando o decode começa,
+autorizando até 2 à frente (frames P com `prefetch=auto`; o frame sai do PC
+na hora da captura), quando faltam tantos KB do atual (pedido
 antecipado: JPEG e H.264 só com quadros completos, ou `prefetch=1`) ou
 depois de exibir (`prefetch=0`). A 5ª é o som:
 
@@ -240,7 +241,7 @@ decode trabalharem juntos:
 
 | `prefetch=` | JPEG e H.264 só com quadros completos | frames P |
 |---|---|---|
-| `auto` (padrão) | pede antes do fim do frame que chega (1,2-1,7x de FPS, medido no PSP-3000) | pede quando o decode pega o atual: **~60 fps lisos** no PSP-3000 (Hollow Knight) |
+| `auto` (padrão) | pede antes do fim do frame que chega (1,2-1,7x de FPS, medido no PSP-3000) | pede quando o decode pega o atual: **~60 fps lisos** no PSP-3000 (Hollow Knight). No UDP, autoriza até 2 frames à frente (v1.1): o frame sai na hora da captura |
 | `1` | igual | também pede antes do fim do frame que chega (pedido antecipado) |
 | `0` | pede depois de exibir o atual | pede depois de exibir o atual: ~45 fps no mesmo teste |
 
@@ -249,6 +250,13 @@ qual está valendo. Até a v1.0, o `0` dava 45 ou 60 fps conforme a história
 (um sinal velho fazia ele pedir quando o decode começava), e o `1` com frames
 P engasgava por um erro na contagem dos pedidos; os dois foram corrigidos
 na v1.1.
+
+A janela de 2 frames (v1.1): com só o seguinte autorizado, o pedido tinha de
+ir e o frame ser codificado antes da captura seguinte (16,7 ms a 60 fps);
+com o Wi-Fi oscilando, o servidor perdia capturas e o PSP-3000 ficava em
+52-55 fps com a fonte a 60. Com 2 à frente, o pedido já está esperando no PC
+(simulação: 53-55 → 59,5-60 fps, mesma latência). Na fila do PSP fica no
+máximo um frame pronto a mais, e só se a rede entregar dois de uma vez.
 
 ## Controles
 
@@ -309,7 +317,7 @@ algo apertado, tudo é solto em 0,5 s (`--input-timeout`).
 | `--h264-encoder auto` | libopenh264 direto, com o GStreamer de reserva (padrão); `gstreamer` força o caminho antigo |
 | `--fixed-quality -q 70` | qualidade fixa em vez de adaptativa |
 | `--target-fps 20`, `--q-min 25 --q-max 90` | alvo e limites da qualidade adaptativa |
-| `--fps 60` | taxa de captura |
+| `--fps 60` | taxa máxima de captura. De uma tela de 60 Hz, 30 é um frame sim, um não (uniforme); 40 é 2 de cada 3 (intervalos de 17 e 33 ms: a média dá 40, mas o movimento é menos uniforme que a 30 ou 60) |
 | `--scale bilinear2` | filtro de redução (padrão; `lanczos` deixa o texto um pouco mais nítido) |
 | `--input-dry-run` | só mostrar no log o que seria injetado |
 | `--dscp ef` | marca os pacotes para a fila de voz do Wi-Fi (WMM); `0` desliga |
@@ -377,8 +385,10 @@ PSP-3000 e Fedora 44 com Wi-Fi 802.11b; detalhes e o histórico em
 |---|---|
 | "Sem resposta do PC" / "Procurar" não acha | o servidor está rodando? Libere 5123/udp e 5123/tcp no firewall. PC e PSP na mesma rede |
 | latência alta, FPS oscilando | desligue a Economia de energia WLAN do PSP; deixe o PC no 5 GHz ou no cabo (o servidor avisa se ele divide o canal de 2,4 GHz com o PSP); roteador em modo misto b/g/n |
-| engasgos de vez em quando (h264p) | confira o prefetch (4ª linha do overlay; o padrão `auto` diz "quando o decode comeca"). Depois, veja os engasgos e a causa na linha do servidor (acima). `perda`/`pedido atrasado`: Wi-Fi (distância, canal de 2,4 GHz cheio, micro-ondas, Bluetooth); `captura`: o PC; `IDR` frequente: perdas seguidas. `--codec h264` aguenta perdas melhor (cada quadro é independente), com 2-3x mais banda |
-| h264p liso, mas com FPS bem abaixo de 60 | com `prefetch=0`, cada frame espera o anterior ser exibido (~45 fps): use `auto`. Com `auto` e o Wi-Fi lento, teste `prefetch=1` (SELECT + START + X), que pede ainda mais cedo |
+| engasgos de vez em quando (h264p) | confira o prefetch (4ª linha do overlay; o padrão `auto` diz "ate 2 frames a frente quando o decode comeca"). Depois, veja os engasgos e a causa na linha do servidor (acima). `perda`/`pedido atrasado`: Wi-Fi (distância, canal de 2,4 GHz cheio, micro-ondas, Bluetooth); `captura`: o PC; `IDR` frequente: perdas seguidas. `--codec h264` aguenta perdas melhor (cada quadro é independente), com 2-3x mais banda |
+| h264p liso, mas com FPS bem abaixo de 60 | com `prefetch=0`, cada frame espera o anterior ser exibido (~45 fps): use `auto`. Veja a `fonte` na linha do servidor: abaixo de 60, é a captura (`--source kms`). Até a v1.1, `auto` ficava em 52-55 com o Wi-Fi oscilando (o pedido chegava depois da captura seguinte) e o limite de `--fps` cortava frames de uma fonte com horários tremidos: atualize servidor e EBOOT |
+| `--fps 40` não dá 40 | até a v1.1, o limite de `--fps` cortava frames com os horários da captura tremendo (~38) e o PSP pulava capturas (~35): atualize. 40 de uma tela de 60 Hz alterna 17 e 33 ms; para um movimento uniforme, `--fps 30` |
+| som some depois de mexer na configuração ("som: erro no canal de audio") | EBOOT 1.1 antes da correção: o canal de som não era solto com som na fila. Atualize o EBOOT |
 | captura em ~38-40 fps no GNOME 50 | use `--source kms` |
 | KMS: "sem permissão para ler a tela" | `make -C tools/kms cap` de novo (depois de cada `make`); partições montadas com `nosuid` ignoram a permissão |
 | controles não chegam | o log diz "controles desativados": configure o `/dev/uinput` (acima) |
@@ -401,11 +411,12 @@ python3 tools/fake_client.py --transport udp --h264p --seconds 10 --kbps 450 --d
 ```
 
 `tools/fake_client.py` imita as threads do PSP (fila em ordem, NACK, IDR,
-pedido antecipado e repetido, `--prefetch auto|on|off` como no `server.txt`)
-e confere que nenhum frame P é decodificado sem o anterior; `--kbps`,
-`--rtt-ms`, `--loss`, `--loss-up`, `--loss-burst-ms` (rajadas de
-interferência) e `--decode-ms` simulam o Wi-Fi e o PSP, e o resumo conta os
-engasgos. `FAKE_TRACE=1` mostra cada pedido, pedaço, perda e NACK. Os
+pedido antecipado e repetido, `--prefetch auto|on|off` como no `server.txt`,
+janela de 2 frames; `--no-window` tira a janela) e confere que nenhum frame
+P é decodificado sem o anterior; `--kbps`, `--rtt-ms`, `--rtt-jitter-ms`
+(ida e volta oscilando, como no Wi-Fi), `--loss`, `--loss-up`,
+`--loss-burst-ms` (rajadas de interferência) e `--decode-ms` simulam o Wi-Fi
+e o PSP, e o resumo conta os engasgos. `FAKE_TRACE=1` mostra cada pedido, pedaço, perda e NACK. Os
 números dele são simulados.
 
 **PPSSPPHeadless** (compile o PPSSPP com `cmake -DHEADLESS=ON`; o H.264
@@ -493,12 +504,20 @@ tests/                 testes do servidor
 - **Frames P pedidos quando o decode começa (`prefetch=auto`).** O próximo
   chega enquanto o atual decodifica, sem nunca ter dois frames na fila e sem
   pedir no meio de um frame chegando. ~60 fps lisos no PSP-3000. Pedir só
-  depois de exibir dava ~45 fps.
+  depois de exibir dava ~45 fps. No UDP, o pedido autoriza até 2 frames à
+  frente (v1.1): o servidor guarda o crédito e manda cada frame na hora da
+  captura, sem esperar a ida e volta daquele pedido.
 - **Perdas nos frames P.** Cada P precisa do anterior, então perder um
   pacote para o stream até o reenvio. O servidor manda o último pedaço de
   cada frame P de novo 6 ms depois (perder o último só era notado pelo
-  silêncio), e o PSP repete o pedido de frame novo depois de 6 ms, com o
-  número do frame para o servidor reconhecer a cópia.
+  silêncio). Sem a janela, o PSP repete o pedido de frame novo depois de 6
+  ms, com o número do frame para o servidor reconhecer a cópia; com ela, o
+  pedido seguinte cobre um perdido, e um frame que some inteiro é notado
+  quando o seguinte chega (o PSP pede o reenvio na hora).
+- **`--fps` numa grade fixa.** O limite conta a vez de cada frame a partir
+  da vez anterior, não do frame que chegou: um frame atrasado pela captura
+  não empurra os seguintes, e a taxa sai exata (o limite anterior cortava
+  frames com os horários tremendo 2-3 ms).
 - **Som em IMA ADPCM, empurrado.** 4 bits por amostra (~46 KB/s a 44,1 kHz
   estéreo, a taxa do PSP: o PSP não reamostra), codificado em C pelo
   `adpcmenc` (~2% de um núcleo no PC), e
