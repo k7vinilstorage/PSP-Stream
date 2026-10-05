@@ -29,6 +29,10 @@ containers precisam de network_mode: host, o mesmo 127.0.0.1.
   que montar o PulseAudio do Wolf no container do PSPStream (o socket dele
   fica num volume que o Wolf cria) e segue a sessão: reconecta junto com o
   vídeo.
+- Controles (wolf_input.py): com eles ligados, a sessão entra no lobby
+  (lobbies/join), e o Wolf liga o controle virtual dela no jogo. Um alvo que
+  é uma sessão Moonlight avulsa fica só na visualização. Lobby cheio ou PIN
+  errado (--wolf-pin): só visualização, tentando de novo a cada 2 s.
 - Uma thread consulta a API a cada 2 s. Se o alvo some (o lobby parou),
   a sessão é encerrada e a fonte espera ele voltar; o servidor não cai.
   Ao sair (também no SIGTERM do docker stop), a sessão é encerrada.
@@ -338,8 +342,9 @@ class WolfSource(FrameSource):
     def __init__(self, api, target: str, convert: str, width: int, height: int, fps: int, quality: int,
                  scale: str = "bilinear2", keep_aspect: bool = True, codec: str = "jpeg",
                  video_ping_port: int = 48100, audio_ping_port: int = 48200, ping_host: str = "127.0.0.1",
-                 poll_s: float = 2.0, first_frame_s: float = 10.0, audio=None):
-        """audio: (taxa, canais) do som que a sessão do Wolf já cria, ou None (sem som)."""
+                 poll_s: float = 2.0, first_frame_s: float = 10.0, audio=None, pin=None):
+        """audio: (taxa, canais) do som que a sessão do Wolf já cria, ou None (sem som).
+        pin: PIN do lobby, para os controles entrarem num lobby que pede."""
         super().__init__()
         self.api = api
         self.wanted = (target or "").strip()
@@ -361,6 +366,11 @@ class WolfSource(FrameSource):
         self._audio_rx = None        # captura do som da sessão atual
         self._session_audio = None   # (taxa, canais) com que a sessão atual foi criada
         self._audio_hub = None       # WolfAudio ligado (o que vai para o PSP)
+        self.pin = pin
+        self.input_wanted = False    # há controles ligados (WolfPad): a sessão entra no lobby
+        self.generation = 0          # conta as sessões criadas: o controle é anunciado em cada uma
+        self._joined = None          # (lobby, geração) em que a sessão entrou
+        self._input_said = None
         self._stop = threading.Event()
         self._thread = None
         self._said = None
@@ -422,6 +432,62 @@ class WolfSource(FrameSource):
         hub = self._audio_hub
         if hub is not None:
             hub.relay(rate, channels, samples, block)
+
+    # ---- controles ----
+
+    def input_target(self):
+        """(sessão, geração) quando a sessão está no lobby e os controles chegam ao jogo; senão None."""
+        sid, joined = self.session_id, self._joined
+        if sid is None or joined is None or joined[1] != self.generation:
+            return None
+        return sid, self.generation
+
+    def _say_input(self, msg: str) -> None:
+        if msg != self._input_said:
+            self._input_said = msg
+            log.warning("controles: %s", msg)
+
+    def _sync_input(self, lobbies: list) -> None:
+        """Põe a sessão no lobby (ou tira) conforme os controles estão ligados."""
+        target, sid = self.target, self.session_id
+        if target is None or sid is None:
+            return
+        if not self.input_wanted:
+            if self._joined is not None:
+                lobby = self._joined[0]
+                self._joined = None
+                try:
+                    self.api.leave_lobby(lobby, sid)
+                    log.info("controles: a sessão do PSP saiu do lobby (controles desligados)")
+                except WolfApiError as exc:
+                    log.warning("controles: não consegui sair do lobby: %s", exc)
+            return
+        if target.kind != "lobby":
+            self._say_input(f"o alvo é uma sessão Moonlight avulsa ({target.id}), não um lobby: os controles do "
+                            "PSP não chegam a ela (só visualização). Use um lobby no --wolf-target")
+            return
+        lobby = next((lb for lb in lobbies if str(lb.get("id")) == target.id), None)
+        inside = lobby is not None and sid in [str(x) for x in lobby.get("connected_sessions", [])]
+        if self._joined == (target.id, self.generation) and inside:
+            return
+        if self._joined is not None and not inside:
+            log.info("controles: a sessão do PSP saiu do lobby (START + cima + RB é o atalho do Wolf UI); "
+                     "entrando de novo")
+        try:
+            self.api.join_lobby(target.id, sid, self.pin)
+        except WolfApiError as exc:
+            self._joined = None
+            hint = ""
+            if "PIN" in str(exc):
+                hint = " (o lobby pede PIN: --wolf-pin)"
+            elif "full" in str(exc):
+                hint = " (lobby de um jogador só, já ocupado)"
+            self._say_input(f"o Wolf não deixou a sessão do PSP entrar no lobby: {exc}{hint}. Só visualização; "
+                            f"tentando de novo a cada {self.poll_s:g} s")
+            return
+        self._joined = (target.id, self.generation)
+        self._input_said = None
+        log.info("controles: a sessão do PSP entrou no %s; o controle virtual vai para o jogo", target.describe())
 
     # ---- a thread ----
 
@@ -486,6 +552,10 @@ class WolfSource(FrameSource):
             log.info("Wolf: a conversão '%s' funcionou (--wolf-video-convert %s pula o teste das outras)",
                      choice, choice)
         self._said = None
+        try:
+            self._sync_input(self.api.lobbies())
+        except WolfApiError as exc:
+            log.warning("Wolf: %s", exc)
         return self._watch(target)
 
     def _wait_target(self):
@@ -545,6 +615,7 @@ class WolfSource(FrameSource):
                                audio_session(sid, audio_pipe, self.audio_ping_port, secret,
                                              request["aes_key"], request["aes_iv"], acfg[1] if acfg else 2))
         self.target = target
+        self.generation += 1
         log.info("Wolf: sessão %s espelhando %s, conversão %s", sid, target.describe(), choice)
         seq0 = self.latest()[0]
         deadline = time.monotonic() + self.first_frame_s
@@ -600,6 +671,7 @@ class WolfSource(FrameSource):
             if now.producer != target.producer:
                 log.info("Wolf: %s mudou de lobby; refazendo a sessão", target.describe())
                 return True
+            self._sync_input(lobbies)
         return True
 
     def _teardown(self) -> None:
@@ -626,3 +698,4 @@ class WolfSource(FrameSource):
             rx.stop()
             self._audio_rx = None
         self.target = None
+        self._joined = None  # encerrar a sessão já a tira do lobby

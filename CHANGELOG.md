@@ -136,6 +136,17 @@ de outra versão do protocolo é recusado com aviso no log.
   do Wolf é refeita, e mudar a taxa ou o mono refaz a sessão. Escolhido em
   vez de montar o PulseAudio do Wolf no container: nada a mais para
   compartilhar, e reconecta junto com o vídeo.
+- **Wolf, controles:** com `--source wolf`, os botões do PSP vão para o
+  jogo como um controle de Xbox virtual criado pelo Wolf: os mesmos perfis
+  do `keymap.json` (`xbox`, `xbox-camera`, `xbox-ombros`; um perfil de
+  teclado vira `xbox`), em pacotes `CONTROLLER_ARRIVAL` e
+  `CONTROLLER_MULTI` do Moonlight mandados por `sessions/input`. A sessão
+  do PSPStream entra no lobby sozinha (e de novo, se o atalho START + cima +
+  RB do Wolf UI a tirar); lobby cheio ou com PIN (`--wolf-pin`) fica só na
+  visualização, tentando de novo. Um alvo que é uma sessão Moonlight avulsa
+  é só visualização. O `--input-timeout` solta tudo, e ao sair o controle é
+  desligado no Wolf. Os bytes foram conferidos contra as structs do Wolf e
+  o exemplo dos testes dele.
 - O servidor encerra direito no SIGTERM (`docker stop`, `systemctl stop`),
   como no Ctrl+C.
 

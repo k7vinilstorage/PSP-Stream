@@ -4,8 +4,10 @@ lugar do interpipesrc. Nada aqui roda contra um Wolf de verdade.
 
   python3 -m unittest discover tests
 """
+import copy
 import os
 import socket
+import struct
 import sys
 import tempfile
 import threading
@@ -24,10 +26,11 @@ from wolf_api import WolfApi, WolfApiError  # noqa: E402
 
 try:
     import fake_wolf
+    import wolf_input
     import wolf_source
     from wolf_source import Target, TargetError, WolfSource, resolve_target
 except (ImportError, ValueError):  # sem GStreamer
-    fake_wolf = wolf_source = None
+    fake_wolf = wolf_source = wolf_input = None
 
 LOBBY = "8f0b2c6e-0d6a-4c1e-9a52-3f2f5d7a1b10"
 LOBBY2 = "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f"
@@ -45,7 +48,7 @@ class WolfCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.wolf = fake_wolf.FakeWolf(self.tmp.name, [dict(lb) for lb in self.lobbies])
+        self.wolf = fake_wolf.FakeWolf(self.tmp.name, copy.deepcopy(list(self.lobbies)))
         self.addCleanup(self.wolf.close)
         self.api = WolfApi(self.wolf.socket_path, timeout=2)
 
@@ -519,6 +522,194 @@ class WolfAudioTest(WolfCase):
         self.assertFalse(capture.wolf_audio(other))
         with self.assertRaises(RuntimeError):
             capture.open_audio(pspstream.build_parser().parse_args(["--source", "static", "--audio-device", "wolf"]))
+
+
+# Exemplo de CONTROLLER_MULTI nos testes do próprio Wolf (tests/testWolfAPI.cpp): A apertado, controle 0
+WOLF_EXAMPLE = "060222000000001E0C0000001A000000010014000010000000000000000000009C0000005500"
+
+
+def parse_input(pkt: bytes) -> dict:
+    """Lê como o Wolf: INPUT_PKT (packet_type, packet_len, data_size, type) e a struct do tipo."""
+    ptype, plen, _, kind = struct.unpack_from("<HHII", pkt)
+    assert ptype == 0x0206 and plen == len(pkt) - 4, pkt.hex()
+    assert struct.unpack_from(">I", pkt, 4)[0] == len(pkt) - 8, pkt.hex()  # data_size em big endian
+    if kind == 0x0C:
+        names = ("header_b", "number", "mask", "mid_b", "buttons", "lt", "rt", "lsx", "lsy", "rsx", "rsy",
+                 "tail_a", "buttons2", "tail_b")
+        assert len(pkt) == 12 + 26
+        return {"kind": "multi", **dict(zip(names, struct.unpack_from("<hhhhHBBhhhhhHh", pkt, 12)))}
+    if kind == 0x55000004:
+        # struct do Wolf: controller_number, controller_type, capabilities (1 byte), support_button_flags
+        number, ctype, caps = struct.unpack_from("<BBB", pkt, 12)
+        return {"kind": "arrival", "number": number, "type": ctype, "caps": caps,
+                "moonlight": struct.unpack_from("<BBHI", pkt, 12)}
+    raise AssertionError(f"tipo {kind:#x}")
+
+
+@unittest.skipIf(wolf_input is None, "sem GStreamer")
+class InputPacketTest(unittest.TestCase):
+    def test_multi_matches_the_wolf_example(self):
+        pkt = wolf_input.multi_packet(0, 1, 0x1000, 0, 0, 0, 0, 0, 0)
+        self.assertEqual(pkt.hex().upper(), WOLF_EXAMPLE)
+        self.assertEqual(parse_input(pkt)["buttons"], 0x1000)
+
+    def test_arrival(self):
+        pkt = wolf_input.arrival_packet(0)
+        self.assertEqual(len(pkt), 20)  # SS_CONTROLLER_ARRIVAL_PACKET do moonlight-common-c + 0x0206 e tamanho
+        got = parse_input(pkt)
+        self.assertEqual((got["number"], got["type"], got["caps"]), (0, 1, 0x01))  # Xbox, gatilhos analógicos
+        self.assertEqual(got["moonlight"], (0, 1, 0x01, wolf_input.SUPPORTED))
+        self.assertEqual(wolf_input.SUPPORTED, 0xF7FF)
+
+    def test_state(self):
+        import gamepad
+        state = gamepad.GamepadInjector._neutral()
+        state.update({("key", "BTN_A"): 1, ("key", "BTN_TR"): 1, ("key", "BTN_MODE"): 1, ("abs", "ABS_HAT0Y"): -1,
+                      ("abs", "ABS_HAT0X"): 1, ("abs", "ABS_Z"): 255, ("abs", "ABS_X"): 32767,
+                      ("abs", "ABS_Y"): -32767, ("abs", "ABS_RY"): 16000})
+        got = parse_input(wolf_input.state_packet(state))
+        self.assertEqual(got["buttons"], 0x1000 | 0x0200 | 0x0400 | 0x0001 | 0x0008)
+        self.assertEqual((got["lt"], got["rt"], got["lsx"]), (255, 0, 32767))
+        self.assertEqual((got["lsy"], got["rsy"]), (32767, -16000))  # para cima é positivo (o inputtino inverte)
+        self.assertEqual((got["mask"], got["header_b"], got["mid_b"], got["tail_a"], got["tail_b"]),
+                         (1, 0x1A, 0x14, 0x9C, 0x55))
+        self.assertEqual(parse_input(wolf_input.state_packet(state, connected=False))["mask"], 0)
+
+
+class WolfInputTest(WolfCase):
+    """Fase 3: os botões do PSP viram o controle virtual da sessão, que entra no lobby."""
+    CROSS, UP_PSP, START, R = 0x4000, 0x0010, 0x0008, 0x0200
+
+    def injector(self, src, profile="xbox", timeout=0.5):
+        import inject
+        prof = inject.load_profile(str(ROOT / "server" / "keymap.json"), profile)
+        inj = wolf_input.WolfInjector(prof, timeout=timeout, source_getter=lambda: src)
+        inj.out.idle_s = 0.1
+        self.addCleanup(inj.close)
+        return inj
+
+    def packets(self):
+        with self.wolf.lock:
+            return [parse_input(p) for p in self.wolf.inputs]
+
+    def joined(self):
+        with self.wolf.lock:
+            return fake_wolf.DUMMY_ID in self.wolf.lobbies[0].get("connected_sessions", [])
+
+    def test_buttons_reach_the_wolf(self):
+        src = self.source()
+        src.start()
+        self.assertIsNotNone(src.wait_newer(0, 10))
+        self.assertEqual(self.wolf.paths("POST").count("/lobbies/join"), 0)  # sem controles, não entra
+        inj = self.injector(src)
+        self.assertTrue(self.wolf.wait_for(self.joined, 10))
+        self.assertEqual(self.wolf.bodies("/lobbies/join")[0],
+                         {"lobby_id": LOBBY, "moonlight_session_id": fake_wolf.DUMMY_ID})
+        inj.update(self.CROSS, 128, 0)  # X do PSP (A no Xbox) e o analógico todo para cima
+        self.assertTrue(self.wolf.wait_for(lambda: any(p.get("buttons") == 0x1000 for p in self.packets())))
+        pkts = self.packets()
+        self.assertEqual(pkts[0]["kind"], "arrival")  # o controle chega antes do estado
+        a = next(p for p in pkts if p.get("buttons") == 0x1000)
+        self.assertEqual(a["mask"], 1)
+        self.assertGreater(a["lsy"], 30000)
+        inj.update(0, 128, 128)
+        self.assertTrue(self.wolf.wait_for(lambda: self.packets()[-1].get("buttons") == 0))
+        inj.close()
+        last = self.packets()[-1]
+        self.assertEqual((last["kind"], last["mask"]), ("multi", 0))  # o Wolf desliga o controle
+        self.assertTrue(self.wolf.wait_for(lambda: "/lobbies/leave" in self.wolf.paths("POST"), 10))
+
+    def test_timeout_releases(self):
+        src = self.source()
+        src.start()
+        inj = self.injector(src, timeout=0.3)
+        self.assertTrue(self.wolf.wait_for(self.joined, 15))
+        with self.assertLogs("pspstream.gamepad", "WARNING"):
+            inj.update(self.CROSS, 128, 128)
+            self.assertTrue(self.wolf.wait_for(lambda: any(p.get("buttons") == 0x1000 for p in self.packets())))
+            # o PSP para de mandar: tudo volta ao neutro
+            self.assertTrue(self.wolf.wait_for(lambda: self.packets()[-1].get("buttons") == 0, 3))
+
+    def test_new_session_announces_the_controller_again(self):
+        src = self.source()
+        src.start()
+        inj = self.injector(src, timeout=0)  # o "PSP" segura o X sem reafirmar: sem o --input-timeout
+        self.assertTrue(self.wolf.wait_for(self.joined, 15))
+        inj.update(self.CROSS, 128, 128)
+        self.assertTrue(self.wolf.wait_for(lambda: len(self.packets()) >= 2))
+        with self.wolf.lock:
+            saved = self.wolf.lobbies.pop()
+        self.assertTrue(self.wolf.wait_for(lambda: not self.wolf.sessions))
+        with self.wolf.lock:
+            saved["connected_sessions"] = []
+            self.wolf.lobbies.append(saved)
+        def announced_again():
+            pkts = self.packets()
+            return [p["kind"] for p in pkts].count("arrival") == 2 and pkts[-1].get("buttons") == 0x1000
+        self.assertTrue(self.wolf.wait_for(announced_again, 15))  # o botão ainda segurado vai logo depois
+
+    def test_wolf_ui_combo_rejoins(self):
+        src = self.source()
+        src.start()
+        self.injector(src)
+        self.assertTrue(self.wolf.wait_for(self.joined, 15))
+        with self.wolf.lock:  # START + cima + RB: o Wolf tira a sessão do lobby
+            self.wolf.lobbies[0]["connected_sessions"] = []
+        with self.assertLogs("pspstream.wolf", "INFO") as logs:
+            self.assertTrue(self.wolf.wait_for(self.joined, 10))
+        self.assertIn("Wolf UI", "\n".join(logs.output))
+        self.assertEqual(self.wolf.paths("POST").count("/lobbies/join"), 2)
+
+    def test_session_target_is_view_only(self):
+        with self.wolf.lock:
+            self.wolf.sessions.append({"client_id": "555", "client_ip": "192.168.0.20", "rtsp_fake_ip": "1.2.3.4"})
+        src = self.source(target="555")
+        with self.assertLogs("pspstream.wolf", "WARNING") as logs:
+            src.start()
+            inj = self.injector(src)
+            self.assertIsNotNone(src.wait_newer(0, 10))
+            inj.update(self.CROSS, 128, 128)
+            time.sleep(1)
+        self.assertIn("só visualização", "\n".join(logs.output))
+        self.assertNotIn("/lobbies/join", self.wolf.paths("POST"))
+        self.assertEqual(self.wolf.inputs, [])  # nada vai para o compositor vazio da nossa sessão
+
+    def test_full_lobby_waits(self):
+        with self.wolf.lock:
+            self.wolf.lobbies[0].update(multi_user=False, connected_sessions=["777"])
+        src = self.source()
+        with self.assertLogs("pspstream.wolf", "WARNING") as logs:
+            src.start()
+            self.injector(src)
+            self.assertTrue(self.wolf.wait_for(lambda: "/lobbies/join" in self.wolf.paths("POST"), 15))
+            time.sleep(0.5)
+        self.assertIn("Lobby is full", "\n".join(logs.output))
+        with self.wolf.lock:  # o outro jogador saiu
+            self.wolf.lobbies[0]["connected_sessions"] = []
+        self.assertTrue(self.wolf.wait_for(self.joined, 10))
+
+    def test_pin(self):
+        with self.wolf.lock:
+            self.wolf.lobbies[0]["_pin"] = [4, 2, 4, 2]
+        src = self.source(pin="4242")
+        src.start()
+        self.injector(src)
+        self.assertTrue(self.wolf.wait_for(self.joined, 15))
+        self.assertEqual(self.wolf.bodies("/lobbies/join")[0]["pin"], [4, 2, 4, 2])
+
+    def test_open_injector(self):
+        import capture
+        import pspstream
+        args = pspstream.build_parser().parse_args(["--source", "wolf", "--wolf-pin", "1234"])  # perfil jogo
+        with self.assertLogs("pspstream.capture", "WARNING") as logs:
+            inj, kind = capture.open_injector(args)
+        self.addCleanup(inj.close)
+        self.assertIsInstance(inj, wolf_input.WolfInjector)
+        self.assertIn("usando o perfil xbox", "\n".join(logs.output))
+        self.assertIn("Wolf", kind)
+        self.assertEqual(capture.build_source(args).pin, "1234")
+        with self.assertRaises(SystemExit):
+            pspstream.build_parser().parse_args(["--wolf-pin", "12a4"])
 
 
 class SeveralLobbiesTest(WolfCase):

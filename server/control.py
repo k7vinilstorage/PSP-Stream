@@ -284,11 +284,31 @@ class Controller:
         if old_args.source == "portal" and not same_portal and getattr(old, "keepalive", None) is not None:
             old.keepalive.close()  # sessão do portal que ninguém mais usa
         log.info("captura: %s, %s, até %d fps", new.source, new.codec, new.fps)
-        self._follow_source_audio(old_source)
+        if "wolf" in (old_source, self.args.source):
+            self._follow_source_audio()
+            self._follow_source_input()
 
-    def _follow_source_audio(self, old_source: str) -> None:
+    def _follow_source_input(self) -> None:
+        """Com o Wolf, os controles vão pela API; sem ele, pelo /dev/uinput: trocam junto com a captura."""
+        old = self.server.injector
+        if old is None and self.args.no_input:
+            return
+        injector, kind = None, "desligados"
+        if not self.args.no_input:
+            try:
+                injector, kind = capture.open_injector(self.args)
+            except RuntimeError as exc:
+                kind = f"desativados: {exc}"
+                log.warning("controles desativados: %s", exc)
+        self.server.set_injector(injector)
+        if old is not None:
+            old.release_all()
+            old.close()
+        self.input_note = kind
+
+    def _follow_source_audio(self) -> None:
         """O som do Wolf vem da sessão da captura do Wolf: troca junto com ela."""
-        if self.args.no_audio or "wolf" not in (old_source, self.args.source):
+        if self.args.no_audio:
             return
         old = self.server.audio
         try:

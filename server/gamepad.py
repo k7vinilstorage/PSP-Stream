@@ -129,7 +129,8 @@ class _PadUInput:
 
 
 class GamepadInjector:
-    def __init__(self, profile: dict, dry_run: bool = False, timeout: float = 0.5):
+    def __init__(self, profile: dict, dry_run: bool = False, timeout: float = 0.5, out=None):
+        """out: para onde vão as mudanças (emit/close); o padrão é o /dev/uinput (o Wolf usa a API)."""
         self.buttons = _button_map(profile.get("buttons", {}), "buttons")
         shift = profile.get("shift") or {}
         self.shift_mask = 0
@@ -152,7 +153,7 @@ class GamepadInjector:
         self.curve = float(analog.get("curve", 1.0))
         self.digital = float(profile.get("digital_stick", 1.0))
 
-        self.out = _PadDryRun() if dry_run else _PadUInput()
+        self.out = out if out is not None else (_PadDryRun() if dry_run else _PadUInput())
         self.lock = threading.Lock()
         self.prev = 0
         self.active = {}          # máscara do botão do PSP -> destinos que ele está segurando

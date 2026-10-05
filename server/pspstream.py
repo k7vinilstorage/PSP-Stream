@@ -488,6 +488,12 @@ def parse_size(text: str):
     return w, h
 
 
+def parse_pin(text: str) -> str:
+    if not text.isdigit() or len(text) > 16:
+        raise argparse.ArgumentTypeError("o PIN são só dígitos")
+    return text
+
+
 def build_parser() -> argparse.ArgumentParser:
     here = Path(__file__).resolve().parent
     p = argparse.ArgumentParser(description="PSPStream: transmite a tela do PC para o PSP (H.264 ou MJPEG).")
@@ -536,6 +542,8 @@ def build_parser() -> argparse.ArgumentParser:
                         "padrão do Wolf com NVIDIA); va = Intel/AMD; cpu = Wolf com WOLF_USE_ZERO_COPY=FALSE; "
                         "auto (padrão) tenta nessa ordem. Ou elementos GStreamer que entreguem I420 na "
                         "resolução enviada")
+    p.add_argument("--wolf-pin", type=parse_pin, metavar="DÍGITOS",
+                   help="wolf: PIN do lobby, se ele pede (para os controles entrarem no lobby)")
     p.add_argument("--wolf-rtp-port", type=int,
                    default=wolf_api.env_port("WOLF_VIDEO_PING_PORT", wolf_api.VIDEO_PING_PORT), metavar="PORTA",
                    help="wolf: porta UDP do ping de vídeo do Wolf (padrão: WOLF_VIDEO_PING_PORT ou %(default)s)")
@@ -582,7 +590,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--keymap", default=str(here / "keymap.json"), help="arquivo de mapeamento (padrão keymap.json)")
     p.add_argument("--profile", default="jogo",
                    help="perfil do keymap: jogo, desktop, setas (teclado e mouse); xbox, xbox-camera, "
-                        "xbox-ombros (controle de Xbox 360 virtual). Padrão %(default)s")
+                        "xbox-ombros (controle de Xbox 360 virtual; com --source wolf, só estes). Padrão "
+                        "%(default)s")
     p.add_argument("--mouse-speed", type=float, default=1.0, help="multiplica a velocidade do mouse do perfil")
     p.add_argument("--input-timeout", type=float, default=0.5, metavar="S",
                    help="solta todas as teclas se o PSP ficar S segundos sem mandar nada enquanto algo está "

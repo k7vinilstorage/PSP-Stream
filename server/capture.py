@@ -53,6 +53,8 @@ def open_injector(args):
         profile = load_profile(args.keymap, args.profile)
     except SystemExit as exc:  # perfil que não existe
         raise RuntimeError(str(exc)) from None
+    if args.source == "wolf":
+        return open_wolf_injector(args, profile)
     if profile.get("type") == "gamepad":
         from gamepad import GamepadInjector
         injector = GamepadInjector(profile, args.input_dry_run, args.input_timeout)
@@ -61,6 +63,27 @@ def open_injector(args):
         injector = Injector(profile, args.input_dry_run, args.mouse_speed, args.input_timeout)
         kind = "teclado e mouse"
     log.info("controles: perfil '%s' (%s)%s", args.profile, kind, " (dry-run)" if args.input_dry_run else "")
+    return injector, kind
+
+
+def open_wolf_injector(args, profile):
+    """Com --source wolf, os controles vão para o jogo no Wolf como um controle de Xbox (pela API), não
+    para o /dev/uinput desta máquina."""
+    from inject import load_profile
+    from wolf_input import WolfInjector
+    name = args.profile
+    if profile.get("type") != "gamepad":
+        log.warning("controles: o perfil '%s' é de teclado e mouse; pelo Wolf os controles vão como um controle "
+                    "de Xbox: usando o perfil xbox (ou --profile xbox-camera, xbox-ombros)", name)
+        name = "xbox"
+        try:
+            profile = load_profile(args.keymap, name)
+        except SystemExit as exc:
+            raise RuntimeError(str(exc)) from None
+    injector = WolfInjector(profile, args.input_dry_run, args.input_timeout)
+    kind = "controle de Xbox virtual no Wolf"
+    log.info("controles: perfil '%s' (%s; a sessão do PSP entra no lobby)%s", name, kind,
+             " (dry-run)" if args.input_dry_run else "")
     return injector, kind
 
 
@@ -100,7 +123,7 @@ def build_source(args, portal=None):
         audio = (args.audio_rate, 1 if args.audio_mono else 2) if wolf_audio(args) else None
         return WolfSource(WolfApi(args.wolf_socket), args.wolf_target, args.wolf_video_convert, w, h, args.fps,
                           args.quality, args.scale, not args.stretch, args.codec, args.wolf_rtp_port,
-                          args.wolf_audio_rtp_port, audio=audio)
+                          args.wolf_audio_rtp_port, audio=audio, pin=args.wolf_pin)
 
     if args.source == "kms":
         from kms import KmsSource
