@@ -23,6 +23,12 @@ containers precisam de network_mode: host, o mesmo 127.0.0.1.
   sem ele, uma thread do Wolf fica esperando para sempre.
 - O modelo pull continua: o interpipesrc guarda 1 buffer (leaky), e aqui o
   appsink fica só com o mais novo.
+- O som vai pelo mesmo caminho: audio_session.gst_pipeline escuta
+  <alvo>_audio, converte para S16LE na taxa do PSP e manda por TCP; aqui
+  ele vira IMA ADPCM como o da captura do PC (audio.py). É mais simples
+  que montar o PulseAudio do Wolf no container do PSPStream (o socket dele
+  fica num volume que o Wolf cria) e segue a sessão: reconecta junto com o
+  vídeo.
 - Uma thread consulta a API a cada 2 s. Se o alvo some (o lobby parou),
   a sessão é encerrada e a fonte espera ele voltar; o servidor não cai.
   Ao sair (também no SIGTERM do docker stop), a sessão é encerrada.
@@ -45,6 +51,8 @@ import threading
 import time
 from dataclasses import dataclass
 
+import audio
+from audio import AudioCapture
 from gst_source import GstSource
 from sources import FrameSource
 from wolf_api import WolfApiError
@@ -65,8 +73,9 @@ CONVERTS = {
 }
 AUTO_ORDER = ("nvidia", "va", "cpu")
 
-# Fase 1: o som ainda não vem do Wolf; o pipeline de som só termina (o ping de som vai igual).
+# Sem som (--no-audio): o pipeline de som da sessão só termina (o ping de som vai igual).
 NO_AUDIO_PIPELINE = "audiotestsrc num-buffers=1 ! fakesink"
+RECEIVE = "tcpserversrc name=tcp host=127.0.0.1 port=0 ! gdpdepay"
 
 
 # ---- textos para a API (funções puras, testadas sem o Wolf) ----
@@ -96,6 +105,19 @@ def video_pipeline(producer: str, session_id: str, convert: str, width: int, hei
     text = (f"interpipesrc name=pspstream_{session_id}_video listen-to={producer}_video is-live=true "
             "stream-sync=restart-ts max-bytes=0 max-buffers=1 leaky-type=downstream "
             f"! {convert} ! video/x-raw,format=I420,width={width},height={height},pixel-aspect-ratio=1/1 "
+            f"! gdppay ! tcpclientsink host=127.0.0.1 port={port} sync=false")
+    return fmt_escape(text)
+
+
+def audio_pipeline(producer: str, session_id: str, rate: int, channels: int, port: int) -> str:
+    """O pipeline de som que o Wolf roda: o som do alvo em S16LE, na taxa e nos canais do PSP."""
+    for value in (producer, session_id):
+        if not ID_RE.match(value):
+            raise ValueError(f"id inesperado do Wolf: {value!r}")
+    text = (f"interpipesrc name=pspstream_{session_id}_audio listen-to={producer}_audio is-live=true "
+            "stream-sync=restart-ts max-bytes=0 max-buffers=3 block=false "
+            "! queue max-size-buffers=3 leaky=downstream ! audioconvert ! audioresample "
+            f"! audio/x-raw,format=S16LE,layout=interleaved,rate={rate},channels={channels} "
             f"! gdppay ! tcpclientsink host=127.0.0.1 port={port} sync=false")
     return fmt_escape(text)
 
@@ -199,6 +221,12 @@ def resolve_target(wanted: str, lobbies: list, sessions: list, own=None):
 # Todas as sessões sem client_id têm o mesmo id no Wolf: uma por vez neste processo
 # (a interface web sobe a fonte nova antes de parar a velha).
 _SESSION_LOCK = threading.Lock()
+_CURRENT = None  # a WolfSource rodando: o som (WolfAudio) se liga nela
+
+
+def current():
+    """A captura do Wolf rodando agora, ou None."""
+    return _CURRENT
 
 
 class _Receiver(GstSource):
@@ -225,11 +253,93 @@ class _Receiver(GstSource):
         return self.pipeline.get_by_name("tcp").get_property("current-port")
 
 
+class _AudioReceiver(AudioCapture):
+    """O som de uma sessão do Wolf: tcpserversrc ! gdpdepay e o IMA ADPCM de sempre (audio.py)."""
+
+    def __init__(self, rate: int, channels: int):
+        self.closing = False
+        super().__init__("wolf", rate, channels, src=RECEIVE)
+
+    def _ended(self, reason: str) -> None:
+        self.failed = reason
+        if self.closing:
+            log.debug("Wolf: recepção do som encerrada (%s)", reason)
+        else:
+            log.warning("Wolf: o som parou de chegar (%s); o vídeo continua", reason)
+
+    @property
+    def port(self) -> int:
+        return self.pipeline.get_by_name("tcp").get_property("current-port")
+
+
+class WolfAudio:
+    """O som do alvo no Wolf, com a interface da AudioCapture (audio.py) para a sessão com o PSP.
+
+    Cada sessão do Wolf tem a própria captura, refeita a cada reconexão; aqui
+    os blocos saem numerados em sequência, e o PSP não percebe a troca."""
+    device = "wolf"
+
+    def __init__(self, source, rate: int = audio.DEFAULT_RATE, channels: int = 2,
+                 packet_ms: float = audio.PACKET_MS):
+        self.source = source
+        self.rate, self.channels = rate, channels
+        self.samples = audio.block_samples(rate, packet_ms)
+        self.align = audio.block_align(self.samples, channels)
+        self.listeners = []
+        self.lock = threading.Lock()
+        self.seq = 0
+        self.pos = 0
+        self.failed = None
+
+    @property
+    def packet_ms(self) -> float:
+        return self.samples * 1000 / self.rate
+
+    @property
+    def kbps(self) -> float:
+        return (self.align + 48) * self.rate / self.samples / 1024
+
+    @property
+    def config(self) -> tuple:
+        return self.rate, self.channels
+
+    def add_listener(self, fn) -> None:
+        with self.lock:
+            self.listeners.append(fn)
+
+    def remove_listener(self, fn) -> None:
+        with self.lock:
+            if fn in self.listeners:
+                self.listeners.remove(fn)
+
+    def relay(self, rate: int, channels: int, samples: int, block: bytes) -> None:
+        """Um bloco da captura da sessão atual (thread do GStreamer)."""
+        if (rate, channels) != self.config:  # da sessão anterior, antes de refazer com a taxa nova
+            return
+        with self.lock:
+            listeners = list(self.listeners)
+            self.seq += 1
+            seq, pos = self.seq, self.pos
+            self.pos += samples
+        for fn in listeners:
+            try:
+                fn(seq, pos, rate, channels, samples, block)
+            except OSError:
+                pass  # envio falhou (rede); a sessão percebe por conta própria
+
+    def start(self) -> None:
+        self.source.attach_audio(self)
+
+    def stop(self) -> None:
+        self.source.detach_audio(self)
+
+
 class WolfSource(FrameSource):
     def __init__(self, api, target: str, convert: str, width: int, height: int, fps: int, quality: int,
                  scale: str = "bilinear2", keep_aspect: bool = True, codec: str = "jpeg",
                  video_ping_port: int = 48100, audio_ping_port: int = 48200, ping_host: str = "127.0.0.1",
-                 poll_s: float = 2.0, first_frame_s: float = 10.0):
+                 poll_s: float = 2.0, first_frame_s: float = 10.0, audio=None):
+        """audio: (taxa, canais) do som que a sessão do Wolf já cria, ou None (sem som)."""
         super().__init__()
         self.api = api
         self.wanted = (target or "").strip()
@@ -247,6 +357,10 @@ class WolfSource(FrameSource):
         self.session_id = None
         self.working_convert = None  # a conversão que funcionou (auto)
         self._receiver = None
+        self.audio_config = tuple(audio) if audio else None
+        self._audio_rx = None        # captura do som da sessão atual
+        self._session_audio = None   # (taxa, canais) com que a sessão atual foi criada
+        self._audio_hub = None       # WolfAudio ligado (o que vai para o PSP)
         self._stop = threading.Event()
         self._thread = None
         self._said = None
@@ -254,6 +368,7 @@ class WolfSource(FrameSource):
     # ---- FrameSource ----
 
     def start(self) -> None:
+        global _CURRENT
         # Vários lobbies sem --wolf-target é erro de configuração: aparece já, com a lista.
         # O Wolf fora do ar não: a thread espera ele voltar.
         try:
@@ -265,8 +380,12 @@ class WolfSource(FrameSource):
                 self._say(why)
         self._thread = threading.Thread(target=self._run, name="wolf", daemon=True)
         self._thread.start()
+        _CURRENT = self
 
     def stop(self) -> None:
+        global _CURRENT
+        if _CURRENT is self:
+            _CURRENT = None
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=15)
@@ -286,6 +405,23 @@ class WolfSource(FrameSource):
     @property
     def quality(self):
         return self._quality
+
+    # ---- som ----
+
+    def attach_audio(self, hub: WolfAudio) -> None:
+        """O som que vai para o PSP. Se a sessão atual foi criada sem som, ou com outra taxa ou
+        outros canais, a thread refaz a sessão (o pipeline de som do Wolf é fixo)."""
+        self.audio_config = hub.config
+        self._audio_hub = hub
+
+    def detach_audio(self, hub: WolfAudio) -> None:
+        if self._audio_hub is hub:
+            self._audio_hub = None  # a sessão continua com o som (ligar de novo não refaz nada)
+
+    def _audio_out(self, seq, pos, rate, channels, samples, block) -> None:
+        hub = self._audio_hub
+        if hub is not None:
+            hub.relay(rate, channels, samples, block)
 
     # ---- a thread ----
 
@@ -380,6 +516,15 @@ class WolfSource(FrameSource):
         port = receiver.port
         if not port:
             raise RuntimeError("o tcpserversrc não abriu uma porta")
+        audio_pipe, acfg = NO_AUDIO_PIPELINE, self.audio_config
+        self._session_audio = acfg
+        if acfg:
+            rate, channels = acfg
+            rx = _AudioReceiver(rate, channels)
+            self._audio_rx = rx
+            rx.add_listener(self._audio_out)
+            rx.start()
+            audio_port = rx.port
         self._cleanup_stale()
         request = session_request(self.width, self.height)
         sid = self.api.add_session(request)
@@ -392,10 +537,13 @@ class WolfSource(FrameSource):
         convert = convert_chain(choice, self.width, self.height, self.scale, self.keep_aspect)
         pipeline = video_pipeline(target.producer, sid, convert, self.width, self.height, port)
         log.debug("Wolf: pipeline de vídeo: %s", pipeline)
+        if acfg:
+            audio_pipe = audio_pipeline(target.producer, sid, rate, channels, audio_port)
+            log.debug("Wolf: pipeline de som: %s", audio_pipe)
         self.api.start_session(sid, video_session(sid, pipeline, self.width, self.height, self.fps,
                                                   self.video_ping_port, secret),
-                               audio_session(sid, NO_AUDIO_PIPELINE, self.audio_ping_port, secret,
-                                             request["aes_key"], request["aes_iv"]))
+                               audio_session(sid, audio_pipe, self.audio_ping_port, secret,
+                                             request["aes_key"], request["aes_iv"], acfg[1] if acfg else 2))
         self.target = target
         log.info("Wolf: sessão %s espelhando %s, conversão %s", sid, target.describe(), choice)
         seq0 = self.latest()[0]
@@ -428,6 +576,11 @@ class WolfSource(FrameSource):
             receiver = self._receiver
             if receiver is not None and receiver.failed:
                 return False
+            hub = self._audio_hub
+            if hub is not None and self._session_audio != hub.config:
+                log.info("Wolf: refazendo a sessão para o som (%d Hz, %s)", hub.rate,
+                         "estéreo" if hub.channels == 2 else "mono")
+                return True
             try:
                 lobbies, sessions = self.api.lobbies(), self.api.sessions()
             except WolfApiError as exc:
@@ -450,9 +603,10 @@ class WolfSource(FrameSource):
         return True
 
     def _teardown(self) -> None:
-        receiver, sid = self._receiver, self.session_id
-        if receiver is not None:
-            receiver.closing = True
+        receiver, sid, rx = self._receiver, self.session_id, self._audio_rx
+        for r in (receiver, rx):
+            if r is not None:
+                r.closing = True
         if sid is not None:
             self.session_id = None
             try:
@@ -465,4 +619,10 @@ class WolfSource(FrameSource):
                 time.sleep(0.05)
             receiver.stop()
             self._receiver = None
+        if rx is not None:
+            deadline = time.monotonic() + 0.5
+            while not rx.failed and time.monotonic() < deadline:
+                time.sleep(0.05)
+            rx.stop()
+            self._audio_rx = None
         self.target = None

@@ -571,7 +571,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-audio", action="store_true", help="não capturar nem mandar o som")
     p.add_argument("--audio-device", default="monitor", metavar="NOME",
                    help="som: fonte do PipeWire/PulseAudio (pactl list short sources); monitor (padrão) = o que "
-                        "sai nas caixas; test = tom de 440 Hz")
+                        "sai nas caixas (com --source wolf, o som do alvo no Wolf); wolf = o som do Wolf; "
+                        "test = tom de 440 Hz")
     p.add_argument("--audio-rate", type=int, default=44100, choices=[22050, 32000, 44100, 48000],
                    help="som: taxa (padrão %(default)s Hz, a do PSP; IMA ADPCM estéreo ~ taxa/1000 KB/s)")
     p.add_argument("--audio-mono", action="store_true", help="som: mono (metade dos bytes)")

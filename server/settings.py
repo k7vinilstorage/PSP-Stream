@@ -116,7 +116,8 @@ SETTINGS = (
             "O PSP também liga e desliga (SELECT + START + cima). Só pelo UDP.", "audio", invert=True,
             flag="--no-audio"),
     Setting("audio_device", "audio_device", "text", "Som", "Fonte do som",
-            "monitor = o que sai nas caixas; test = tom de 440 Hz; ou uma fonte do PipeWire.", "audio",
+            "monitor = o que sai nas caixas (com a fonte wolf, o som do Wolf); test = tom de 440 Hz; ou uma "
+            "fonte do PipeWire.", "audio",
             flag="--audio-device", show_if=("audio", (True,))),
     Setting("audio_rate", "audio_rate", "choice", "Som", "Taxa (Hz)",
             "44100 é a do PSP (sem reamostrar). ~46 KB/s em estéreo.", "audio", (22050, 32000, 44100, 48000),

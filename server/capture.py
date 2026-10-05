@@ -97,9 +97,10 @@ def build_source(args, portal=None):
     if args.source == "wolf":
         from wolf_api import WolfApi
         from wolf_source import WolfSource
+        audio = (args.audio_rate, 1 if args.audio_mono else 2) if wolf_audio(args) else None
         return WolfSource(WolfApi(args.wolf_socket), args.wolf_target, args.wolf_video_convert, w, h, args.fps,
                           args.quality, args.scale, not args.stretch, args.codec, args.wolf_rtp_port,
-                          args.wolf_audio_rtp_port)
+                          args.wolf_audio_rtp_port, audio=audio)
 
     if args.source == "kms":
         from kms import KmsSource
@@ -129,6 +130,11 @@ def build_source(args, portal=None):
 DMABUF_FIRST_FRAME_S = 5
 
 
+def wolf_audio(args) -> bool:
+    """O som vem do Wolf: com --source wolf, o padrão (monitor) ou --audio-device wolf."""
+    return args.source == "wolf" and not args.no_audio and args.audio_device in ("monitor", "wolf")
+
+
 def open_audio(args, seq0: int = 0):
     """Abre a captura do som (args.audio_device, audio_rate, audio_mono).
     seq0: continua a numeração dos pacotes de uma captura anterior (o PSP
@@ -138,6 +144,10 @@ def open_audio(args, seq0: int = 0):
         import audio
     except (ImportError, ValueError) as exc:
         raise RuntimeError(str(exc)) from None
+    if args.audio_device == "wolf" and args.source != "wolf":
+        raise RuntimeError("--audio-device wolf só vale com --source wolf")
+    if wolf_audio(args):
+        return open_wolf_audio(args, seq0)
     if not audio.available():
         raise RuntimeError(f"faltam o pulsesrc e o adpcmenc do GStreamer ({distro.hint('good', 'bad')})")
     try:
@@ -149,6 +159,24 @@ def open_audio(args, seq0: int = 0):
     log.info("som: %s, %d Hz %s, IMA ADPCM em pacotes de %.0f ms (~%.0f KB/s quando o PSP pede)",
              capture.device, capture.rate, "estéreo" if capture.channels == 2 else "mono", capture.packet_ms,
              capture.kbps)
+    return capture
+
+
+def open_wolf_audio(args, seq0: int = 0):
+    """O som do alvo no Wolf, pela sessão que a captura do Wolf (WolfSource) mantém."""
+    import audio
+    import wolf_source
+    if not audio.available(pulse=False):
+        raise RuntimeError(f"falta o adpcmenc do GStreamer ({distro.hint('bad')})")
+    source = wolf_source.current()
+    if source is None:
+        raise RuntimeError("a captura do Wolf não está rodando")
+    capture = wolf_source.WolfAudio(source, args.audio_rate, 1 if args.audio_mono else 2)
+    capture.seq = seq0
+    capture.start()
+    log.info("som: do Wolf (o som do alvo, pela sessão do PSPStream), %d Hz %s, IMA ADPCM em pacotes de %.0f ms "
+             "(~%.0f KB/s quando o PSP pede)", capture.rate, "estéreo" if capture.channels == 2 else "mono",
+             capture.packet_ms, capture.kbps)
     return capture
 
 

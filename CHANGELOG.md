@@ -128,6 +128,14 @@ de outra versão do protocolo é recusado com aviso no log.
   porta 48100 do Wolf (`--wolf-rtp-port`, `WOLF_VIDEO_PING_PORT`).
   Testado só contra um Wolf falso (`tests/fake_wolf.py`), não num Wolf de
   verdade.
+- **Wolf, som:** o som do alvo vem pelo mesmo caminho do vídeo (o pipeline
+  de som da sessão escuta `<lobby>_audio`, converte para S16LE na taxa do
+  PSP e manda por TCP) e vira o IMA ADPCM de sempre. Com `--source wolf`, o
+  padrão `--audio-device monitor` já usa o som do Wolf (ou
+  `--audio-device wolf`); a numeração dos pacotes continua quando a sessão
+  do Wolf é refeita, e mudar a taxa ou o mono refaz a sessão. Escolhido em
+  vez de montar o PulseAudio do Wolf no container: nada a mais para
+  compartilhar, e reconecta junto com o vídeo.
 - O servidor encerra direito no SIGTERM (`docker stop`, `systemctl stop`),
   como no Ctrl+C.
 

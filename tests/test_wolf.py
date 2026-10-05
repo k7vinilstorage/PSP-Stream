@@ -206,6 +206,15 @@ class PipelineTextTest(unittest.TestCase):
         self.assertEqual(wolf_source.convert_chain("  glupload ! gldownload ", 480, 272), "glupload ! gldownload")
         self.assertEqual(wolf_source.AUTO_ORDER, ("nvidia", "va", "cpu"))
 
+    def test_audio_pipeline(self):
+        text = wolf_source.audio_pipeline(LOBBY, "123", 44100, 2, 4568)
+        plain = fake_wolf.fmt_unescape(text)
+        self.assertTrue(plain.startswith(f"interpipesrc name=pspstream_123_audio listen-to={LOBBY}_audio "))
+        self.assertIn("format=S16LE,layout=interleaved,rate=44100,channels=2", plain)
+        self.assertTrue(plain.endswith("! gdppay ! tcpclientsink host=127.0.0.1 port=4568 sync=false"))
+        with self.assertRaises(ValueError):
+            wolf_source.audio_pipeline("x y", "123", 44100, 2, 1)
+
     def test_ping(self):
         secret = wolf_source.new_secret()
         self.assertEqual(len(secret), 16)
@@ -410,6 +419,106 @@ class WebSuggestionsTest(WolfCase):
         item = next(i for i in ctl.config()["settings"] if i["key"] == "wolf_target")
         self.assertEqual(item["suggestions"], ["Steam"])
         self.assertEqual(control.wolf_lobbies(self.tmp.name + "/nada.sock"), [])
+
+
+class WolfAudioTest(WolfCase):
+    """Fase 2: o som do alvo pelo pipeline de som da sessão (o Wolf falso toca um seno de 440 Hz)."""
+
+    def collect(self, hub):
+        got = []
+        hub.add_listener(lambda *a: got.append(a))
+        return got
+
+    def test_sine_reaches_the_listener(self):
+        import audio
+        src = self.source(audio=(44100, 2))
+        src.start()
+        hub = wolf_source.WolfAudio(src, 44100, 2)
+        hub.start()
+        got = self.collect(hub)
+        self.assertTrue(self.wolf.wait_for(lambda: len(got) >= 25), self.wolf.started)
+        audio_runs = [x for x in self.wolf.started if x[0] == "audio"]
+        self.assertTrue(audio_runs[0][3], audio_runs)
+        self.assertIn(f"listen-to={LOBBY}_audio", audio_runs[0][2])
+        seqs = [g[0] for g in got[:25]]
+        self.assertEqual(seqs, list(range(1, 26)))
+        seq, pos, rate, channels, samples, block = got[-1]
+        self.assertEqual((rate, channels, len(block)), (44100, 2, hub.align))
+        pcm = audio.ima_decode_block(block, 2)
+        self.assertGreater(max(abs(x) for x in pcm), 3000)  # o seno, não silêncio
+        self.assertEqual(self.wolf.paths("POST").count("/sessions/add"), 1)  # a sessão já nasceu com som
+
+    def test_numbering_survives_a_new_session(self):
+        src = self.source(audio=(44100, 2))
+        src.start()
+        hub = wolf_source.WolfAudio(src, 44100, 2)
+        hub.start()
+        got = self.collect(hub)
+        self.assertTrue(self.wolf.wait_for(lambda: len(got) >= 5))
+        with self.wolf.lock:
+            saved = self.wolf.lobbies.pop()
+        self.assertTrue(self.wolf.wait_for(lambda: not self.wolf.sessions))
+        n = len(got)
+        with self.wolf.lock:
+            self.wolf.lobbies.append(saved)
+        self.assertTrue(self.wolf.wait_for(lambda: len(got) >= n + 5))
+        self.assertEqual([g[0] for g in got], list(range(1, len(got) + 1)))  # sem recomeçar do 1
+        positions = [g[1] for g in got]
+        self.assertEqual(positions, sorted(positions))
+
+    def test_rate_change_redoes_the_session(self):
+        src = self.source(audio=(44100, 2))
+        src.start()
+        hub = wolf_source.WolfAudio(src, 44100, 2)
+        hub.start()
+        self.assertIsNotNone(src.wait_newer(0, 10))
+        mono = wolf_source.WolfAudio(src, 22050, 1)  # a interface web: 22050 Hz, mono
+        got = self.collect(mono)
+        mono.start()
+        hub.stop()
+        self.assertTrue(self.wolf.wait_for(lambda: len(got) >= 5, 15))
+        self.assertEqual(self.wolf.paths("POST").count("/sessions/add"), 2)
+        self.assertEqual({(g[2], g[3], len(g[5])) for g in got}, {(22050, 1, mono.align)})
+        self.assertIn("rate=22050,channels=1", [x for x in self.wolf.started if x[0] == "audio"][-1][2])
+
+    def test_without_audio(self):
+        src = self.source()
+        src.start()
+        self.assertIsNotNone(src.wait_newer(0, 10))
+        audio_runs = [x for x in self.wolf.started if x[0] == "audio"]
+        self.assertEqual(audio_runs[0][2], wolf_source.NO_AUDIO_PIPELINE)  # o ping de som foi, o pipeline acaba
+        # ligar o som depois refaz a sessão com o pipeline de som
+        hub = wolf_source.WolfAudio(src, 44100, 2)
+        got = self.collect(hub)
+        hub.start()
+        self.assertTrue(self.wolf.wait_for(lambda: len(got) >= 3, 15))
+
+    def test_open_audio(self):
+        import capture
+        import pspstream
+        args = pspstream.build_parser().parse_args(["--source", "wolf", "--wolf-socket", self.wolf.socket_path,
+                                                    "--audio-mono", "--codec", "jpeg"])
+        self.assertTrue(capture.wolf_audio(args))
+        with self.assertRaises(RuntimeError):  # sem a captura do Wolf rodando
+            capture.open_audio(args)
+        src = capture.build_source(args)
+        self.assertEqual(src.audio_config, (44100, 1))
+        src.ping_host = "127.0.0.1"
+        src.video_ping_port, src.audio_ping_port = self.wolf.ports["video"], self.wolf.ports["audio"]
+        src.poll_s = 0.2
+        self.addCleanup(src.stop)
+        src.start()
+        cap = capture.open_audio(args, seq0=41)
+        self.assertIsInstance(cap, wolf_source.WolfAudio)
+        got = self.collect(cap)
+        self.assertTrue(self.wolf.wait_for(lambda: got))
+        self.assertEqual(got[0][0], 42)  # continua a numeração de antes
+        cap.stop()
+        # outra fonte de som com a fonte wolf: a sessão sem som do Wolf
+        other = pspstream.build_parser().parse_args(["--source", "wolf", "--audio-device", "test"])
+        self.assertFalse(capture.wolf_audio(other))
+        with self.assertRaises(RuntimeError):
+            capture.open_audio(pspstream.build_parser().parse_args(["--source", "static", "--audio-device", "wolf"]))
 
 
 class SeveralLobbiesTest(WolfCase):

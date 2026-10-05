@@ -116,7 +116,7 @@ class Controller:
             if s.kind == "choice":
                 item["choices"] = list(self.choices(s))
             if s.key == "audio_device":
-                item["suggestions"] = audio_sources()
+                item["suggestions"] = audio_sources() + (["wolf"] if self._wolf_available() else [])
             if s.key == "wolf_target" and self._wolf_available():
                 item["suggestions"] = wolf_lobbies(self.args.wolf_socket)
             if s.min is not None:
@@ -251,6 +251,7 @@ class Controller:
 
     def _restart_capture(self, part: dict) -> None:
         old_args, new = self.args, self._candidate(part)
+        old_source = old_args.source
         if "codec" in part:
             new.codec = new.codec_choice
             err = capture.resolve_codec(new)
@@ -283,6 +284,22 @@ class Controller:
         if old_args.source == "portal" and not same_portal and getattr(old, "keepalive", None) is not None:
             old.keepalive.close()  # sessão do portal que ninguém mais usa
         log.info("captura: %s, %s, até %d fps", new.source, new.codec, new.fps)
+        self._follow_source_audio(old_source)
+
+    def _follow_source_audio(self, old_source: str) -> None:
+        """O som do Wolf vem da sessão da captura do Wolf: troca junto com ela."""
+        if self.args.no_audio or "wolf" not in (old_source, self.args.source):
+            return
+        old = self.server.audio
+        try:
+            cap = capture.open_audio(self.args, seq0=old.seq if old is not None else 0)
+        except RuntimeError as exc:
+            cap = None
+            self.audio_note = f"a captura não abriu: {exc}"
+            log.warning("som desativado: %s", exc)
+        self.server.set_audio(cap)
+        if old is not None:
+            old.stop()
 
     def _apply_live(self, part: dict) -> None:
         self._commit(self.args, part)
