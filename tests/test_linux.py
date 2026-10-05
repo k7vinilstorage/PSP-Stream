@@ -57,6 +57,13 @@ class DistroTest(unittest.TestCase):
         for need, by_family in distro.PACKAGES.items():
             self.assertEqual(set(by_family), set(distro.INSTALL), need)
 
+    def setUp(self):
+        # sem o pacote instalado nesta máquina (o perfil do ufw e o serviço do firewalld)
+        for name in ("UFW_PROFILE", "FIREWALLD_SERVICE"):
+            patcher = mock.patch.object(distro, name, Path("/nao/existe"))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_commands(self):
         self.assertEqual(distro.install_command(["openh264", "evdev"], "debian"),
                          "sudo apt install libopenh264-dev python3-evdev")
@@ -69,6 +76,12 @@ class DistroTest(unittest.TestCase):
         self.assertEqual(distro.firewall_command(5123, "ufw"), "sudo ufw allow 5123/udp && sudo ufw allow 5123/tcp")
         self.assertIn("--add-port=5123/udp", distro.firewall_command(5123, "firewalld"))
         self.assertEqual(distro.firewall_command(5123, ""), "")
+        # com o pacote instalado: o perfil do ufw e o serviço do firewalld
+        with mock.patch.object(distro, "UFW_PROFILE", Path(__file__)), \
+                mock.patch.object(distro, "FIREWALLD_SERVICE", Path(__file__)):
+            self.assertEqual(distro.firewall_command(5123, "ufw"), "sudo ufw allow PSPStream")
+            self.assertIn("--add-service=pspstream", distro.firewall_command(5123, "firewalld"))
+            self.assertIn("5600/udp", distro.firewall_command(5600, "ufw"))  # outra porta: a regra pela porta
 
 
 class DoctorTest(unittest.TestCase):
@@ -118,7 +131,7 @@ class SetupTest(unittest.TestCase):
         doctor.Item("GStreamer", "aviso", "pipewiresrc", ("pipewire",)),
         doctor.Item("Controles", "aviso", "uinput", ("evdev",), fix=doctor.UINPUT_RULE),
         doctor.Item("Captura", "info", "auxiliar KMS não compilado", ("kms",), fix="make -C tools/kms"),
-        doctor.Item("Rede", "info", "firewall ufw ativo", fix=distro.firewall_command(5123, "ufw")),
+        doctor.Item("Rede", "info", "firewall ufw ativo", fix="sudo ufw allow 5123/udp && sudo ufw allow 5123/tcp"),
         doctor.Item("Som", "ok", "pactl", ("pactl",)),
     ]
 

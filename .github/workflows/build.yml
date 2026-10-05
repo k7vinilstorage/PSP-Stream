@@ -1,0 +1,157 @@
+# Compila o EBOOT do PSP, roda os testes e gera os pacotes .deb (Ubuntu 22.04+,
+# Debian 12+) e .rpm (Fedora) a cada push e pull request.
+#
+# Downloads (Releases do GitHub):
+#   - push na main: a pré-release "nightly" é refeita com o EBOOT e os pacotes
+#     do commit (.../releases/download/nightly/PSPStream-EBOOT.zip);
+#   - tag v*: release estável, com as notas da seção do CHANGELOG.md
+#     (git tag v1.2 && git push origin v1.2).
+# Em qualquer outro push, os arquivos ficam nos "artifacts" da execução.
+name: build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  eboot:
+    name: EBOOT (PSP)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: pspdev
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q build-essential cmake pkgconf libreadline8 libusb-0.1-4 libgpgme11 \
+            libarchive-tools fakeroot
+          curl -fsSL -o pspdev.tar.gz \
+            https://github.com/pspdev/pspdev/releases/latest/download/pspdev-ubuntu-latest-x86_64.tar.gz
+          tar xzf pspdev.tar.gz -C "$HOME"
+          rm pspdev.tar.gz
+      - name: compilar
+        run: make -C psp dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PSPStream-EBOOT
+          path: psp/dist/
+          if-no-files-found: error
+
+  tests:
+    name: testes do servidor
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: dependências
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-gl \
+            gstreamer1.0-pipewire libopenh264-dev python3-evdev gcc make pkg-config libdrm-dev
+      - name: testes
+        run: /usr/bin/python3 -m unittest discover -v tests
+      - name: ruff
+        run: pipx run ruff==0.16.10 check server tools tests  # regras em ruff.toml
+
+  deb:
+    name: pacote .deb
+    # o 22.04: a glibc do auxiliar KMS serve do 22.04 em diante
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # a versão sai da tag (packaging/version.sh)
+      - name: compilar
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc make pkg-config libdrm-dev
+          sh packaging/build-deb.sh
+      - name: instalar e testar
+        run: |
+          sudo apt-get install -y -q ./dist/*.deb
+          sh packaging/smoke-test.sh jpeg
+          sh packaging/smoke-test.sh h264p
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pspstream-deb
+          path: dist/*.deb
+          if-no-files-found: error
+
+  rpm:
+    name: pacote .rpm
+    runs-on: ubuntu-24.04
+    container: fedora:43
+    steps:
+      - name: ferramentas
+        run: dnf -y -q install git rpm-build gcc make libdrm-devel tar gzip
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: compilar
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          sh packaging/build-rpm.sh
+      - name: instalar e testar
+        run: |
+          dnf -y -q install ./dist/*.rpm
+          sh packaging/smoke-test.sh jpeg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pspstream-rpm
+          path: dist/*.rpm
+          if-no-files-found: error
+
+  release:
+    name: publicar
+    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
+    needs: [eboot, tests, deb, rpm]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: release-${{ github.ref }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: arquivos
+        run: |
+          mkdir -p out
+          (cd artifacts/PSPStream-EBOOT && zip -qr ../../out/PSPStream-EBOOT.zip PSP)
+          cp artifacts/pspstream-deb/*.deb artifacts/pspstream-rpm/*.rpm out/
+          ls -l out
+      - name: release estável (tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          sh packaging/release-notes.sh "${tag#v}" > notes.md
+          [ -s notes.md ] || echo "Veja o CHANGELOG.md." > notes.md
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release upload "$tag" out/* --clobber
+          else
+            gh release create "$tag" out/* --title "PSPStream ${tag#v}" --notes-file notes.md
+          fi
+      - name: nightly (main)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete nightly --yes --cleanup-tag > /dev/null 2>&1 || true
+          cat > notes.md <<NOTES
+          Versão de desenvolvimento, refeita a cada push na main (commit ${GITHUB_SHA::7}).
+          Para a última versão estável, veja a release mais recente que não é pré-release.
+
+          - **PSPStream-EBOOT.zip**: copie a pasta PSP para a raiz do memory stick.
+          - **.deb** (Ubuntu 22.04+, Debian 12+): \`sudo apt install ./pspstream_*.deb\`
+          - **.rpm** (Fedora): \`sudo dnf install ./pspstream-*.rpm\`
+          NOTES
+          gh release create nightly out/* --prerelease --target "$GITHUB_SHA" \
+            --title "Desenvolvimento (main, ${GITHUB_SHA::7})" --notes-file notes.md

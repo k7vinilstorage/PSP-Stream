@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- sudo firewall-cmd --permanent --add-service=pspstream && sudo firewall-cmd --reload -->
+<service>
+  <short>PSPStream</short>
+  <description>Tela e som do PC no PSP: o PSP pede os frames e manda os botões (TCP e UDP 5123).</description>
+  <port protocol="tcp" port="5123"/>
+  <port protocol="udp" port="5123"/>
+</service>

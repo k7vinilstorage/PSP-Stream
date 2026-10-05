@@ -1,0 +1,4 @@
+# PSPStream: os botões do PSP viram teclado, mouse ou controle de Xbox
+# virtuais pelo /dev/uinput. "uaccess" dá acesso só a quem está na sessão
+# ativa (sentado no PC), como a regra do steam-devices.
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"

@@ -15,9 +15,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import distro
+import paths
 
 ROOT = Path(__file__).resolve().parent.parent
-KMS_HELPER = ROOT / "tools" / "kms" / "pspstream-kms"
 UINPUT_RULE = """echo uinput | sudo tee /etc/modules-load.d/uinput.conf
 printf '%s\\n' 'KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"' \\
   | sudo tee /etc/udev/rules.d/60-pspstream-uinput.rules
@@ -144,21 +144,26 @@ def check_portal(items, have_gst):
 
 
 def check_kms(items):
-    if not KMS_HELPER.exists():
+    helper = paths.kms_helper()
+    if not helper.exists():
         items.append(Item("Captura", "info", "auxiliar KMS não compilado (opcional: --source kms, 60 fps no GNOME 50+)",
                           ("kms",), fix="make -C tools/kms && make -C tools/kms cap"))
         return
     caps = ""
     if shutil.which("getcap"):
         try:
-            caps = subprocess.run(["getcap", str(KMS_HELPER)], capture_output=True, text=True, timeout=3).stdout
+            caps = subprocess.run(["getcap", str(helper)], capture_output=True, text=True, timeout=3).stdout
         except (OSError, subprocess.SubprocessError):
             pass
     if "cap_sys_admin" in caps:
         items.append(Item("Captura", "ok", "auxiliar KMS pronto (--source kms)"))
-    else:
-        items.append(Item("Captura", "aviso", "auxiliar KMS sem a permissão de ler a tela",
+    elif helper == paths.REPO_KMS_HELPER:
+        items.append(Item("Captura", "aviso", "auxiliar KMS sem a permissão de ler a tela (opcional: --source kms)",
                           fix="make -C tools/kms cap   # refaça depois de cada make"))
+    else:  # o do pacote: a permissão é opcional, e só o administrador dá
+        items.append(Item("Captura", "info", "captura KMS (opcional: --source kms, 60 fps no GNOME 50+): o auxiliar "
+                          "do pacote precisa da permissão de ler a tela",
+                          fix=f"sudo setcap cap_sys_admin+ep {helper}"))
 
 
 def check_input(items):
@@ -276,11 +281,14 @@ def plan(items, fam: str) -> list:
     for item in todo:
         if item.fix and item.group == "Controles":
             steps.append(("Liberar o /dev/uinput para os controles", item.fix.replace("\\\n", "").splitlines()))
-    kms = next((i for i in items if i.group == "Captura" and i.fix.startswith("make")), None)
+    kms = next((i for i in items if i.group == "Captura" and i.fix.startswith(("make", "sudo setcap"))), None)
     if kms is not None:
-        cmds = ([distro.install_command(kms.needs, fam)] if kms.needs and fam else []) + [
-            f"make -C {ROOT / 'tools' / 'kms'}", f"make -C {ROOT / 'tools' / 'kms'} cap"]
-        steps.append(("Captura KMS (opcional: 60 fps no GNOME 50+; precisa de sudo setcap)", cmds))
+        if kms.fix.startswith("sudo setcap"):  # o auxiliar do pacote
+            cmds = [kms.fix]
+        else:
+            cmds = ([distro.install_command(kms.needs, fam)] if kms.needs and fam else []) + [
+                f"make -C {ROOT / 'tools' / 'kms'}", f"make -C {ROOT / 'tools' / 'kms'} cap"]
+        steps.append(("Captura KMS (opcional: 60 fps no GNOME 50+; dá ao auxiliar a permissão de ler a tela)", cmds))
     fw = next((i for i in items if i.group == "Rede" and i.fix), None)
     if fw is not None:
         steps.append(("Liberar a porta no firewall", [fw.fix]))

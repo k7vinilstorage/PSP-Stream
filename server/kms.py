@@ -26,10 +26,11 @@ gi.require_version("GstVideo", "1.0")
 from gi.repository import Gst, GstAllocators, GstVideo  # noqa: E402
 
 from gst_source import GstSource  # noqa: E402
+import paths  # noqa: E402
 
 log = logging.getLogger("pspstream.kms")
 
-HELPER = Path(__file__).resolve().parent.parent / "tools" / "kms" / "pspstream-kms"
+HELPER = paths.kms_helper()  # repositório (tools/kms) ou pacote (/usr/libexec/pspstream)
 
 REQUEST = struct.Struct("<4sII")                  # magic "PSKQ", cmd, timeout_ms
 REPLY = struct.Struct("<4si4IQI4I4III160s")       # ver struct reply em pspstream-kms.c
@@ -70,7 +71,7 @@ class KmsHelper:
         path = Path(path)
         if not argv_prefix and not os.access(path, os.X_OK):
             raise KmsError(f"falta o auxiliar {path}: compile com make -C tools/kms e depois "
-                           "make -C tools/kms cap (pede a senha do sudo)")
+                           "make -C tools/kms cap (pede a senha do sudo), ou instale o pacote do PSPStream")
         ours, theirs = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
         args = [*argv_prefix, str(path), str(theirs.fileno()), "--monitor", str(monitor)]
         if card:
@@ -83,7 +84,7 @@ class KmsHelper:
         self._close_fds(fds)
         if hello.status == ST_ERROR:
             self.close()
-            raise KmsError(hello.msg)
+            raise KmsError(f"{hello.msg} ({path})")
         if hello.status != ST_HELLO:
             self.close()
             raise KmsError(f"o auxiliar não se apresentou (status {hello.status})")

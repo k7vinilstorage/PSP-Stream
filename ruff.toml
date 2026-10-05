@@ -1,0 +1,4 @@
+# ruff check server tools tests
+# As regras ficam explícitas: as versões novas do ruff mudam o conjunto padrão.
+[lint]
+select = ["E4", "E7", "E9", "F"]

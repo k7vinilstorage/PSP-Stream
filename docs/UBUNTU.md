@@ -3,14 +3,33 @@
 Vale para o Ubuntu 22.04 e 24.04 (e mais novos), e para quem vem do Ubuntu
 ou do Debian: Debian 12+, Linux Mint 21+, Pop!_OS, Zorin, elementary OS.
 
-O que foi testado num Ubuntu 24.04: os pacotes (pelo próprio `apt`), o
-`--check`, os testes automáticos (também com o Python 3.10 do 22.04), o
-servidor com a fonte de teste, o EBOOT compilado com o pspdev do Ubuntu e
-rodando no emulador. A captura da tela de verdade, o som e os controles
-foram testados num PSP-3000 com o Fedora; no Ubuntu, são os mesmos
-componentes (GStreamer, PipeWire, uinput).
+O que foi testado no Ubuntu (sem tela: contêineres e o CI):
+- o pacote `.deb` instalado pelo `apt` no 22.04 e no 24.04 limpos, com um
+  stream para o PSP de teste em JPEG e em H.264 com frames P e a interface web;
+- o `--check` e os testes automáticos (também com o Python 3.10 do 22.04);
+- o EBOOT compilado com o pspdev do Ubuntu e rodando no emulador.
+
+A captura da tela de verdade, o som e os controles foram testados num
+PSP-3000 com o Fedora; no Ubuntu, são os mesmos componentes (GStreamer,
+PipeWire, uinput).
 
 ## Resumo
+
+O mais fácil é o pacote: baixe o `pspstream_*.deb` das
+[Releases](https://github.com/k7vinilstorage/PSP-Stream/releases) e instale com o apt (ele puxa as dependências):
+
+```sh
+sudo apt install ./pspstream_*.deb
+pspstream --setup      # permissão da captura KMS (opcional) e firewall, se precisar
+pspstream              # e no PSP: "Procurar o PC na rede"
+```
+
+O EBOOT pronto também está lá (`PSPStream-EBOOT.zip`). O pacote foi
+instalado e testado num Ubuntu 22.04 limpo: o apt instalou as dependências
+e a `libopenh264`, e o servidor transmitiu para o PSP de teste em JPEG e
+H.264 com frames P.
+
+Pelo código:
 
 ```sh
 sudo apt install git python3
@@ -51,7 +70,10 @@ sudo apt install git python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0
 para ele: num venv, conda ou pyenv, o `import gi` falha. Se precisar de um
 venv, crie com `python3 -m venv --system-site-packages`.
 
-**Sem `libopenh264-dev` no apt** (versões antigas): use a biblioteca do
+O `libopenh264-dev` existe no 22.04 (puxa a `libopenh264-6`, 2.2.0) e no
+24.04 (`libopenh264-7`, 2.4.1).
+
+**Sem `libopenh264-dev` no apt** (versões mais antigas): use a biblioteca do
 próprio Cisco. O nome do arquivo de cada versão está em
 <https://github.com/cisco/openh264/releases>; por exemplo:
 

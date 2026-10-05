@@ -1,5 +1,7 @@
 # PSPStream
 
+[![build](https://github.com/k7vinilstorage/PSP-Stream/actions/workflows/build.yml/badge.svg)](https://github.com/k7vinilstorage/PSP-Stream/actions/workflows/build.yml)
+
 Transmite a tela e o som do PC para um PSP pelo Wi-Fi e manda os botões do
 PSP de volta ao PC, como teclado e mouse ou como um controle de Xbox. O vídeo
 vai em H.264 com frames P, decodificado pelo hardware do PSP, e o som em IMA
@@ -58,7 +60,34 @@ fila na rede, e a latência fica perto de um frame. Detalhes em
 
 ## Instalação
 
-### 1. PC
+### Downloads prontos
+
+Em [Releases](https://github.com/k7vinilstorage/PSP-Stream/releases), sem compilar nada:
+
+| arquivo | o que é |
+|---|---|
+| `PSPStream-EBOOT.zip` | o app do PSP: copie a pasta `PSP` para a raiz do memory stick |
+| `pspstream_*.deb` | servidor para Ubuntu 22.04+ e Debian 12+: `sudo apt install ./pspstream_*.deb` |
+| `pspstream-*.rpm` | servidor para o Fedora: `sudo dnf install ./pspstream-*.rpm` |
+
+A release mais recente é a versão estável
+([EBOOT direto](https://github.com/k7vinilstorage/PSP-Stream/releases/latest/download/PSPStream-EBOOT.zip)). A pré-release
+**nightly** é refeita a cada mudança na `main`
+([EBOOT da nightly](https://github.com/k7vinilstorage/PSP-Stream/releases/download/nightly/PSPStream-EBOOT.zip)).
+
+Com o pacote, o servidor vira o comando `pspstream` (`pspstream --check`,
+`pspstream --source kms`...), e o pacote já traz:
+- a permissão do `/dev/uinput` para os controles, para quem está sentado no PC;
+- o atalho no menu de aplicativos;
+- o serviço `systemctl --user enable --now pspstream`, para iniciar com a sessão;
+- a regra de firewall: `sudo ufw allow PSPStream` ou
+  `sudo firewall-cmd --permanent --add-service=pspstream && sudo firewall-cmd --reload`.
+
+A captura KMS vem compilada, mas sem a permissão de ler a tela, que só o
+administrador dá: o `pspstream --setup` oferece o comando
+(`sudo setcap cap_sys_admin+ep /usr/libexec/pspstream/pspstream-kms`).
+
+### 1. PC (pelo código)
 
 O jeito mais simples, em qualquer distribuição:
 
@@ -136,7 +165,8 @@ e a captura é do monitor inteiro (`--kms-monitor 1` escolhe o segundo).
 
 ### 2. PSP
 
-Compile o EBOOT com o [pspdev](https://pspdev.github.io/installation/fedora.html)
+O `PSPStream-EBOOT.zip` das [Releases](https://github.com/k7vinilstorage/PSP-Stream/releases) é o EBOOT pronto. Para compilar,
+use o o [pspdev](https://pspdev.github.io/installation/fedora.html)
 (Fedora abaixo; Ubuntu em [docs/UBUNTU.md](docs/UBUNTU.md#9-compilar-o-eboot-no-ubuntu-opcional)):
 
 ```sh
@@ -476,6 +506,31 @@ PSP-3000 e Fedora 44 com Wi-Fi 802.11b; detalhes e o histórico em
 
 ## Para desenvolvedores
 
+### Builds e releases (GitHub Actions)
+
+`.github/workflows/build.yml`, a cada push e pull request:
+- compila o EBOOT com o pspdev do Ubuntu;
+- roda os testes e o `ruff`;
+- gera o `.deb` (num Ubuntu 22.04) e o `.rpm` (num contêiner Fedora 43), e
+  instala cada um para testar (`packaging/smoke-test.sh`: `--check`, stream
+  com o PSP falso, interface web).
+
+Os arquivos ficam nos "artifacts" da execução. Um push na `main` refaz a
+pré-release `nightly`. Uma versão estável sai de uma tag:
+
+```sh
+# no CHANGELOG.md, "## 1.2 (em desenvolvimento)" vira "## 1.2"; VERSION em
+# server/pspstream.py e PSPSTREAM_VERSION em psp/src/version.h
+git tag v1.2 && git push origin v1.2
+```
+
+A release usa a seção da versão no `CHANGELOG.md` como notas.
+
+Para gerar os pacotes à mão: `packaging/build-deb.sh` (precisa de
+`dpkg-deb`, `gcc`, `make`, `pkg-config` e `libdrm-dev`) e
+`packaging/build-rpm.sh` (`rpm-build`, `gcc`, `make`, `libdrm-devel`). A
+estrutura instalada é a mesma nos dois (`packaging/install-tree.sh`).
+
 ### Testes
 
 ```sh
@@ -535,6 +590,7 @@ server/                servidor (Python 3)
   pspstream.py         sessões, linha de comando, benchmark
   capture.py           monta captura, som e controles (na partida e pela interface web)
   distro.py, doctor.py distribuição e pacotes; --check e --setup
+  paths.py             arquivos no repositório ou instalados pelo pacote
   settings.py          configurações gerais: esquema, server.json, validação
   control.py           aplica as configurações com o servidor rodando
   web.py, web/         interface web (http.server da biblioteca padrão; HTML, CSS e JS sem dependências)
@@ -546,6 +602,8 @@ server/                servidor (Python 3)
   adaptive.py          qualidade adaptativa
   inject.py, gamepad.py, keymap.json   controles (uinput)
   stats.py, sources.py, jpeginfo.py, protocol.py, netcheck.py
+packaging/             .deb e .rpm (install-tree.sh, build-deb.sh, pspstream.spec, build-rpm.sh)
+.github/workflows/     build do EBOOT, testes, pacotes e releases
 tools/                 fake_client.py, emu_*.py/sh, h264_probe_clips.py, kms/ (auxiliar KMS)
 docs/                  PROTOCOL.md, MEASUREMENTS.md, UBUNTU.md (guia), WINDOWS.md (plano do servidor de Windows)
 tests/                 testes do servidor e da interface web

@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=PSPStream
+GenericName=Tela do PC no PSP
+Comment=Transmite a tela e o som do PC para o PSP
+Exec=pspstream
+Terminal=true
+Icon=video-display
+Categories=Network;Game;
+Keywords=PSP;stream;tela;
+Actions=Settings;
+
+[Desktop Action Settings]
+Name=Configurações (no navegador)
+Exec=xdg-open http://localhost:5124

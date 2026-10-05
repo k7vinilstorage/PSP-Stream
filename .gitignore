@@ -20,3 +20,6 @@ __pycache__/
 /tmp/
 *.log
 tools/kms/pspstream-kms
+
+# pacotes (packaging/)
+dist/
