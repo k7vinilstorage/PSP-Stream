@@ -39,8 +39,12 @@ folder with `packaging/windows/gstreamer.py` (nothing installed). It runs
 `packaging/windows/build.py` and tests the packaged `pspstream.exe` with
 `packaging/windows/smoke.py` (`--version`, `--check`, the Portuguese help
 and a stream to the fake PSP with audio and the web interface, in H.264 with
-P frames and in JPEG). A last, informational step tries the real screen
-capture on the runner. The zip goes to the run's artifacts, the `nightly`
+P frames and in JPEG). `packaging/windows/vigem.py` builds
+`ViGEmClient.dll` (the virtual Xbox controller) from ViGEmClient's source at
+a pinned commit, with the runner's Visual Studio. Two last, informational
+steps try the real screen capture on the runner and install the ViGEmBus
+driver (a pinned release, its signature checked) to read the virtual
+controller back through XInput. The zip goes to the run's artifacts, the `nightly`
 pre-release and the releases.
 
 `build.py` runs PyInstaller (`packaging/windows/pspstream.spec`, a folder,

@@ -161,17 +161,42 @@ jobs:
           & "$env:RUNNER_TEMP\gst\bin\gst-launch-1.0.exe" --version
       - name: dependencies
         run: python -m pip install pyinstaller pillow pefile
+      - name: ViGEmClient (virtual Xbox controller)
+        # compilada do código-fonte oficial num commit fixo (packaging/windows/vigem.py)
+        run: python packaging/windows/vigem.py "${{ runner.temp }}\vigem"
       - name: tests
         env:
           PSPSTREAM_GSTREAMER: ${{ env.GST_ROOT }}
+          PSPSTREAM_VIGEMCLIENT: ${{ runner.temp }}\vigem\ViGEmClient.dll
         run: python -m unittest -v tests.test_windows tests.test_docs
       - name: build
-        run: python packaging/windows/build.py --gstreamer "${{ env.GST_ROOT }}" --out dist
+        run: python packaging/windows/build.py --gstreamer "${{ env.GST_ROOT }}" --vigem "${{ runner.temp }}\vigem" --out dist
       - name: test the build
         run: python packaging/windows/smoke.py dist/PSPStream
       - name: screen capture on the runner (informational)
         continue-on-error: true
         run: python packaging/windows/smoke.py dist/PSPStream --screen
+      - name: virtual Xbox controller with the ViGEmBus driver (informational)
+        # instala o driver (versão fixa, assinatura conferida) e lê pelo XInput o que o PSP aperta
+        continue-on-error: true
+        timeout-minutes: 10
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VIGEMBUS_VERSION: v1.22.0
+          PSPSTREAM_VIGEMCLIENT: ${{ runner.temp }}\vigem\ViGEmClient.dll
+          PSPSTREAM_REQUIRE_VIGEM: "1"
+        run: |
+          gh release download $env:VIGEMBUS_VERSION --repo nefarius/ViGEmBus --pattern "*.exe" --dir "$env:RUNNER_TEMP\vigembus"
+          $setup = Get-ChildItem "$env:RUNNER_TEMP\vigembus" -Filter *.exe | Select-Object -First 1
+          "$($setup.Name) sha256 $((Get-FileHash $setup.FullName -Algorithm SHA256).Hash)"
+          $sig = Get-AuthenticodeSignature $setup.FullName
+          "signature: $($sig.Status), $($sig.SignerCertificate.Subject)"
+          if ($sig.Status -ne "Valid" -or $sig.SignerCertificate.Subject -notmatch "Nefarius") { throw "unexpected signature" }
+          $p = Start-Process $setup.FullName -ArgumentList "/quiet", "/norestart" -Wait -PassThru
+          "installer exit code: $($p.ExitCode)"
+          & dist\PSPStream\pspstream.exe --check
+          python -m unittest -v tests.test_windows.ViGEmBusTest
       - uses: actions/upload-artifact@v4
         with:
           name: pspstream-windows
