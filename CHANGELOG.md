@@ -14,9 +14,12 @@ EBOOT with another protocol version is refused with a warning in the log.
   Windows) and reaches the server over local TCP: the screen through
   Desktop Duplication (`--source screen`, `--monitor`), scaled on the GPU
   with a CPU fallback, and the audio through WASAPI loopback. Keyboard and
-  mouse through SendInput; the virtual Xbox controller is not there yet.
+  mouse through SendInput, and the virtual Xbox 360 controller (the `xbox`
+  profiles) through the ViGEmBus driver, which the user installs once
+  (`--setup` opens its page); `vigem\ViGEmClient.dll` is built by CI from
+  ViGEmClient's source.
   `--check` and `--setup` for Windows (GStreamer, openh264, the firewall
-  rule, the network profile, Cisco's openh264 DLL). The protocol, P
+  rule, the network profile, Cisco's openh264 DLL, ViGEmBus). The protocol, P
   frames, adaptive quality, web interface and translations are the same
   as on Linux. CI tests the packaged exe against the fake PSP; it was not
   tested on a real PC with a PSP yet.

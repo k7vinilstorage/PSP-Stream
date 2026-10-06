@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT / "server"))
 
 import gst_pipe  # noqa: E402
 import imaging  # noqa: E402
+import win_gamepad  # noqa: E402
 import win_input  # noqa: E402
 
 WINDOWS = sys.platform == "win32"
@@ -241,7 +242,25 @@ class WindowsOptionsTest(unittest.TestCase):
         self.assertIn("monitor", got["keys"])
         self.assertNotIn("kms_monitor", got["keys"])
         self.assertNotIn("wolf_target", got["keys"])
-        self.assertEqual(got["profiles"], ["arrows", "desktop", "game"])
+        self.assertEqual(got["profiles"], ["arrows", "desktop", "game", "xbox", "xbox-camera", "xbox-shoulders"])
+
+    def test_xbox_profile_needs_vigem(self):
+        # sem a DLL (ou, com ela, sem o driver) o perfil xbox não abre: o servidor segue sem controles
+        got = self.run_as_windows(
+            "import os, pspstream, capture\n"
+            "a = pspstream.build_parser().parse_args(['--profile', 'xbox'])\n"
+            "try:\n"
+            "    capture.open_injector(a)[0].close()\n"
+            "    err = ''\n"
+            "except RuntimeError as exc:\n"
+            "    err = str(exc)\n"
+            "a = pspstream.build_parser().parse_args(['--profile', 'xbox', '--input-dry-run'])\n"
+            "inj, kind = capture.open_injector(a)\n"
+            "inj.close()\n"
+            "print(json.dumps({'error': err, 'kind': kind}))")
+        if got["error"]:
+            self.assertIn("ViGEm", got["error"])
+        self.assertEqual(got["kind"], "virtual Xbox 360 controller")
 
     def test_linux_keeps_its_options(self):
         if WINDOWS:
@@ -249,6 +268,185 @@ class WindowsOptionsTest(unittest.TestCase):
         import settings
         self.assertEqual(settings.BY_KEY["source"].choices[0], "portal")
         self.assertNotIn("monitor", settings.BY_KEY)
+
+
+class FakeViGEm:
+    """A ViGEmClient.dll de mentira: registra as chamadas e os relatórios."""
+
+    def __init__(self, connect=win_gamepad.NONE, add=win_gamepad.NONE):
+        self.connect, self.add, self.calls, self.reports = connect, add, [], []
+
+    def vigem_alloc(self):
+        self.calls.append("alloc")
+        return 1
+
+    def vigem_free(self, client):
+        self.calls.append("free")
+
+    def vigem_connect(self, client):
+        self.calls.append("connect")
+        return self.connect
+
+    def vigem_disconnect(self, client):
+        self.calls.append("disconnect")
+
+    def vigem_target_x360_alloc(self):
+        self.calls.append("target_alloc")
+        return 2
+
+    def vigem_target_free(self, target):
+        self.calls.append("target_free")
+
+    def vigem_target_add(self, client, target):
+        self.calls.append("add")
+        return self.add
+
+    def vigem_target_remove(self, client, target):
+        self.calls.append("remove")
+        return win_gamepad.NONE
+
+    def vigem_target_x360_update(self, client, target, report):
+        self.reports.append({name: getattr(report, name) for name, _ in report._fields_})
+        return win_gamepad.NONE
+
+    def vigem_target_x360_get_user_index(self, client, target, index):
+        index._obj.value = 0
+        return win_gamepad.NONE
+
+
+def xbox_profile():
+    from inject import load_profile
+    return load_profile(str(ROOT / "server" / "keymap.json"), "xbox")
+
+
+class ViGEmReportTest(unittest.TestCase):
+    """O estado do GamepadInjector como o XUSB_REPORT do ViGEm (o XINPUT_GAMEPAD)."""
+
+    def test_layout(self):
+        r = win_gamepad.XUSB_REPORT
+        self.assertEqual(ctypes.sizeof(r), 12)
+        self.assertEqual([getattr(r, f).offset for f in ("wButtons", "bLeftTrigger", "bRightTrigger", "sThumbLX",
+                                                          "sThumbLY", "sThumbRX", "sThumbRY")], [0, 2, 3, 4, 6, 8, 10])
+
+    def test_buttons_and_axes(self):
+        from gamepad import GamepadInjector
+        state = GamepadInjector._neutral()
+        self.assertEqual(bytes(win_gamepad.report(state)), bytes(12))
+        state.update({("key", "BTN_A"): 1, ("key", "BTN_SELECT"): 1, ("abs", "ABS_Z"): 255,
+                      ("abs", "ABS_X"): 32767, ("abs", "ABS_Y"): -32767,   # evdev: Y negativo = para cima
+                      ("abs", "ABS_RY"): 32767, ("abs", "ABS_HAT0X"): -1, ("abs", "ABS_HAT0Y"): 1})
+        r = win_gamepad.report(state)
+        self.assertEqual(r.wButtons, 0x1000 | 0x0020 | 0x0004 | 0x0002)  # A, BACK, esquerda, baixo
+        self.assertEqual((r.bLeftTrigger, r.bRightTrigger), (255, 0))
+        self.assertEqual((r.sThumbLX, r.sThumbLY, r.sThumbRX, r.sThumbRY), (32767, 32767, 0, -32767))
+
+    def test_every_button(self):
+        from gamepad import BUTTON_CODES
+        bits = {"A": 0x1000, "B": 0x2000, "X": 0x4000, "Y": 0x8000, "LB": 0x0100, "RB": 0x0200, "BACK": 0x0020,
+                "START": 0x0010, "GUIDE": 0x0400, "L3": 0x0040, "R3": 0x0080}  # XINPUT_GAMEPAD_*
+        self.assertEqual(set(bits), set(BUTTON_CODES))
+        for name, bit in bits.items():
+            self.assertEqual(win_gamepad.report({("key", BUTTON_CODES[name]): 1}).wButtons, bit, name)
+
+    def test_injector_to_vigem(self):
+        from gamepad import GamepadInjector
+        from inject import PSP_BUTTONS as B
+        lib = FakeViGEm()
+        pad = win_gamepad.ViGEmPad(lib)
+        self.assertEqual(lib.calls, ["alloc", "connect", "target_alloc", "add"])
+        self.assertEqual(pad.user_index(), 0)
+        inj = GamepadInjector(xbox_profile(), timeout=0, out=pad)
+        try:
+            inj.update(B["CROSS"] | B["L"], 255, 128)          # A, LT e o analógico todo para a direita
+            last = lib.reports[-1]
+            self.assertEqual(last["wButtons"], 0x1000)
+            self.assertEqual(last["bLeftTrigger"], 255)
+            self.assertEqual((last["sThumbLX"], last["sThumbLY"]), (32767, 0))
+            inj.update(B["CROSS"] | B["L"], 128, 0)            # para cima no PSP = Y positivo no XInput
+            self.assertEqual((lib.reports[-1]["sThumbLX"], lib.reports[-1]["sThumbLY"]), (0, 32767))
+            inj.update(B["SELECT"], 128, 128)
+            inj.update(B["SELECT"] | B["CROSS"], 128, 128)     # a camada do SELECT: X vira L3
+            self.assertEqual(lib.reports[-1]["wButtons"], 0x0040)
+            inj.update(0, 128, 128)
+            self.assertEqual(lib.reports[-1], {"wButtons": 0, "bLeftTrigger": 0, "bRightTrigger": 0, "sThumbLX": 0,
+                                               "sThumbLY": 0, "sThumbRX": 0, "sThumbRY": 0})
+        finally:
+            inj.close()
+        self.assertEqual(lib.calls[-4:], ["remove", "target_free", "disconnect", "free"])
+        pad.close()  # de novo: nada
+        self.assertEqual(lib.calls.count("remove"), 1)
+
+    def test_errors(self):
+        lib = FakeViGEm(connect=win_gamepad.BUS_NOT_FOUND)
+        with self.assertRaisesRegex(RuntimeError, "ViGEmBus driver is not installed"):
+            win_gamepad.ViGEmPad(lib)
+        self.assertEqual(lib.calls, ["alloc", "connect", "free"])
+        lib = FakeViGEm(add=win_gamepad.NO_FREE_SLOT)
+        with self.assertRaisesRegex(RuntimeError, "no free controller slot"):
+            win_gamepad.ViGEmPad(lib)
+        self.assertEqual(lib.calls, ["alloc", "connect", "target_alloc", "add", "target_free", "disconnect", "free"])
+
+
+@unittest.skipUnless(WINDOWS, "só no Windows")
+class ViGEmBusTest(unittest.TestCase):
+    """O controle virtual de verdade, lido de volta pelo XInput. Precisa da ViGEmClient.dll e do driver
+    ViGEmBus; sem eles, pula (PSPSTREAM_REQUIRE_VIGEM=1 faz falhar)."""
+
+    def setUp(self):
+        self.status, self.detail = win_gamepad.bus_status()
+        if os.environ.get("PSPSTREAM_REQUIRE_VIGEM") and self.status != "ok":
+            self.fail(self.detail)
+
+    def test_without_driver(self):
+        if self.status != "no-bus":
+            self.skipTest(self.status)
+        with self.assertRaisesRegex(RuntimeError, "ViGEmBus driver is not installed"):
+            win_gamepad.ViGEmPad()
+
+    def test_xinput(self):
+        if self.status != "ok":
+            self.skipTest(self.detail)
+        from gamepad import GamepadInjector
+        from inject import PSP_BUTTONS as B
+
+        class XINPUT_STATE(ctypes.Structure):
+            _fields_ = [("dwPacketNumber", ctypes.c_uint32), ("Gamepad", win_gamepad.XUSB_REPORT)]
+
+        xinput = ctypes.WinDLL("xinput1_4")
+        xinput.XInputGetState.argtypes = (ctypes.c_uint32, ctypes.POINTER(XINPUT_STATE))
+        xinput.XInputGetState.restype = ctypes.c_uint32
+
+        def read(index):
+            st = XINPUT_STATE()
+            return st.Gamepad if xinput.XInputGetState(index, ctypes.byref(st)) == 0 else None
+
+        def wait_for(index, check):
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                pad = read(index)
+                if pad is not None and check(pad):
+                    return pad
+                time.sleep(0.02)
+            self.fail(f"XInput {index}: {read(index) and bytes(read(index)).hex()}")
+
+        pad = win_gamepad.ViGEmPad()
+        inj = GamepadInjector(xbox_profile(), timeout=0, out=pad)
+        try:
+            deadline = time.monotonic() + 3
+            while pad.user_index() is None and time.monotonic() < deadline:
+                time.sleep(0.05)
+            index = pad.user_index()
+            self.assertIsNotNone(index, "the Xbox controller got no XInput number")
+            inj.update(B["CROSS"] | B["R"], 255, 128)
+            got = wait_for(index, lambda g: g.wButtons & 0x1000)
+            self.assertEqual(got.bRightTrigger, 255)
+            self.assertGreater(got.sThumbLX, 30000)
+            inj.update(0, 128, 128)
+            wait_for(index, lambda g: g.wButtons == 0 and g.sThumbLX == 0)
+        finally:
+            inj.close()
+        time.sleep(0.5)
+        self.assertIsNone(read(index), "the controller is still there after close()")
 
 
 @unittest.skipUnless(HAS_GST and openh264_ok(), "sem o gst-launch ou a libopenh264")

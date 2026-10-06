@@ -145,7 +145,7 @@ SETTINGS = (
             flag="--audio-mono", show_if=("audio", (True,))),
     # Controles
     Setting("input", "no_input", "bool", N_("Controls"), N_("PSP controls on the PC"),
-            N_("Keyboard and mouse through SendInput. The virtual Xbox controller is not available on Windows yet.")
+            N_("Keyboard and mouse through SendInput; the xbox profiles need the ViGEmBus driver (pspstream --setup).")
             if WINDOWS else N_("Needs access to /dev/uinput (PSPStream wiki, Installation)."), "input", invert=True,
             flag="--no-input"),
     Setting("profile", "profile", "choice", N_("Controls"), N_("Profile"),

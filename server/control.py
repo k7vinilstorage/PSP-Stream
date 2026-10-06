@@ -30,15 +30,13 @@ ADAPTIVE_KEYS = ("adaptive", "target_fps", "q_min", "q_max")
 
 
 def keymap_profiles(path) -> dict:
-    """Perfis do keymap.json: nome -> 'gamepad' ou 'keyboard'. No Windows, só os de teclado e mouse
-    (o controle de Xbox virtual ainda não existe lá)."""
+    """Perfis do keymap.json: nome -> 'gamepad' ou 'keyboard'."""
     try:
         data = json.loads(Path(path).read_text())
     except (OSError, ValueError):
         return {}
-    kinds = {name: "gamepad" if p.get("type") == "gamepad" else "keyboard"
-             for name, p in data.items() if not name.startswith("_") and isinstance(p, dict)}
-    return {k: v for k, v in kinds.items() if v == "keyboard"} if settings.WINDOWS else kinds
+    return {name: "gamepad" if p.get("type") == "gamepad" else "keyboard"
+            for name, p in data.items() if not name.startswith("_") and isinstance(p, dict)}
 
 
 def audio_sources() -> list:

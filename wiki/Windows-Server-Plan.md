@@ -1,4 +1,4 @@
-Status: **phases W0-W2 and the keyboard/mouse half of W3 are implemented**
+Status: **phases W0-W3 are implemented**
 (experimental; how to use it: [Windows](Windows)). This page is the plan,
 kept as the record of the decisions. What was done, against the plan:
 
@@ -9,7 +9,7 @@ kept as the record of the decisions. What was done, against the plan:
 | `wasapi2src loopback=true` + `adpcmenc` | yes |
 | JPEG with Pillow | yes (`server/imaging.py`, with the limited/full range conversion) |
 | `SendInput` with scancodes | yes (`server/win_input.py`) |
-| ViGEm (Xbox controller) | not yet |
+| ViGEm (Xbox controller) | yes (`server/win_gamepad.py`), but with the ViGEmClient DLL through ctypes instead of `vgamepad`: the same `GamepadInjector` and profiles as on Linux, with `vigem\ViGEmClient.dll` built by CI from the source (`packaging/windows/vigem.py`). The driver is installed by the user (`--setup` opens its page) |
 | PyInstaller folder + GStreamer subset | yes, as a zip built by CI (`packaging/windows/`); no Inno Setup installer or tray icon yet |
 | openh264: Cisco's DLL downloaded on first use | `pspstream --setup` downloads it; the bundled GStreamer's `openh264-7.dll` is used when there is no other |
 | CI on `windows-latest` | yes: the Windows tests, the build and a stream from the packaged exe to the fake PSP |
