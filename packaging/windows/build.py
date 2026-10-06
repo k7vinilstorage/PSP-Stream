@@ -4,7 +4,7 @@ reduzido, os textos) e dist/PSPStream-Windows-x64.zip.
   python packaging/windows/build.py --gstreamer C:\\caminho\\do\\gstreamer\\1.0\\msvc_x86_64
 
 Usado pelo CI (.github/workflows/build.yml, job windows). Precisa de
-pyinstaller, pillow e pefile (pip). O GStreamer é o runtime oficial (MSVC
+pyinstaller, pillow, pefile e truststore (pip). O GStreamer é o runtime oficial (MSVC
 64 bits): o do instalador ou o das wheels do PyPI juntadas por gstreamer.py;
 daqui só vão os plugins que o servidor usa e as DLLs de que eles dependem,
 achadas pela tabela de importações de cada arquivo (~20 MB em vez de ~300).
@@ -110,6 +110,7 @@ This folder bundles third-party software:
 
 - Python {python} (PSF License), packaged with PyInstaller.
 - Pillow (MIT-CMU License): JPEG and still images.
+- truststore (MIT): HTTPS downloads (--setup) checked with Windows' own certificates.
 - GStreamer {gst} (LGPL-2.1 or later), only the plugins PSPStream uses and the
   libraries they need, unmodified, from the official Windows binaries
   (https://gstreamer.freedesktop.org/download/, also published on PyPI as

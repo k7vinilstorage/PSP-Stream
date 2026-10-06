@@ -10,7 +10,8 @@ kept as the record of the decisions. What was done, against the plan:
 | JPEG with Pillow | yes (`server/imaging.py`, with the limited/full range conversion) |
 | `SendInput` with scancodes | yes (`server/win_input.py`) |
 | ViGEm (Xbox controller) | yes (`server/win_gamepad.py`), but with the ViGEmClient DLL through ctypes instead of `vgamepad`: the same `GamepadInjector` and profiles as on Linux, with `vigem\ViGEmClient.dll` built by CI from the source (`packaging/windows/vigem.py`). The driver is installed once by `--setup` (the official installer, pinned version and SHA-256, run as administrator) |
-| PyInstaller folder + GStreamer subset | yes, as a zip built by CI (`packaging/windows/`); no Inno Setup installer or tray icon yet |
+| PyInstaller folder + GStreamer subset | yes, as a zip built by CI (`packaging/windows/`) |
+| Inno Setup installer | yes (`packaging/windows/pspstream.iss`): firewall rules, the ViGEmBus driver (downloaded with its SHA-256 checked), Start menu, English and Portuguese; CI installs, tests and uninstalls it. No tray icon or "start with Windows" yet |
 | openh264: Cisco's DLL downloaded on first use | `pspstream --setup` downloads it; the bundled GStreamer's `openh264-7.dll` is used when there is no other |
 | CI on `windows-latest` | yes: the Windows tests, the build and a stream from the packaged exe to the fake PSP |
 | `timeBeginPeriod(1)` | not needed: Python 3.11+ already sleeps with a high-resolution timer |

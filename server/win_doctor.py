@@ -206,13 +206,27 @@ def add_firewall_rule(port: int) -> bool:
     return firewall_rule_exists()
 
 
+def _download(url: str, timeout: float) -> bytes:
+    """HTTPS conferido pelos certificados do próprio Windows (truststore). O OpenSSL do Python só enxerga
+    as raízes já gravadas no Windows, e o Windows baixa as que faltam só quando a API dele confere a
+    cadeia: num PC que nunca abriu o site, o urlopen comum falha com "unable to get local issuer
+    certificate"."""
+    import ssl
+    try:
+        import truststore
+        context = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    except ImportError:
+        context = ssl.create_default_context()
+    with urllib.request.urlopen(url, timeout=timeout, context=context) as resp:  # noqa: S310 - endereço fixo
+        return resp.read()
+
+
 def download_vigembus(dest_dir: Path = None) -> Path:
     """Baixa o instalador do ViGEmBus e confere o SHA-256. RuntimeError se não bater."""
     import openh264
     dest_dir = dest_dir or openh264.user_lib_dir().parent
     dest_dir.mkdir(parents=True, exist_ok=True)
-    with urllib.request.urlopen(VIGEMBUS_URL, timeout=120) as resp:  # noqa: S310 - endereço fixo, https
-        data = resp.read()
+    data = _download(VIGEMBUS_URL, 120)
     digest = hashlib.sha256(data).hexdigest()
     if digest != VIGEMBUS_SHA256:
         raise RuntimeError(tr("the downloaded file does not match the expected checksum ({digest})").format(
@@ -240,8 +254,7 @@ def download_openh264(dest_dir: Path = None) -> Path:
     import openh264
     dest_dir = dest_dir or openh264.user_lib_dir()
     dest_dir.mkdir(parents=True, exist_ok=True)
-    with urllib.request.urlopen(OPENH264_URL, timeout=60) as resp:  # noqa: S310 - endereço fixo, https
-        packed = resp.read()
+    packed = _download(OPENH264_URL, 60)
     digest = hashlib.sha256(packed).hexdigest()
     if OPENH264_SHA256 and digest != OPENH264_SHA256:
         raise RuntimeError(tr("the downloaded file does not match the expected checksum ({digest})").format(

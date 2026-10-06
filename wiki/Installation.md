@@ -20,7 +20,8 @@ In [Releases](https://github.com/k7vinilstorage/PSP-Stream/releases), with nothi
 | `PSPStream-EBOOT.zip` | the PSP app: copy the `PSP` folder to the root of the memory stick |
 | `pspstream_*.deb` | server for Ubuntu 22.04+ and Debian 12+: `sudo apt install ./pspstream_*.deb` |
 | `pspstream-*.rpm` | server for Fedora: `sudo dnf install ./pspstream-*.rpm` |
-| `PSPStream-Windows-x64.zip` | server for Windows 10/11, experimental: unzip and run `pspstream.exe` ([Windows](Windows)) |
+| `PSPStream-Setup-x64.exe` | server for Windows 10/11, experimental: the installer, with the firewall rule and the Xbox controller driver ([Windows](Windows)) |
+| `PSPStream-Windows-x64.zip` | the same, portable: unzip and run `pspstream.exe` |
 
 The most recent release is the stable version
 ([EBOOT directly](https://github.com/k7vinilstorage/PSP-Stream/releases/latest/download/PSPStream-EBOOT.zip)).

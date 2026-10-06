@@ -160,7 +160,7 @@ jobs:
           "GST_ROOT=$env:RUNNER_TEMP\gst" >> $env:GITHUB_ENV
           & "$env:RUNNER_TEMP\gst\bin\gst-launch-1.0.exe" --version
       - name: dependencies
-        run: python -m pip install pyinstaller pillow pefile
+        run: python -m pip install pyinstaller pillow pefile truststore
       - name: ViGEmClient (virtual Xbox controller)
         # compilada do código-fonte oficial num commit fixo (packaging/windows/vigem.py)
         run: python packaging/windows/vigem.py "${{ runner.temp }}\vigem"
@@ -173,6 +173,34 @@ jobs:
         run: python packaging/windows/build.py --gstreamer "${{ env.GST_ROOT }}" --vigem "${{ runner.temp }}\vigem" --out dist
       - name: test the build
         run: python packaging/windows/smoke.py dist/PSPStream
+      - name: installer (Inno Setup)
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue) -and -not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --no-progress -y
+          }
+          python packaging/windows/installer.py
+      - name: test the installer
+        # instala calado em Arquivos de Programas (caminho com espaço, como num PC), roda o smoke test no
+        # que foi instalado, confere a regra do firewall e desinstala
+        shell: pwsh
+        run: |
+          $log = "$env:RUNNER_TEMP\setup.log"
+          $p = Start-Process dist\PSPStream-Setup-x64.exe -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/TASKS=firewall", "/LOG=`"$log`"" -Wait -PassThru
+          if ($p.ExitCode) { Get-Content $log -Tail 60; exit $p.ExitCode }
+          $app = "$env:ProgramFiles\PSPStream"
+          Get-ChildItem $app | Select-Object -ExpandProperty Name
+          python packaging/windows/smoke.py $app
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          netsh advfirewall firewall show rule name=PSPStream
+          if ($LASTEXITCODE) { throw "no firewall rule after installing" }
+          $p = Start-Process "$app\unins000.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -PassThru
+          "uninstall exit code: $($p.ExitCode)"
+          netsh advfirewall firewall show rule name=PSPStream | Out-Null
+          if ($LASTEXITCODE -eq 0) { throw "the firewall rule is still there after uninstalling" }
+          if (Test-Path "$app\pspstream.exe") { throw "pspstream.exe is still there after uninstalling" }
+          "installed, tested and uninstalled"
+          exit 0
       - name: screen capture on the runner (informational)
         continue-on-error: true
         run: python packaging/windows/smoke.py dist/PSPStream --screen
@@ -190,7 +218,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: pspstream-windows
-          path: dist/PSPStream-Windows-x64.zip
+          path: |
+            dist/PSPStream-Windows-x64.zip
+            dist/PSPStream-Setup-x64.exe
           if-no-files-found: error
 
   release:
@@ -211,7 +241,7 @@ jobs:
         run: |
           mkdir -p out
           (cd artifacts/PSPStream-EBOOT && zip -qr ../../out/PSPStream-EBOOT.zip PSP)
-          cp artifacts/pspstream-deb/*.deb artifacts/pspstream-rpm/*.rpm artifacts/pspstream-windows/*.zip out/
+          cp artifacts/pspstream-deb/*.deb artifacts/pspstream-rpm/*.rpm artifacts/pspstream-windows/*.zip artifacts/pspstream-windows/*.exe out/
           ls -l out
       - name: stable release (tag)
         if: startsWith(github.ref, 'refs/tags/v')
@@ -239,7 +269,8 @@ jobs:
           - **PSPStream-EBOOT.zip**: copy the PSP folder to the root of the memory stick.
           - **.deb** (Ubuntu 22.04+, Debian 12+): \`sudo apt install ./pspstream_*.deb\`
           - **.rpm** (Fedora): \`sudo dnf install ./pspstream-*.rpm\`
-          - **PSPStream-Windows-x64.zip** (Windows 10/11, experimental): unzip and run \`pspstream.exe\`
+          - **PSPStream-Setup-x64.exe** (Windows 10/11, experimental): the installer (firewall, Xbox controller driver, Start menu)
+          - **PSPStream-Windows-x64.zip**: the same, portable: unzip and run \`pspstream.exe\`
           NOTES
           gh release create nightly out/* --prerelease --target "$GITHUB_SHA" \
             --title "Development (main, ${GITHUB_SHA::7})" --notes-file notes.md
