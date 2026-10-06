@@ -1,0 +1,45 @@
+# Só o PSPStream, para quem já tem o Wolf rodando (em outra stack do
+# Portainer ou outro compose). No serviço do Wolf, acrescente antes:
+#
+#     environment:
+#       - WOLF_SOCKET_PATH=/var/run/wolf/wolf.sock
+#     volumes:
+#       - /var/run/wolf:/var/run/wolf
+#
+# Passo a passo: docs/WOLF.md, "Já tenho o Wolf".
+
+services:
+  pspstream:
+    image: ${PSPSTREAM_IMAGE:-ghcr.io/k7vinilstorage/pspstream:nightly}
+    # O PSP fala com a porta 5123 do servidor, e o Wolf manda a imagem e o som
+    # para 127.0.0.1: a rede do host, como o Wolf.
+    network_mode: host
+    restart: unless-stopped
+    # O socket do Wolf é só do root (o Wolf UI também roda como root). O uid é
+    # 0, mas sem nenhuma capability, sem ganhar privilégios e só leitura.
+    user: "0:0"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - /var/run/wolf:/var/run/wolf:ro
+      - pspstream-config:/config
+    environment:
+      - WOLF_SOCKET_PATH=/var/run/wolf/wolf.sock
+      - WOLF_VIDEO_PING_PORT=${WOLF_VIDEO_PING_PORT:-48100}
+      - WOLF_AUDIO_PING_PORT=${WOLF_AUDIO_PING_PORT:-48200}
+      - PSPSTREAM_VIDEO_CONVERT=${PSPSTREAM_VIDEO_CONVERT:-auto}
+      - PSPSTREAM_WOLF_TARGET=${PSPSTREAM_WOLF_TARGET:-}
+      - PSPSTREAM_WOLF_PIN=${PSPSTREAM_WOLF_PIN:-}
+      - PSPSTREAM_PROFILE=${PSPSTREAM_PROFILE:-xbox}
+      - PSPSTREAM_WEB=${PSPSTREAM_WEB:-127.0.0.1:5124}
+      - PSPSTREAM_WEB_PASSWORD=${PSPSTREAM_WEB_PASSWORD:-}
+      - PSPSTREAM_WEB_HOSTS=${PSPSTREAM_WEB_HOSTS:-}
+    command: ["--source", "wolf"]
+
+volumes:
+  pspstream-config:

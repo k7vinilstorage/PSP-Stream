@@ -12,7 +12,8 @@ work=$(mktemp -d)
 pspstream --source static --codec "$codec" --no-input --no-audio --port 5600 --web 127.0.0.1:5601 \
     --config "$work/server.json" > "$work/server.log" 2>&1 &
 srv=$!
-trap 'kill $srv 2>/dev/null || true; cat "$work/server.log"; rm -rf "$work"' EXIT
+# espera o servidor sair (no SIGTERM ele encerra como no Ctrl+C): a próxima rodada usa a mesma porta
+trap 'kill $srv 2>/dev/null || true; wait $srv 2>/dev/null || true; cat "$work/server.log"; rm -rf "$work"' EXIT
 sleep 3
 python3 "$root/tools/fake_client.py" --port 5600 --transport udp --h264p --seconds 3 --json > "$work/fake.json"
 python3 - "$work/fake.json" <<'PY'

@@ -106,14 +106,17 @@ def default_monitor() -> str:
     return "@DEFAULT_MONITOR@"
 
 
-def available() -> bool:
-    return all(Gst.ElementFactory.find(e) for e in ("pulsesrc", "adpcmenc", "audioresample"))
+def available(pulse: bool = True) -> bool:
+    """pulse=False: o som do Wolf, que chega por TCP (sem o pulsesrc)."""
+    need = ("pulsesrc", "adpcmenc", "audioresample") if pulse else ("adpcmenc", "audioresample", "tcpserversrc")
+    return all(Gst.ElementFactory.find(e) for e in need)
 
 
-def build_pipeline(device: str, rate: int, channels: int, align: int) -> str:
-    if device == "test":  # tom de 440 Hz (testes, sem PipeWire)
+def build_pipeline(device: str, rate: int, channels: int, align: int, src=None) -> str:
+    """src: elementos da fonte no lugar do pulsesrc (o som do Wolf chega por tcpserversrc ! gdpdepay)."""
+    if not src and device == "test":  # tom de 440 Hz (testes, sem PipeWire)
         src = "audiotestsrc is-live=true wave=sine freq=440 volume=0.3"
-    else:
+    elif not src:
         # latency-time = tamanho de cada leitura (us): 10 ms, menos que o bloco de 20 ms
         src = f'pulsesrc device="{device}" client-name=PSPStream buffer-time=40000 latency-time=10000'
     return (
@@ -129,14 +132,14 @@ class AudioCapture:
     na thread do GStreamer: listener(seq, pos, taxa, canais, amostras, bloco)."""
 
     def __init__(self, device: str = "monitor", rate: int = DEFAULT_RATE, channels: int = 2,
-                 packet_ms: float = PACKET_MS):
-        self.device = default_monitor() if device == "monitor" else device
+                 packet_ms: float = PACKET_MS, src=None):
+        self.device = default_monitor() if device == "monitor" and not src else device
         self.rate, self.channels = rate, channels
         self.samples = block_samples(rate, packet_ms)
         self.align = block_align(self.samples, channels)
         if self.align > MAX_BLOCK:
             raise ValueError(f"bloco de {self.align} bytes não cabe num pacote: diminua --audio-ms")
-        self.pipeline = Gst.parse_launch(build_pipeline(self.device, rate, channels, self.align))
+        self.pipeline = Gst.parse_launch(build_pipeline(self.device, rate, channels, self.align, src))
         self.pipeline.get_by_name("sink").connect("new-sample", self._on_sample)
         self.listeners = []
         self.lock = threading.Lock()
@@ -200,11 +203,15 @@ class AudioCapture:
                 continue
             if msg.type == Gst.MessageType.ERROR:
                 err, dbg = msg.parse_error()
-                self.failed = f"{err.message} ({dbg})"
+                self._ended(f"{err.message} ({dbg})")
             else:
-                self.failed = "fim do stream (EOS)"
-            log.warning("som parou: %s (o vídeo continua)", self.failed)
+                self._ended("fim do stream (EOS)")
             return
+
+    def _ended(self, reason: str) -> None:
+        """A captura parou (erro ou EOS). A do Wolf trata o fim esperado sem o aviso."""
+        self.failed = reason
+        log.warning("som parou: %s (o vídeo continua)", reason)
 
     def start(self) -> None:
         if self.pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:

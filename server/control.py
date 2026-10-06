@@ -54,6 +54,16 @@ def audio_sources() -> list:
     return names
 
 
+def wolf_lobbies(socket_path) -> list:
+    """Nomes dos lobbies abertos no Wolf, para sugerir o alvo (vazio se o Wolf não responde)."""
+    from wolf_api import WolfApi, WolfApiError
+    try:
+        lobbies = WolfApi(socket_path, timeout=1.0).lobbies()
+    except WolfApiError:
+        return []
+    return [str(lb.get("name") or lb.get("id")) for lb in lobbies]
+
+
 class Controller:
     def __init__(self, args, store, server, udp_sock, explicit=(), version="", ip_fn=None, input_note="",
                  audio_note=""):
@@ -80,10 +90,21 @@ class Controller:
 
     def choices(self, setting):
         if setting.key == "source":
-            return setting.choices + (("gst",) if getattr(self.args, "gst_src", None) else ())
+            choices = tuple(c for c in setting.choices if c != "wolf" or self._wolf_available())
+            return choices + (("gst",) if getattr(self.args, "gst_src", None) else ())
+        if setting.key == "wolf_video_convert":  # elementos dados na linha de comando: o valor atual vale
+            current = getattr(self.args, "wolf_video_convert", "auto")
+            return setting.choices + (() if current in setting.choices else (current,))
         if setting.key == "profile":
             return tuple(keymap_profiles(self.args.keymap))
         return setting.choices
+
+    def _wolf_available(self) -> bool:
+        """A opção "wolf" só aparece se o socket da API existe (ou se já é a fonte)."""
+        if self.args.source == "wolf":
+            return True
+        path = getattr(self.args, "wolf_socket", "")
+        return bool(path) and Path(path).exists()
 
     def config(self) -> dict:
         """Esquema + valores, para montar a página."""
@@ -95,7 +116,9 @@ class Controller:
             if s.kind == "choice":
                 item["choices"] = list(self.choices(s))
             if s.key == "audio_device":
-                item["suggestions"] = audio_sources()
+                item["suggestions"] = audio_sources() + (["wolf"] if self._wolf_available() else [])
+            if s.key == "wolf_target" and self._wolf_available():
+                item["suggestions"] = wolf_lobbies(self.args.wolf_socket)
             if s.min is not None:
                 item["min"] = s.min
             if s.max is not None:
@@ -118,6 +141,7 @@ class Controller:
             "capture": {"source": args.source, "codec": args.codec, "fps_limit": args.fps,
                         "quality": src.quality, "failed": getattr(src, "failed", None)},
             "audio": None,
+            "wolf": src.status() if hasattr(src, "status") else None,
             "input": {"on": server.injector is not None, "profile": args.profile, "note": self.input_note},
             "psp": None,
         }
@@ -228,6 +252,7 @@ class Controller:
 
     def _restart_capture(self, part: dict) -> None:
         old_args, new = self.args, self._candidate(part)
+        old_source = old_args.source
         if "codec" in part:
             new.codec = new.codec_choice
             err = capture.resolve_codec(new)
@@ -260,6 +285,42 @@ class Controller:
         if old_args.source == "portal" and not same_portal and getattr(old, "keepalive", None) is not None:
             old.keepalive.close()  # sessão do portal que ninguém mais usa
         log.info("captura: %s, %s, até %d fps", new.source, new.codec, new.fps)
+        if "wolf" in (old_source, self.args.source):
+            self._follow_source_audio()
+            self._follow_source_input()
+
+    def _follow_source_input(self) -> None:
+        """Com o Wolf, os controles vão pela API; sem ele, pelo /dev/uinput: trocam junto com a captura."""
+        old = self.server.injector
+        if old is None and self.args.no_input:
+            return
+        injector, kind = None, "desligados"
+        if not self.args.no_input:
+            try:
+                injector, kind = capture.open_injector(self.args)
+            except RuntimeError as exc:
+                kind = f"desativados: {exc}"
+                log.warning("controles desativados: %s", exc)
+        self.server.set_injector(injector)
+        if old is not None:
+            old.release_all()
+            old.close()
+        self.input_note = kind
+
+    def _follow_source_audio(self) -> None:
+        """O som do Wolf vem da sessão da captura do Wolf: troca junto com ela."""
+        if self.args.no_audio:
+            return
+        old = self.server.audio
+        try:
+            cap = capture.open_audio(self.args, seq0=old.seq if old is not None else 0)
+        except RuntimeError as exc:
+            cap = None
+            self.audio_note = f"a captura não abriu: {exc}"
+            log.warning("som desativado: %s", exc)
+        self.server.set_audio(cap)
+        if old is not None:
+            old.stop()
 
     def _apply_live(self, part: dict) -> None:
         self._commit(self.args, part)

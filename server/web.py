@@ -7,20 +7,29 @@ no servidor de Windows. A página (web/) lê /api/config uma vez e
 
 Por padrão escuta só no próprio PC (127.0.0.1). Proteções, porque qualquer
 site aberto no navegador consegue mandar pedidos para o localhost:
-  - Host: só "localhost", o nome do PC ou um IP. Um domínio qualquer que
-    aponte para 127.0.0.1 (DNS rebinding) é recusado.
+  - Host: só "localhost", o nome do PC, um IP ou um nome liberado com
+    --web-allow-host (ex.: um do DNS do roteador). Um domínio qualquer
+    que aponte para 127.0.0.1 (DNS rebinding) é recusado.
+  - Senha (PSPSTREAM_WEB_PASSWORD): autenticação básica do HTTP em tudo,
+    página e API, com espera de 1 s a cada senha errada. Ela vai em texto
+    (HTTP): serve para a rede de casa.
   - POST: só com Content-Type application/json (um site de fora não manda
     isso sem a permissão do CORS, que este servidor nunca dá) e com Origin,
     se houver, igual ao Host.
   - Nada aqui recebe caminho de arquivo nem pipeline do GStreamer; o nome da
     fonte de som é conferido (settings.AUDIO_DEVICE_RE).
-Com --web 0.0.0.0:5124, qualquer um na rede local muda as configurações.
+Com --web 0.0.0.0:5124 e sem senha, qualquer um na rede local muda as
+configurações.
 """
+import base64
+import binascii
+import hmac
 import ipaddress
 import json
 import logging
 import socket
 import threading
+import time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -83,16 +92,24 @@ def parse_addr(text: str):
     return host, port
 
 
-def host_allowed(host: str) -> bool:
-    """Cabeçalho Host aceito: localhost, o nome deste PC ou um IP (sem domínios)."""
-    if not host:
-        return False
+AUTH_DELAY_S = 1.0  # espera a cada senha errada (o servidor tem uma thread por pedido)
+
+
+def host_name(host: str) -> str:
+    """O nome do cabeçalho Host, sem a porta e em minúsculas."""
     if host.startswith("["):
         name = host[1:host.find("]")] if "]" in host else ""
     else:
         name = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
-    name = name.lower().rstrip(".")
-    if name == "localhost":
+    return name.lower().rstrip(".")
+
+
+def host_allowed(host: str, extra=()) -> bool:
+    """Cabeçalho Host aceito: localhost, o nome deste PC, um IP ou um nome de `extra`."""
+    if not host:
+        return False
+    name = host_name(host)
+    if name == "localhost" or (name and name in extra):
         return True
     pc = socket.gethostname().lower()
     if name in (pc, pc + ".local"):
@@ -104,7 +121,23 @@ def host_allowed(host: str) -> bool:
         return False
 
 
-def make_handler(controller, ring):
+def password_ok(header: str, password: str) -> bool:
+    """Authorization: Basic base64(usuário:senha). Qualquer usuário; a senha comparada em tempo constante."""
+    scheme, _, value = (header or "").partition(" ")
+    if scheme.lower() != "basic":
+        return False
+    try:
+        decoded = base64.b64decode(value.strip(), validate=True).decode("utf-8")
+    except (binascii.Error, ValueError):
+        return False
+    given = decoded.partition(":")[2]
+    return hmac.compare_digest(given.encode(), password.encode())
+
+
+def make_handler(controller, ring, password=None, allow_hosts=()):
+    """password: senha da autenticação básica (None = sem senha); allow_hosts: nomes aceitos no Host."""
+    extra = {host_name(h) for h in allow_hosts if h}
+
     class Handler(BaseHTTPRequestHandler):
         server_version = "PSPStream"
         sys_version = ""
@@ -112,9 +145,11 @@ def make_handler(controller, ring):
         def log_message(self, fmt, *args):  # sem uma linha por pedido no terminal
             log.debug("web: %s %s", self.address_string(), fmt % args)
 
-        def _send(self, code: int, body: bytes, ctype: str) -> None:
+        def _send(self, code: int, body: bytes, ctype: str, extra_headers=()) -> None:
             self.send_response(code)
             self.send_header("Content-Type", ctype)
+            for k, v in extra_headers:
+                self.send_header(k, v)
             self.send_header("Content-Length", str(len(body)))
             for k, v in HEADERS.items():
                 self.send_header(k, v)
@@ -126,10 +161,19 @@ def make_handler(controller, ring):
             self._send(code, json.dumps(obj, ensure_ascii=False).encode(), "application/json; charset=utf-8")
 
         def _checked(self) -> bool:
-            if host_allowed(self.headers.get("Host", "")):
-                return True
-            self._json(403, {"error": "endereço não permitido (use http://localhost ou o IP do PC)"})
-            return False
+            if not host_allowed(self.headers.get("Host", ""), extra):
+                self._json(403, {"error": "endereço não permitido (use http://localhost, o IP do PC ou um nome "
+                                          "liberado com --web-allow-host)"})
+                return False
+            if password and not password_ok(self.headers.get("Authorization", ""), password):
+                if self.headers.get("Authorization"):
+                    log.warning("web: senha errada vinda de %s", self.client_address[0])
+                    time.sleep(AUTH_DELAY_S)
+                body = json.dumps({"error": "senha"}).encode()
+                self._send(401, body, "application/json; charset=utf-8",
+                           [("WWW-Authenticate", 'Basic realm="PSPStream", charset="UTF-8"')])
+                return False
+            return True
 
         def do_GET(self):
             if not self._checked():
@@ -192,8 +236,10 @@ def make_handler(controller, ring):
 
 
 class WebServer:
-    def __init__(self, controller, host: str = "127.0.0.1", port: int = 5124, ring=None):
-        self.httpd = ThreadingHTTPServer((host, port), make_handler(controller, ring))
+    def __init__(self, controller, host: str = "127.0.0.1", port: int = 5124, ring=None, password=None,
+                 allow_hosts=()):
+        self.httpd = ThreadingHTTPServer((host, port), make_handler(controller, ring, password, allow_hosts))
+        self.password = bool(password)
         self.httpd.daemon_threads = True
         host, port = self.httpd.server_address[:2]
         shown = "localhost" if host in ("127.0.0.1", "::1") else host

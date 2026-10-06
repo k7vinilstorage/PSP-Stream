@@ -9,6 +9,8 @@ porta.
 """
 import argparse
 import logging
+import os
+import signal
 import socket
 import sys
 import threading
@@ -22,6 +24,7 @@ from protocol import REQ_FRAME, REQ_HELLO, Request
 import settings
 from stats import SessionStats, Window, format_summary, now_ms
 import transports
+import wolf_api
 from transports import DSCP, TcpTransport, UdpTransport, parse_datagram, set_dscp
 
 log = logging.getLogger("pspstream")
@@ -486,6 +489,12 @@ def parse_size(text: str):
     return w, h
 
 
+def parse_pin(text: str) -> str:
+    if not text.isdigit() or len(text) > 16:
+        raise argparse.ArgumentTypeError("o PIN são só dígitos")
+    return text
+
+
 def build_parser() -> argparse.ArgumentParser:
     here = Path(__file__).resolve().parent
     p = argparse.ArgumentParser(description="PSPStream: transmite a tela do PC para o PSP (H.264 ou MJPEG).")
@@ -511,17 +520,40 @@ def build_parser() -> argparse.ArgumentParser:
                    help="marcação dos pacotes do servidor para a fila de prioridade do Wi-Fi (WMM): "
                         "ef = voz (padrão), cs5/af41 = vídeo, 0 = nenhuma")
     p.add_argument("--bind", default="0.0.0.0", help="endereço local (padrão %(default)s)")
-    p.add_argument("--source", choices=["portal", "kms", "test", "x11", "gst", "static"], default="portal",
+    p.add_argument("--source", choices=["portal", "kms", "test", "x11", "gst", "static", "wolf"], default="portal",
                    help="portal = tela no Wayland (padrão); kms = direto da placa de vídeo, sem o limite de "
                         "~40 fps do GNOME 50 (precisa de make -C tools/kms e make -C tools/kms cap); "
                         "test = padrão animado com relógio; x11 = sessão X11; gst = pipeline próprio "
-                        "(--gst-src); static = uma imagem")
+                        "(--gst-src); static = uma imagem; wolf = o que roda no Wolf (Games on Whales), pela "
+                        "API dele (README, seção Wolf)")
     p.add_argument("--kms-monitor", type=int, default=0, metavar="N",
                    help="kms: qual monitor ligado (0 = o primeiro; o log mostra quantos há)")
     p.add_argument("--kms-card", metavar="/dev/dri/cardN", help="kms: placa de vídeo (padrão: procura em todas)")
     p.add_argument("--image", default=str(here.parent / "assets" / "testcard.jpg"),
                    help="imagem do modo static (padrão: assets/testcard.jpg)")
     p.add_argument("--gst-src", help="elementos GStreamer da fonte para --source gst")
+    p.add_argument("--wolf-socket", default=wolf_api.default_socket(), metavar="CAMINHO",
+                   help="wolf: socket da API do Wolf (padrão: WOLF_SOCKET_PATH ou %(default)s). Ele dá controle "
+                        "total do Wolf: monte-o só no container do PSPStream e nunca o exponha por TCP")
+    p.add_argument("--wolf-target", default=os.environ.get("PSPSTREAM_WOLF_TARGET", ""), metavar="ID",
+                   help="wolf: o que espelhar: id ou nome do lobby, ou id da sessão (padrão: o único lobby "
+                        "aberto; com vários, o log lista as opções). Padrão também em PSPSTREAM_WOLF_TARGET")
+    p.add_argument("--wolf-video-convert", default=os.environ.get("PSPSTREAM_VIDEO_CONVERT") or "auto",
+                   metavar="auto|nvidia|va|cpu|ELEMENTOS",
+                   help="wolf: como o Wolf desce a imagem para a memória comum em 480x272. nvidia = CUDA (o "
+                        "padrão do Wolf com NVIDIA); va = Intel/AMD; cpu = Wolf com WOLF_USE_ZERO_COPY=FALSE; "
+                        "auto (padrão) tenta nessa ordem. Ou elementos GStreamer que entreguem I420 na "
+                        "resolução enviada. Padrão também em PSPSTREAM_VIDEO_CONVERT")
+    p.add_argument("--wolf-pin", type=parse_pin, metavar="DÍGITOS",
+                   default=os.environ.get("PSPSTREAM_WOLF_PIN") or None,
+                   help="wolf: PIN do lobby, se ele pede (para os controles entrarem no lobby). Padrão: "
+                        "PSPSTREAM_WOLF_PIN")
+    p.add_argument("--wolf-rtp-port", type=int,
+                   default=wolf_api.env_port("WOLF_VIDEO_PING_PORT", wolf_api.VIDEO_PING_PORT), metavar="PORTA",
+                   help="wolf: porta UDP do ping de vídeo do Wolf (padrão: WOLF_VIDEO_PING_PORT ou %(default)s)")
+    p.add_argument("--wolf-audio-rtp-port", type=int,
+                   default=wolf_api.env_port("WOLF_AUDIO_PING_PORT", wolf_api.AUDIO_PING_PORT), metavar="PORTA",
+                   help="wolf: porta UDP do ping de som do Wolf (padrão: WOLF_AUDIO_PING_PORT ou %(default)s)")
     p.add_argument("--size", type=parse_size, default=(480, 272), help="resolução enviada (padrão 480x272)")
     p.add_argument("--fps", type=int, default=60,
                    help="taxa máxima de captura (padrão %(default)s). Capturar acima do que o PSP "
@@ -551,7 +583,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-audio", action="store_true", help="não capturar nem mandar o som")
     p.add_argument("--audio-device", default="monitor", metavar="NOME",
                    help="som: fonte do PipeWire/PulseAudio (pactl list short sources); monitor (padrão) = o que "
-                        "sai nas caixas; test = tom de 440 Hz")
+                        "sai nas caixas (com --source wolf, o som do alvo no Wolf); wolf = o som do Wolf; "
+                        "test = tom de 440 Hz")
     p.add_argument("--audio-rate", type=int, default=44100, choices=[22050, 32000, 44100, 48000],
                    help="som: taxa (padrão %(default)s Hz, a do PSP; IMA ADPCM estéreo ~ taxa/1000 KB/s)")
     p.add_argument("--audio-mono", action="store_true", help="som: mono (metade dos bytes)")
@@ -559,9 +592,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--input-dry-run", action="store_true",
                    help="só mostrar no log as teclas/movimentos que seriam injetados")
     p.add_argument("--keymap", default=str(here / "keymap.json"), help="arquivo de mapeamento (padrão keymap.json)")
-    p.add_argument("--profile", default="jogo",
+    p.add_argument("--profile", default=os.environ.get("PSPSTREAM_PROFILE") or "jogo",
                    help="perfil do keymap: jogo, desktop, setas (teclado e mouse); xbox, xbox-camera, "
-                        "xbox-ombros (controle de Xbox 360 virtual). Padrão %(default)s")
+                        "xbox-ombros (controle de Xbox 360 virtual; com --source wolf, só estes). Padrão "
+                        "%(default)s")
     p.add_argument("--mouse-speed", type=float, default=1.0, help="multiplica a velocidade do mouse do perfil")
     p.add_argument("--input-timeout", type=float, default=0.5, metavar="S",
                    help="solta todas as teclas se o PSP ficar S segundos sem mandar nada enquanto algo está "
@@ -571,9 +605,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="benchmark: quando o PSP conectar, roda cada qualidade por --bench-seconds e salva "
                         "uma tabela em bench_*.md (padrão 30,50,70,90)")
     p.add_argument("--bench-seconds", type=float, default=10)
-    p.add_argument("--web", default=WEB_DEFAULT, metavar="HOST:PORTA",
+    p.add_argument("--web", default=os.environ.get("PSPSTREAM_WEB") or WEB_DEFAULT, metavar="HOST:PORTA",
                    help="interface web das configurações (padrão %(default)s, só neste PC; 0.0.0.0:5124 abre "
-                        "para a rede local, sem senha)")
+                        "para a rede local). A senha vem da variável PSPSTREAM_WEB_PASSWORD (sem ela, quem "
+                        "alcança a porta muda as configurações). Padrão também em PSPSTREAM_WEB")
+    p.add_argument("--web-allow-host", action="append", metavar="NOME",
+                   default=[h for h in os.environ.get("PSPSTREAM_WEB_HOSTS", "").replace(",", " ").split() if h],
+                   help="nome aceito no endereço da interface web, além de localhost, do nome do PC e de IPs "
+                        "(ex.: um do DNS do roteador); pode repetir. Padrão: PSPSTREAM_WEB_HOSTS, separados "
+                        "por vírgula")
     p.add_argument("--no-web", action="store_true", help="sem a interface web")
     p.add_argument("--config", default=str(settings.default_path()), metavar="ARQUIVO",
                    help="configurações gravadas pela interface web (padrão %(default)s). As opções da linha de "
@@ -614,6 +654,10 @@ def load_config(parser, args, argv):
     if overridden:
         log.info("configuração: a linha de comando vale mais que o arquivo para %s", ", ".join(overridden))
     return store, explicit, from_file
+
+
+def _terminate(signum, frame):
+    raise KeyboardInterrupt
 
 
 def main(argv=None) -> int:
@@ -699,11 +743,15 @@ def main(argv=None) -> int:
         from web import WebServer, parse_addr
         try:
             host, port = parse_addr(args.web)
-            web = WebServer(ctl, host, port, ring)
+            web = WebServer(ctl, host, port, ring, os.environ.get("PSPSTREAM_WEB_PASSWORD") or None,
+                            args.web_allow_host)
             web.start()
             ctl.web_url = web.url
+            access = "com senha" if web.password else "sem senha"
             log.info("configurações: %s%s", web.url,
-                     " (aberto para a rede local, sem senha)" if web.public else "")
+                     f" (aberto para a rede local, {access})" if web.public else
+                     (f" ({access}; nomes liberados: {', '.join(args.web_allow_host)})"
+                      if args.web_allow_host else ""))
         except (OSError, ValueError) as exc:
             log.warning("interface web desativada (%s): %s", args.web, exc)
             web = None
@@ -711,6 +759,10 @@ def main(argv=None) -> int:
     from netcheck import check_pc_wifi
     check_pc_wifi(local_ip())
     srv.settimeout(0.5)
+    if threading.current_thread() is threading.main_thread():
+        # docker stop e systemctl stop (SIGTERM) encerram como o Ctrl+C: a captura para direito
+        # (a fonte do Wolf encerra a sessão dela no Wolf).
+        signal.signal(signal.SIGTERM, _terminate)
     try:
         while True:
             failed = getattr(server.source, "failed", None)  # a interface web pode trocar a captura

@@ -116,6 +116,72 @@ de outra versão do protocolo é recusado com aviso no log.
 - `fake_client --audio`, `tools/emu_audio_test.py`, e o decoder do PSP
   (`psp/src/ima.c`) testado no PC contra a referência.
 - O README dizia `--p-redundancy-ms 4`; o padrão é 6.
+- **Wolf (Games on Whales), vídeo** (`--source wolf`, experimental): o
+  PSPStream cria uma sessão no Wolf pela API (socket Unix, `--wolf-socket`)
+  e o Wolf roda um pipeline do PSPStream, que escuta o lobby
+  (`interpipesrc`), reduz para 480x272 I420 e manda por TCP em 127.0.0.1;
+  daí em diante é igual às outras fontes (JPEG, h264, h264p). O alvo é o
+  único lobby aberto, ou `--wolf-target` (id ou nome do lobby, ou id da
+  sessão); a conversão na GPU é `--wolf-video-convert` (`nvidia`, `va`,
+  `cpu` ou `auto`, que tenta nessa ordem). Se o lobby fecha, a sessão é
+  encerrada e a fonte espera ele voltar, sem derrubar o servidor. Ping na
+  porta 48100 do Wolf (`--wolf-rtp-port`, `WOLF_VIDEO_PING_PORT`).
+  Testado só contra um Wolf falso (`tests/fake_wolf.py`), não num Wolf de
+  verdade.
+- **Wolf, som:** o som do alvo vem pelo mesmo caminho do vídeo (o pipeline
+  de som da sessão escuta `<lobby>_audio`, converte para S16LE na taxa do
+  PSP e manda por TCP) e vira o IMA ADPCM de sempre. Com `--source wolf`, o
+  padrão `--audio-device monitor` já usa o som do Wolf (ou
+  `--audio-device wolf`); a numeração dos pacotes continua quando a sessão
+  do Wolf é refeita, e mudar a taxa ou o mono refaz a sessão. Escolhido em
+  vez de montar o PulseAudio do Wolf no container: nada a mais para
+  compartilhar, e reconecta junto com o vídeo.
+- **Wolf, controles:** com `--source wolf`, os botões do PSP vão para o
+  jogo como um controle de Xbox virtual criado pelo Wolf: os mesmos perfis
+  do `keymap.json` (`xbox`, `xbox-camera`, `xbox-ombros`; um perfil de
+  teclado vira `xbox`), em pacotes `CONTROLLER_ARRIVAL` e
+  `CONTROLLER_MULTI` do Moonlight mandados por `sessions/input`. A sessão
+  do PSPStream entra no lobby sozinha (e de novo, se o atalho START + cima +
+  RB do Wolf UI a tirar); lobby cheio ou com PIN (`--wolf-pin`) fica só na
+  visualização, tentando de novo. Um alvo que é uma sessão Moonlight avulsa
+  é só visualização. O `--input-timeout` solta tudo, e ao sair o controle é
+  desligado no Wolf. Os bytes foram conferidos contra as structs do Wolf e
+  o exemplo dos testes dele.
+- **Wolf, Docker:** `Dockerfile` (Ubuntu 24.04, só o servidor, o GStreamer e
+  a `libopenh264-7` do universe; roda como usuário comum) e
+  `docker/compose.yml` com o serviço `pspstream` ao lado do `wolf` e as duas
+  linhas que mudam no serviço do Wolf (`WOLF_SOCKET_PATH` e o volume
+  `/var/run/wolf`). O socket da API do Wolf é só do root, então o compose
+  usa o uid 0 sem nenhuma capability, sem ganhar privilégios e com o sistema
+  de arquivos só leitura (o usuário comum com `setfacl` também foi testado).
+  O CI compila a imagem e a testa contra o Wolf falso
+  (`packaging/docker-test.sh`). Seção "Wolf" no README; a interface web
+  mostra uma linha "Wolf" com o que está sendo espelhado.
+- **Wolf, instalação do zero:** `docker/install.sh` instala o Wolf e o
+  PSPStream num servidor com Docker (detecta a GPU, prepara o sistema como a
+  documentação do Wolf pede: módulos `uinput`/`uhid` e as regras udev do
+  Wolf; libera as portas no ufw/firewalld; escreve um `.env`; sobe tudo),
+  mostrando cada comando e perguntando antes. Compose completos em
+  `docker/compose.yml` (Intel/AMD) e `compose.nvidia.yml`, `pspstream.yml`
+  para quem já tem o Wolf, `build.yml` para compilar, e `.env.example` com
+  as configurações; o CI confere que o serviço do PSPStream é o mesmo nos
+  três e que o instalador gera um `.env` válido.
+- **Imagem pronta no ghcr.io:** o CI publica
+  `ghcr.io/k7vinilstorage/pspstream` (`nightly` a cada push na `main`, a
+  versão e `latest` a cada tag), depois de testá-la contra o Wolf falso.
+- **Interface web na rede, com senha:** `PSPSTREAM_WEB_PASSWORD`
+  (autenticação básica do HTTP, na página e na API) e `--web-allow-host` /
+  `PSPSTREAM_WEB_HOSTS` para outros nomes do servidor (como um do DNS do
+  roteador). O padrão continua só no próprio PC.
+- Padrões por variável de ambiente para o Docker (a interface web ainda
+  muda): `PSPSTREAM_WEB`, `PSPSTREAM_WOLF_TARGET`, `PSPSTREAM_VIDEO_CONVERT`,
+  `PSPSTREAM_WOLF_PIN`, `PSPSTREAM_PROFILE`.
+- Documentação do Wolf: `docs/WOLF.md` (instalação, primeiro uso, lobbies
+  Start e Coop do Wolf UI e a ordem dos controles, interface web,
+  configurações, problemas) e `docs/WOLF-INTERNALS.md` (como funciona por
+  dentro e o que foi conferido no código do Wolf).
+- O servidor encerra direito no SIGTERM (`docker stop`, `systemctl stop`),
+  como no Ctrl+C.
 
 ## 1.0
 

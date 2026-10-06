@@ -40,6 +40,8 @@ APPLY_TEXT = {
 # Nome de fonte do PipeWire/PulseAudio (pactl list short sources). Vai para
 # dentro da descrição do pipeline do GStreamer: nada de aspas nem espaços.
 AUDIO_DEVICE_RE = re.compile(r"^[\w.:@+-]{1,200}$")
+# Alvo no Wolf: id ou nome de lobby. Não entra no pipeline (lá vai o id que o Wolf devolve, conferido de novo).
+WOLF_TARGET_RE = re.compile(r"^[^\x00-\x1f\x7f]{0,100}$")
 
 
 @dataclass(frozen=True)
@@ -65,8 +67,9 @@ SETTINGS = (
     Setting("source", "source", "choice", "Captura", "Fonte",
             "portal: a tela pelo portal do Wayland (pede permissão na primeira vez). kms: direto da placa de "
             "vídeo, 60 fps no GNOME 50 (precisa do auxiliar: make -C tools/kms). x11: sessão X11. "
-            "test: padrão animado. static: imagem fixa.",
-            "capture", ("portal", "kms", "x11", "test", "static"), flag="--source"),
+            "test: padrão animado. static: imagem fixa. wolf: o que roda no Wolf (Games on Whales); aparece "
+            "quando o socket da API do Wolf existe.",
+            "capture", ("portal", "kms", "x11", "test", "static", "wolf"), flag="--source"),
     Setting("kms_monitor", "kms_monitor", "int", "Captura", "Monitor (KMS)",
             "0 = o primeiro monitor ligado; o log diz quantos há.", "capture", min=0, max=15,
             flag="--kms-monitor", show_if=("source", ("kms",))),
@@ -75,6 +78,13 @@ SETTINGS = (
             show_if=("source", ("portal",))),
     Setting("no_cursor", "no_cursor", "bool", "Captura", "Esconder o cursor", "", "capture",
             flag="--no-cursor", show_if=("source", ("portal",))),
+    Setting("wolf_target", "wolf_target", "text", "Captura", "Alvo no Wolf",
+            "Id ou nome do lobby, ou id da sessão. Vazio = o único lobby aberto (com vários, o log lista as "
+            "opções).", "capture", flag="--wolf-target", show_if=("source", ("wolf",))),
+    Setting("wolf_video_convert", "wolf_video_convert", "choice", "Captura", "Conversão no Wolf",
+            "Como o Wolf desce a imagem da GPU: nvidia (CUDA), va (Intel/AMD) ou cpu (Wolf sem zero-copy). "
+            "auto tenta nessa ordem; o log diz qual funcionou.", "capture", ("auto", "nvidia", "va", "cpu"),
+            flag="--wolf-video-convert", show_if=("source", ("wolf",))),
     Setting("fps", "fps", "int", "Captura", "Limite de FPS",
             "Numa tela de 60 Hz, 30 é um frame sim, um não (uniforme); 40 alterna intervalos de 17 e 33 ms.",
             "live", min=5, max=240, flag="--fps"),
@@ -106,7 +116,8 @@ SETTINGS = (
             "O PSP também liga e desliga (SELECT + START + cima). Só pelo UDP.", "audio", invert=True,
             flag="--no-audio"),
     Setting("audio_device", "audio_device", "text", "Som", "Fonte do som",
-            "monitor = o que sai nas caixas; test = tom de 440 Hz; ou uma fonte do PipeWire.", "audio",
+            "monitor = o que sai nas caixas (com a fonte wolf, o som do Wolf); test = tom de 440 Hz; ou uma "
+            "fonte do PipeWire.", "audio",
             flag="--audio-device", show_if=("audio", (True,))),
     Setting("audio_rate", "audio_rate", "choice", "Som", "Taxa (Hz)",
             "44100 é a do PSP (sem reamostrar). ~46 KB/s em estéreo.", "audio", (22050, 32000, 44100, 48000),
@@ -190,6 +201,8 @@ def coerce(setting: Setting, value, choices=None):
         value = value.strip()
         if setting.key == "audio_device" and not AUDIO_DEVICE_RE.match(value):
             raise ValueError("nome de fonte inválido (letras, números e . : @ + - _)")
+        if setting.key == "wolf_target" and not WOLF_TARGET_RE.match(value):
+            raise ValueError("até 100 caracteres, sem caracteres de controle")
         return value
     raise ValueError(f"tipo desconhecido: {kind}")
 

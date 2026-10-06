@@ -235,6 +235,7 @@ function showStatus(st) {
   }
   const c = st.capture;
   rows.push(["Captura", `${c.source}, ${c.codec}, até ${c.fps_limit} fps` + (c.failed ? ` — parou: ${c.failed}` : ""), !!c.failed]);
+  if (st.wolf) rows.push(["Wolf", st.wolf.text, st.wolf.warn]);
   const a = st.audio;
   if (a && a.on) {
     rows.push(["Som", `${a.device}, ${a.rate} Hz ${a.channels === 2 ? "estéreo" : "mono"}, ~${a.kbps} KB/s` +

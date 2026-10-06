@@ -1,0 +1,67 @@
+# Wolf (Games on Whales) + PSPStream numa instalação limpa, com GPU Intel ou
+# AMD (ou sem GPU). Com NVIDIA, use compose.nvidia.yml. Já tem o Wolf? Use
+# pspstream.yml. Passo a passo: docs/WOLF.md (ou docker/install.sh).
+#
+#   cp .env.example .env    # e ajuste
+#   docker compose up -d
+#
+# As configurações ficam no .env (ou nas variáveis da stack do Portainer).
+
+services:
+  wolf:
+    # Como na documentação do Wolf (quickstart, Intel/AMD), mais o socket da
+    # API em /var/run/wolf para o PSPStream (e o Wolf UI, que o procura lá).
+    image: ${WOLF_IMAGE:-ghcr.io/games-on-whales/wolf:stable}
+    environment:
+      - WOLF_SOCKET_PATH=/var/run/wolf/wolf.sock
+    volumes:
+      - /etc/wolf/:/etc/wolf
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+      - /dev/:/dev/:rw
+      - /run/udev:/run/udev:rw
+      - /var/run/wolf:/var/run/wolf
+    device_cgroup_rules:
+      - 'c 13:* rmw'
+    devices:
+      - /dev/dri
+      - /dev/uinput
+      - /dev/uhid
+    network_mode: host
+    restart: unless-stopped
+
+  pspstream:
+    image: ${PSPSTREAM_IMAGE:-ghcr.io/k7vinilstorage/pspstream:nightly}
+    depends_on:
+      - wolf
+    # O PSP fala com a porta 5123 do servidor, e o Wolf manda a imagem e o som
+    # para 127.0.0.1: a rede do host, como o Wolf.
+    network_mode: host
+    restart: unless-stopped
+    # O socket do Wolf é só do root (o Wolf UI também roda como root). O uid é
+    # 0, mas sem nenhuma capability, sem ganhar privilégios e só leitura.
+    user: "0:0"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - /var/run/wolf:/var/run/wolf:ro
+      - pspstream-config:/config
+    environment:
+      - WOLF_SOCKET_PATH=/var/run/wolf/wolf.sock
+      - WOLF_VIDEO_PING_PORT=${WOLF_VIDEO_PING_PORT:-48100}
+      - WOLF_AUDIO_PING_PORT=${WOLF_AUDIO_PING_PORT:-48200}
+      - PSPSTREAM_VIDEO_CONVERT=${PSPSTREAM_VIDEO_CONVERT:-auto}
+      - PSPSTREAM_WOLF_TARGET=${PSPSTREAM_WOLF_TARGET:-}
+      - PSPSTREAM_WOLF_PIN=${PSPSTREAM_WOLF_PIN:-}
+      - PSPSTREAM_PROFILE=${PSPSTREAM_PROFILE:-xbox}
+      - PSPSTREAM_WEB=${PSPSTREAM_WEB:-127.0.0.1:5124}
+      - PSPSTREAM_WEB_PASSWORD=${PSPSTREAM_WEB_PASSWORD:-}
+      - PSPSTREAM_WEB_HOSTS=${PSPSTREAM_WEB_HOSTS:-}
+    command: ["--source", "wolf"]
+
+volumes:
+  pspstream-config:

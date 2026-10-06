@@ -46,6 +46,9 @@ fila na rede, e a latência fica perto de um frame. Detalhes em
   Wi-Fi, transporte e opções, gravados no `server.txt`.
 - **Overlay** com FPS, KB por frame, tempos de decode e rede; estatísticas
   completas no log do servidor.
+- **Wolf (Games on Whales)**, experimental: transmite o lobby do Wolf para o
+  PSP, com som e controles, num container ao lado dele
+  ([seção Wolf](#wolf-games-on-whales)).
 - **Interface web** no PC (http://localhost:5124): as configurações gerais
   (captura, codec, qualidade, som, controles, rede) mudam com o PSP
   conectado, e ficam gravadas. Mostra também o estado do stream e o log.
@@ -373,7 +376,7 @@ engasgos, qualidade), as configurações gerais e o log.
 
 | grupo | o que muda |
 |---|---|
-| Captura | fonte (portal, kms, x11, test, static), monitor do KMS, janela e cursor do portal, limite de FPS, filtro de redução, esticar |
+| Captura | fonte (portal, kms, x11, test, static, wolf), monitor do KMS, janela e cursor do portal, alvo e conversão do Wolf, limite de FPS, filtro de redução, esticar |
 | Vídeo | codec, qualidade adaptativa ou fixa, alvo e limites da adaptativa |
 | Som | ligado, fonte (o que sai nas caixas, tom de teste ou uma fonte do PipeWire), taxa, mono |
 | Controles | ligados, perfil, velocidade do mouse |
@@ -398,11 +401,50 @@ captura gravada no arquivo não subir, o servidor usa a da linha de comando e
 avisa no log, e a página continua acessível para trocar.
 
 Por padrão, a página só abre no próprio PC (127.0.0.1). `--web
-0.0.0.0:5124` abre para a rede local (do celular, por exemplo), **sem
-senha**: qualquer um na rede muda as configurações. `--no-web` desliga.
-A página recusa pedidos vindos de outros sites (ver `server/web.py`), e
-nada nela recebe caminho de arquivo nem pipeline do GStreamer
-(`--source gst` e `--image` só pela linha de comando).
+0.0.0.0:5124` abre para a rede local (do celular, por exemplo); com a
+variável `PSPSTREAM_WEB_PASSWORD`, o navegador pede uma senha (qualquer
+usuário), e sem ela qualquer um na rede muda as configurações. Na rede
+local, a senha vai em HTTP, sem criptografia. `--no-web` desliga.
+
+A página recusa pedidos vindos de outros sites e endereços que não conhece
+(localhost, o nome do PC e IPs; outros nomes, como um do DNS do
+roteador, com `--web-allow-host` ou `PSPSTREAM_WEB_HOSTS`; ver
+`server/web.py`), e nada nela recebe caminho de arquivo nem pipeline do
+GStreamer (`--source gst` e `--image` só pela linha de comando).
+
+## Wolf (Games on Whales)
+
+O PSPStream também mostra no PSP o que roda num lobby do
+[Wolf](https://github.com/games-on-whales/wolf) (jogos em containers,
+servidos para o Moonlight): a imagem, o som e os botões do PSP como um
+controle de Xbox no jogo, sem mudar nada no Wolf. Roda num container ao
+lado dele (`--source wolf`) e fala com a API do Wolf.
+
+Instalação do zero (Wolf + PSPStream), num servidor com Docker:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/k7vinilstorage/PSP-Stream/main/docker/install.sh
+sudo bash install.sh
+```
+
+Ou à mão com os compose de [`docker/`](docker) (Intel/AMD, NVIDIA, ou só o
+PSPStream ao lado de um Wolf que já roda), pelo Portainer a partir deste
+repositório, e com a imagem pronta `ghcr.io/k7vinilstorage/pspstream`.
+
+- **Passo a passo** (instalador, compose, Portainer, Wolf existente,
+  primeiro uso, interface web na rede,
+  configurações, problemas): [docs/WOLF.md](docs/WOLF.md).
+- **Como funciona por dentro** (a sessão no Wolf, os pipelines, o som, os
+  pacotes de controle, a reconexão, a segurança e o que foi conferido no
+  código do Wolf): [docs/WOLF-INTERNALS.md](docs/WOLF-INTERNALS.md).
+
+Em resumo: o PSPStream cria uma sessão própria no Wolf pela API e manda
+nela pipelines que escutam o lobby, reduzem a imagem para 480x272 na GPU e
+entregam a imagem e o som por TCP local; os controles entram no lobby como
+um controle de Xbox virtual. Num lobby **Coop** do Wolf UI, o PSP joga
+junto; num lobby **Start** (de um jogador), ele assiste enquanto o Moonlight
+estiver dentro e assume quando o Moonlight sai. Um PSPStream por Wolf. O PSP
+precisa estar na mesma rede local do servidor (porta 5123 UDP e TCP).
 
 ## Opções do servidor
 
@@ -412,6 +454,7 @@ nada nela recebe caminho de arquivo nem pipeline do GStreamer
 | `--source portal` | portal do Wayland (padrão); `--window` captura uma janela |
 | `--source test` / `static --image arq.png` | padrão animado / imagem fixa (testes) |
 | `--source x11` / `gst --gst-src "..."` | sessão X11 / pipeline GStreamer próprio |
+| `--source wolf` | o que roda no Wolf, pela API dele (opções `--wolf-*` em [docs/WOLF.md](docs/WOLF.md)) |
 | `--profile xbox` | controles: `jogo` (padrão), `desktop`, `setas`, `xbox`, `xbox-camera`, `xbox-ombros` |
 | `--codec auto` | `h264p` (padrão, se houver openh264), `h264` (só quadros completos) ou `jpeg` |
 | `--h264-encoder auto` | libopenh264 direto, com o GStreamer de reserva (padrão); `gstreamer` força o caminho antigo |
@@ -516,7 +559,14 @@ PSP-3000 e Fedora 44 com Wi-Fi 802.11b; detalhes e o histórico em
   com o PSP falso, interface web).
 
 Os arquivos ficam nos "artifacts" da execução. Um push na `main` refaz a
-pré-release `nightly`. Uma versão estável sai de uma tag:
+pré-release `nightly`. O job "imagem Docker" compila a imagem do servidor,
+a testa contra o Wolf falso e confere os compose e o instalador
+(`packaging/docker-test.sh`, `compose-check.sh`); num push na `main`, publica
+`ghcr.io/k7vinilstorage/pspstream:nightly`, e numa tag, `:1.2` e
+`:latest`. Na primeira publicação, o pacote do ghcr.io nasce privado: em
+GitHub → perfil → *Packages* → `pspstream` → *Package settings*, mude a
+visibilidade para *Public*, para baixar sem login. Uma versão estável sai
+de uma tag:
 
 ```sh
 # no CHANGELOG.md, "## 1.2 (em desenvolvimento)" vira "## 1.2"; VERSION em
@@ -557,6 +607,13 @@ PPSSPP_HEADLESS=... python3 tools/emu_input_test.py   # controles; precisa de: p
 PPSSPP_HEADLESS=... python3 tools/emu_menu_test.py    # tela de configuração: procurar o PC, salvar, conectar
 PPSSPP_HEADLESS=... python3 tools/emu_audio_test.py   # som: o PSP pede, desliga e liga pelo atalho
 ```
+
+**Wolf**: `tests/test_wolf.py` roda contra `tests/fake_wolf.py`, que imita
+a API num socket Unix (campos obrigatórios, `fmt::format` do pipeline, id
+igual para as sessões sem cliente), o ping e os pipelines da sessão, com
+`videotestsrc` e `audiotestsrc` no lugar do `interpipesrc`.
+`packaging/docker-test.sh` faz o mesmo com a imagem Docker. Os bytes dos
+pacotes de controle são conferidos contra as structs do Wolf.
 
 No emulador, a imagem e a lógica valem, mas os **tempos não**: o relógio
 emulado pula o tempo ocioso (com frames P, corre ~30x o real), e a banda e as
@@ -601,12 +658,17 @@ server/                servidor (Python 3)
   transports.py        TCP e UDP (pedaços, NACK, reenvio)
   adaptive.py          qualidade adaptativa
   inject.py, gamepad.py, keymap.json   controles (uinput)
+  wolf_api.py          Wolf: cliente da API (HTTP no socket Unix, só biblioteca padrão)
+  wolf_source.py       Wolf: sessão, pipelines de vídeo e som, alvo, lobby, reconexão
+  wolf_input.py        Wolf: controle de Xbox em pacotes do Moonlight (sessions/input)
   stats.py, sources.py, jpeginfo.py, protocol.py, netcheck.py
-packaging/             .deb e .rpm (install-tree.sh, build-deb.sh, pspstream.spec, build-rpm.sh)
+Dockerfile, docker/    imagem do servidor; compose (Wolf + PSPStream, NVIDIA, só o PSPStream), .env, install.sh
+packaging/             .deb e .rpm (install-tree.sh, build-deb.sh, pspstream.spec, build-rpm.sh);
+                       docker-test.sh (a imagem contra o Wolf falso), compose-check.sh
 .github/workflows/     build do EBOOT, testes, pacotes e releases
 tools/                 fake_client.py, emu_*.py/sh, h264_probe_clips.py, kms/ (auxiliar KMS)
-docs/                  PROTOCOL.md, MEASUREMENTS.md, UBUNTU.md (guia), WINDOWS.md (plano do servidor de Windows)
-tests/                 testes do servidor e da interface web
+docs/                  PROTOCOL.md, MEASUREMENTS.md, UBUNTU.md e WOLF.md (guias), WOLF-INTERNALS.md, WINDOWS.md (plano do servidor de Windows)
+tests/                 testes do servidor e da interface web; fake_wolf.py imita o Wolf
 ```
 
 ### Decisões técnicas
