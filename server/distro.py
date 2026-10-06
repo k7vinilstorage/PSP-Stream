@@ -120,7 +120,7 @@ def hint(*needs, fam=None) -> str:
     fam = fam if fam is not None else current()[0]
     cmd = install_command(needs, fam)
     if not cmd:
-        return "instale pelo gerenciador de pacotes (veja o README, Instalação)"
+        return "instale pelo gerenciador de pacotes (veja https://github.com/k7vinilstorage/PSP-Stream/wiki/Instalação)"
     notes = [NOTES[(n, fam)] for n in needs if (n, fam) in NOTES]
     return cmd + (f" ({'; '.join(notes)})" if notes else "")
 

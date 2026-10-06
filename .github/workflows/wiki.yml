@@ -1,0 +1,34 @@
+# Publica a pasta wiki/ na wiki do GitHub a cada push na main que a mude
+# (packaging/publish-wiki.sh). A wiki fica igual à pasta: edite lá, não na
+# wiki. Antes da primeira vez, a wiki precisa existir: Settings > Features >
+# Wikis, e uma página qualquer criada pelo navegador; depois, Actions > wiki >
+# Run workflow.
+name: wiki
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "wiki/**"
+      - ".github/workflows/wiki.yml"
+      - "packaging/publish-wiki.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wiki
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: publicar a wiki
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: publicar
+        env:
+          # O token do próprio workflow; um WIKI_TOKEN nos secrets vale mais.
+          WIKI_TOKEN: ${{ secrets.WIKI_TOKEN || github.token }}
+        run: packaging/publish-wiki.sh

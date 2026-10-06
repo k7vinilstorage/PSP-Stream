@@ -9,7 +9,7 @@
 #   /usr/lib/udev/rules.d, modules-load.d    /dev/uinput para quem está sentado no PC (controles)
 #   /usr/lib/systemd/user/pspstream.service  serviço de usuário (desligado)
 #   /usr/share/applications/pspstream.desktop
-#   /usr/share/doc/pspstream                 README, CHANGELOG, docs/, LICENSE
+#   /usr/share/doc/pspstream                 README, CHANGELOG, LICENSE (o resto: a wiki)
 #
 #   packaging/install-tree.sh DESTDIR
 #
@@ -31,6 +31,5 @@ install -D -m 644 "$root/packaging/files/60-pspstream-uinput.rules" "$dest/usr/l
 install -D -m 644 "$root/packaging/files/pspstream-uinput.conf" "$dest/usr/lib/modules-load.d/pspstream.conf"
 install -D -m 644 "$root/packaging/files/pspstream.service" "$dest/usr/lib/systemd/user/pspstream.service"
 install -D -m 644 "$root/packaging/files/pspstream.desktop" "$dest/usr/share/applications/pspstream.desktop"
-install -d "$dest/usr/share/doc/pspstream/docs"
+install -d "$dest/usr/share/doc/pspstream"
 install -m 644 "$root/README.md" "$root/CHANGELOG.md" "$root/LICENSE" "$dest/usr/share/doc/pspstream/"
-install -m 644 "$root"/docs/*.md "$dest/usr/share/doc/pspstream/docs/"

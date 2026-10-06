@@ -15,7 +15,7 @@ Cada configuração diz quando a mudança vale (`apply`):
   restart  ao reiniciar o servidor
 
 Sem dependências fora da biblioteca padrão: serve também para o servidor de
-Windows (docs/WINDOWS.md).
+Windows (wiki/Servidor-para-Windows.md).
 """
 import argparse
 import json
@@ -126,7 +126,7 @@ SETTINGS = (
             flag="--audio-mono", show_if=("audio", (True,))),
     # Controles
     Setting("input", "no_input", "bool", "Controles", "Controles do PSP no PC",
-            "Precisa de acesso ao /dev/uinput (README, seção Controles).", "input", invert=True,
+            "Precisa de acesso ao /dev/uinput (wiki do PSPStream, Instalação).", "input", invert=True,
             flag="--no-input"),
     Setting("profile", "profile", "choice", "Controles", "Perfil",
             "jogo, desktop, setas: teclado e mouse. xbox*: controle de Xbox 360 virtual.", "input",

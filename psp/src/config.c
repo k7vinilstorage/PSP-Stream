@@ -165,7 +165,7 @@ int config_save(const ps_config_t *cfg, const char *dir, char *err, int errlen)
         snprintf(early, sizeof(early), "auto");
     else
         snprintf(early, sizeof(early), "%d", cfg->early_kb);
-    fprintf(f, "# PSPStream: gravado pela tela de configuracao do PSP (veja o README para as opcoes)\n");
+    fprintf(f, "# PSPStream: gravado pela tela de configuracao do PSP (opcoes: wiki do projeto, pagina Uso no PSP)\n");
     if (cfg->port == PS_DEFAULT_PORT)
         fprintf(f, "%s\n", cfg->host);
     else

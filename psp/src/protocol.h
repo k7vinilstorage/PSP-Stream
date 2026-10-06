@@ -1,5 +1,5 @@
 /*
- * PSPStream - protocolo v5 (TCP ou UDP, little-endian). Ver docs/PROTOCOL.md.
+ * PSPStream - protocolo v5 (TCP ou UDP, little-endian). Ver wiki/Protocolo.md.
  * Manter em sincronia com server/protocol.py.
  */
 #ifndef PSPSTREAM_PROTOCOL_H

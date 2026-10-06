@@ -116,7 +116,7 @@ class _PadUInput:
             self.ui = UInput(caps, name=NAME, vendor=VENDOR, product=PRODUCT, version=VERSION,
                              bustype=BUS_USB, max_effects=0)
         except Exception as exc:  # OSError/PermissionError ou evdev.UInputError
-            raise RuntimeError(f"sem acesso a /dev/uinput ({exc}); veja a seção Controles do README") from exc
+            raise RuntimeError(f"sem acesso a /dev/uinput ({exc}); veja a página Instalação da wiki do PSPStream, Controles (uinput)") from exc
 
     def emit(self, changes):
         ec = self.ec

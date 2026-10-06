@@ -1,5 +1,3 @@
-# Servidor para Windows: plano
-
 Estado: **plano, nada implementado.** O EBOOT, o protocolo e o `server.txt`
 não mudam: o PSP não sabe qual é o sistema do PC.
 
@@ -152,7 +150,7 @@ Pronto quando, num Windows limpo (máquina virtual), o PSP conecta sem abrir
 um terminal.
 
 **W5, acabamento (2-3 dias).** DSCP pelo qWAVE, aviso do Wi-Fi do PC no
-mesmo canal de 2,4 GHz, seção Windows no README, CI no `windows-latest`,
+mesmo canal de 2,4 GHz, página Windows na wiki, CI no `windows-latest`,
 assinatura do executável (opcional; sem ela o SmartScreen avisa).
 
 Total: ~3-4 semanas de uma pessoa.
@@ -185,4 +183,4 @@ Total: ~3-4 semanas de uma pessoa.
 - No hardware, para cada versão: Windows 10 e 11; GPU Intel, AMD e NVIDIA;
   um notebook com duas GPUs; um jogo em janela sem bordas e um em tela
   cheia; FPS, latência e engasgos na linha do servidor, como na
-  [tabela do README](../README.md#desempenho-medido).
+  [tabela de desempenho](Desempenho).

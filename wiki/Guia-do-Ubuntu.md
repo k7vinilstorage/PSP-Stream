@@ -1,5 +1,3 @@
-# PSPStream no Ubuntu
-
 Vale para o Ubuntu 22.04 e 24.04 (e mais novos), e para quem vem do Ubuntu
 ou do Debian: Debian 12+, Linux Mint 21+, Pop!_OS, Zorin, elementary OS.
 
@@ -181,7 +179,8 @@ python3 server/pspstream.py --source kms --profile xbox
 ```
 
 Depois, no PSP, abra o PSPStream e escolha **Procurar o PC na rede**. O
-resto é igual ao README: atalhos, overlay, interface web.
+resto é igual em qualquer distribuição: [Uso no PSP](Uso-no-PSP) (atalhos,
+overlay) e [Interface web](Interface-web).
 
 ## 8. Iniciar junto com a sessão (opcional)
 
@@ -223,8 +222,8 @@ tar xzf pspdev-ubuntu-latest-x86_64.tar.gz -C ~
 cd psp && make dist      # dist/PSP/GAME/PSPStream/{EBOOT.PBP,server.txt}
 ```
 
-Copie `dist/PSP` para a raiz do memory stick e siga o README (Wi-Fi e
-economia de energia WLAN do PSP).
+Copie `dist/PSP` para a raiz do memory stick e siga a
+[Instalação](Instalação#psp) (Wi-Fi e economia de energia WLAN do PSP).
 
 ## 10. Problemas comuns no Ubuntu
 

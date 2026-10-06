@@ -1,7 +1,7 @@
 # Wolf (Games on Whales) + PSPStream numa instalação limpa, com GPU NVIDIA.
 # Precisa do driver 530.30.02 ou mais novo, do NVIDIA Container Toolkit 1.16
-# ou mais novo e do nvidia-drm.modeset=1 (docs/WOLF.md). Intel ou AMD: use
-# compose.yml. Já tem o Wolf? Use pspstream.yml.
+# ou mais novo e do nvidia-drm.modeset=1 (https://github.com/k7vinilstorage/PSP-Stream/wiki/Wolf).
+# Intel ou AMD: use compose.yml. Já tem o Wolf? Use pspstream.yml.
 #
 #   cp .env.example .env    # e ajuste
 #   docker compose up -d

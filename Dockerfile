@@ -1,7 +1,7 @@
-# PSPStream num container, ao lado do Wolf (Games on Whales). Como usar:
-# docs/WOLF.md e os arquivos em docker/. A imagem pronta é publicada pelo CI
-# em ghcr.io/k7vinilstorage/pspstream (nightly = a main; latest e X.Y = as
-# versões). Para compilar:
+# PSPStream num container, ao lado do Wolf (Games on Whales). Como usar: os
+# arquivos em docker/ e https://github.com/k7vinilstorage/PSP-Stream/wiki/Wolf.
+# A imagem pronta é publicada pelo CI em ghcr.io/k7vinilstorage/pspstream
+# (nightly = a main; latest e X.Y = as versões). Para compilar:
 #
 #   docker build -t pspstream .
 #   docker build -t pspstream https://github.com/k7vinilstorage/PSP-Stream.git#main
@@ -49,7 +49,7 @@ RUN python3 -m compileall -q /opt/pspstream/server \
 # Usuário comum. O socket da API do Wolf é do root (o Wolf não muda a
 # permissão dele, e o próprio Wolf UI roda como root): os arquivos em docker/
 # usam o uid 0 sem nenhuma capability; a outra saída (liberar o socket para o
-# uid 10001) está em docs/WOLF.md.
+# uid 10001) está na wiki, página "Wolf por dentro" (Segurança).
 USER pspstream
 WORKDIR /config
 EXPOSE 5123/tcp 5123/udp

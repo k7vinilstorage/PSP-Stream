@@ -1,8 +1,6 @@
-# Medições
-
 Caderno de medições do desenvolvimento, em ordem: cada seção registra o que
 se sabia naquele momento, inclusive hipóteses que os números seguintes
-derrubaram. O resumo atual está no [README](../README.md#desempenho-medido).
+derrubaram. O resumo atual está em [Desempenho](Desempenho).
 
 Cada número aqui tem uma origem, e elas não se misturam:
 
@@ -749,7 +747,7 @@ imagem inteira a cada vez. Com frames P, vai só o que mudou.
 
 Encode no PC: ~1,2 ms o P e ~0,5 ms as 2 cópias (pacote em ~1,5-1,8 ms).
 
-**Como funciona** (detalhes em [PROTOCOL.md](PROTOCOL.md)):
+**Como funciona** (detalhes em [Protocolo](Protocolo)):
 
 - O decoder do PSP só solta o frame N depois do N+2 (teste v2 acima), e o
   `Stop` zera as referências. Então cada pacote leva o frame e 2 cópias (P

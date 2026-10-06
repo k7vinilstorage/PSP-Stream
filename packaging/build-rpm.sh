@@ -13,9 +13,11 @@ mkdir -p "$out"
 top=$(mktemp -d)
 trap 'rm -rf "$top"' EXIT
 mkdir -p "$top/SOURCES" "$top/SPECS"
-# tar dos arquivos do repositório (sem builds locais), com a pasta pspstream-VERSÃO
-(cd "$root" && git ls-files --cached --others --exclude-standard | grep -v '^dist/' |
-    tar -czf "$top/SOURCES/pspstream-$version.tar.gz" --transform "s,^,pspstream-$version/," -T -)
+# tar dos arquivos do repositório (sem builds locais), com a pasta pspstream-VERSÃO.
+# Nomes separados por \0: sem isso, o git põe entre aspas os nomes com acento
+# (as páginas de wiki/) e o tar não os acha.
+(cd "$root" && git ls-files -z --cached --others --exclude-standard | grep -zv '^dist/' |
+    tar -czf "$top/SOURCES/pspstream-$version.tar.gz" --transform "s,^,pspstream-$version/," --null -T -)
 rpmbuild -bb --quiet --define "_topdir $top" --define "pspversion $version" "$@" "$root/packaging/pspstream.spec"
 for f in "$top"/RPMS/*/*.rpm; do
     cp "$f" "$out/"

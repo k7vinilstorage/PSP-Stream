@@ -1,4 +1,4 @@
-"""Protocolo v5 do PSPStream (TCP ou UDP, little-endian). Ver docs/PROTOCOL.md.
+"""Protocolo v5 do PSPStream (TCP ou UDP, little-endian). Ver wiki/Protocolo.md.
 
 Manter em sincronia com psp/src/protocol.h.
 """

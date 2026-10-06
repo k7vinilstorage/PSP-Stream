@@ -3,7 +3,7 @@
  * servidor do PSPStream como DMA-BUF, a cada quadro novo.
  *
  * Por quê: no GNOME 50, a captura pelo portal fica em ~40 fps (limitador do
- * mutter, ver docs/MEASUREMENTS.md). O KMS lê o buffer que a placa de vídeo
+ * mutter, ver wiki/Medições.md). O KMS lê o buffer que a placa de vídeo
  * está mostrando, sem passar pelo compositor, como a captura KMS do Sunshine.
  *
  * Privilégio: drmModeGetFB2 só devolve os handles do buffer com

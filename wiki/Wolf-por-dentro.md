@@ -1,8 +1,6 @@
-# Como o PSPStream funciona no Wolf
-
-Detalhes técnicos da fonte `--source wolf`. Como instalar e usar:
-[WOLF.md](WOLF.md). As referências ao código do Wolf são do branch `stable`
-(commit `facb8e0`), lido antes de escrever esta integração.
+Detalhes técnicos da fonte `--source wolf`. Como instalar e usar: [Wolf](Wolf).
+As referências ao código do Wolf são do branch `stable` (commit `facb8e0`),
+lido antes de escrever esta integração.
 
 ## Visão geral
 
