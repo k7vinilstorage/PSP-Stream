@@ -41,6 +41,9 @@ MinVersion=10.0
 ; administrador: a regra do firewall e o driver precisam
 PrivilegesRequired=admin
 WizardStyle=modern
+; inglês por padrão, como o resto do PSPStream; o português fica na janela de idioma do início
+LanguageDetectionMethod=none
+ShowLanguageDialog=yes
 UninstallDisplayIcon={app}\pspstream.exe
 UninstallDisplayName=PSPStream
 CloseApplications=yes

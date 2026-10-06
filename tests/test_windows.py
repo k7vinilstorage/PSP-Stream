@@ -473,6 +473,11 @@ class InstallerScriptTest(unittest.TestCase):
                                                                     "UninstallProgram", "LaunchProgram"}:
             self.assertIn(used, names)
 
+    def test_english_by_default(self):
+        self.assertIn("\nLanguageDetectionMethod=none\n", self.iss)  # não segue o idioma do Windows
+        languages = self.iss.split("[Languages]\n", 1)[1].split("\n\n", 1)[0].splitlines()
+        self.assertTrue(languages[0].startswith('Name: "en"'), languages)  # o primeiro é o padrão
+
     def test_defines_come_from_win_doctor(self):
         import tempfile
         sys.path.insert(0, str(ROOT / "packaging" / "windows"))
