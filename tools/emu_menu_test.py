@@ -40,7 +40,7 @@ def main():
     game.mkdir(parents=True)
     shutil.copy(ROOT / "psp/EBOOT.PBP", game)
     cfg = game / "server.txt"
-    cfg.write_text(f"# sem IP: a tela de configuracao abre\nport={port}\nexit_after=200\n")
+    cfg.write_text(f"# no IP: the settings screen opens\nport={port}\nexit_after=200\n")
 
     log_path = work / "server.log"
     server = subprocess.Popen([python, str(ROOT / "server/pspstream.py"), "--config", str(work / "server.json"), "--no-web", "--source", "static", "--port", str(port),
@@ -59,7 +59,7 @@ def main():
             except OSError:
                 time.sleep(0.2)
         if ws is None:
-            print("FALHOU: depurador do PPSSPP não respondeu")
+            print("FAILED: the PPSSPP debugger did not answer")
             return 1
 
         def press(button, hold=0.15):
@@ -70,7 +70,7 @@ def main():
 
         time.sleep(2.0)
         if "the PSP started the stream" in log_path.read_text():
-            print("FALHOU: conectou sem IP, a tela não esperou")
+            print("FAILED: connected without an IP, the screen did not wait")
             return 1
         press("cross")          # o item inicial sem IP é "Procurar o PC na rede"
         time.sleep(3.0)         # Wi-Fi emulado + broadcast
@@ -81,16 +81,16 @@ def main():
                 break
             time.sleep(0.1)
         saved = cfg.read_text()
-        print("---- server.txt gravado pelo PSP ----")
+        print("---- server.txt written by the PSP ----")
         print(saved)
         if not ok:
-            print("FALHOU: o stream não começou")
+            print("FAILED: the stream did not start")
             return 1
         first = next(line for line in saved.splitlines() if line and not line.startswith("#"))
         if not first.split(":")[0].count(".") == 3:
-            print(f"FALHOU: a primeira linha do server.txt não é um IP: {first!r}")
+            print(f"FAILED: the first line of server.txt is not an IP: {first!r}")
             return 1
-        print(f"OK: achou o PC ({first}), gravou o server.txt e o stream começou")
+        print(f"OK: found the PC ({first}), wrote server.txt and the stream started")
         return 0
     finally:
         try:
@@ -99,7 +99,7 @@ def main():
             emu.kill()
         server.terminate()
         server.wait()
-        print("---- servidor ----")
+        print("---- server ----")
         print(log_path.read_text()[-1500:])
         shutil.rmtree(work, ignore_errors=True)
 

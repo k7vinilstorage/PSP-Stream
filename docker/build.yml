@@ -1,6 +1,6 @@
-# Compila o PSPStream a partir deste repositório, em vez de baixar a imagem
-# pronta do ghcr.io (um branch que ainda não foi para a main, ou mudanças
-# locais). Junto com um dos outros arquivos:
+# Builds PSPStream from this repository instead of pulling the ready image
+# from ghcr.io (a branch that has not reached main yet, or local changes).
+# Together with one of the other files:
 #
 #   docker compose -f compose.yml -f build.yml up -d --build
 #   docker compose -f pspstream.yml -f build.yml up -d --build

@@ -104,7 +104,7 @@ def raw_long():
                 break
             yield frame
     if proc.returncode:
-        raise RuntimeError(f"ffmpeg saiu com {proc.returncode}")
+        raise RuntimeError(f"ffmpeg exited with {proc.returncode}")
 
 
 def openh264(frames, copies=None, level=None, idr_every=0) -> bytes:
@@ -131,7 +131,7 @@ def split_aus(stream: bytes, marker: bytes) -> list[bytes]:
         starts.append(i)
         i = stream.find(marker, i + 1)
     if not starts or starts[0] != 0:
-        raise ValueError("o stream não começa com o separador esperado")
+        raise ValueError("the stream does not start with the expected separator")
     return [stream[a:b] for a, b in zip(starts, starts[1:] + [len(stream)])]
 
 
@@ -142,7 +142,7 @@ SPS = b"\x00\x00\x00\x01\x67"
 def main() -> int:
     frames = raw_frames()
     if len(frames) != FRAMES:
-        raise ValueError(f"{len(frames)} frames crus, esperava {FRAMES}")
+        raise ValueError(f"{len(frames)} raw frames, expected {FRAMES}")
     clips = [
         ("x264_dup3_l30", 3, split_aus(x264(3, "3.0", X264_DUP3), AUD)),
         ("x264_dup3_l41", 3, split_aus(x264(3, "4.1", X264_DUP3), AUD)),
@@ -158,17 +158,17 @@ def main() -> int:
     for name, group, aus in clips:
         frames_in = {"oh_long": LONG_FRAMES, "oh_idr10": 2 * FRAMES}.get(name, FRAMES)
         if len(aus) != frames_in * group:
-            raise ValueError(f"{name}: {len(aus)} AUs, esperava {frames_in * group}")
+            raise ValueError(f"{name}: {len(aus)} AUs, expected {frames_in * group}")
         if group > 1:
             dups = [len(a) for i, a in enumerate(aus) if i % group]
-            print(f"  cópias: {sum(dups) / len(dups):.0f} bytes em média, mín. {min(dups)}, máx. {max(dups)}")
+            print(f"  copies: {sum(dups) / len(dups):.0f} bytes on average, min {min(dups)}, max {max(dups)}")
         data = b"".join(aus)
         out += name.encode().ljust(24, b"\0")
         out += struct.pack(f"<II{len(aus)}I", len(aus), len(data), *(len(a) for a in aus))
         out += data
         out += bytes(-len(out) % 4)  # o próximo clipe começa alinhado
-        print(f"{name}: {len(aus)} AUs, {len(data) / frames_in / 1024:.1f} KB por frame mostrado, "
-              f"1º (IDR) {len(aus[0]) / 1024:.1f} KB")
+        print(f"{name}: {len(aus)} AUs, {len(data) / frames_in / 1024:.1f} KB per frame shown, "
+              f"1st (IDR) {len(aus[0]) / 1024:.1f} KB")
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_bytes(out)
     print(f"{OUT}: {len(out) / 1024:.0f} KB")

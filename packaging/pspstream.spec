@@ -6,7 +6,7 @@
 Name:           pspstream
 Version:        %{pspversion}
 Release:        1%{?dist}
-Summary:        Tela e som do PC no PSP (servidor do PSPStream)
+Summary:        PC screen and audio on the PSP (PSPStream server)
 License:        MIT
 URL:            https://github.com/k7vinilstorage/PSP-Stream
 Source0:        pspstream-%{version}.tar.gz
@@ -27,13 +27,13 @@ Recommends:     pulseaudio-utils
 Recommends:     xdg-desktop-portal
 
 %description
-Transmite a tela e o som do PC para um PSP com o EBOOT do PSPStream pelo
-Wi-Fi (H.264 com frames P, decodificado pelo hardware do PSP, e IMA ADPCM),
-e manda os botões do PSP de volta como teclado e mouse ou como um controle
-de Xbox virtual.
+Streams the PC screen and audio to a PSP running the PSPStream EBOOT over
+Wi-Fi (H.264 with P frames, decoded by the PSP hardware, and IMA ADPCM),
+and sends the PSP buttons back as keyboard and mouse or as a virtual Xbox
+controller.
 
-Depois de instalar: pspstream --check (confere tudo), pspstream (servidor)
-e http://localhost:5124 (configurações).
+After installing: pspstream --check (checks everything), pspstream (server)
+and http://localhost:5124 (settings).
 
 %prep
 %autosetup -n pspstream-%{version}

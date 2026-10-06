@@ -26,8 +26,8 @@ def service(name):
 
 base = service("compose.yml")
 for other in ("compose.nvidia.yml", "pspstream.yml"):
-    assert service(other) == base, f"o serviço pspstream de {other} difere do compose.yml"
-print("serviço pspstream igual nos três arquivos")
+    assert service(other) == base, f"the pspstream service in {other} differs from compose.yml"
+print("pspstream service is the same in the three files")
 PY
 if command -v shellcheck > /dev/null; then
     shellcheck "$root/docker/install.sh" "$root/packaging/"*.sh

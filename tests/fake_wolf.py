@@ -45,7 +45,7 @@ def fmt_unescape(text: str) -> str:
     (no Wolf, um placeholder que ele não conhece derruba o pipeline)."""
     rest = text.replace("{{", "").replace("}}", "")
     if "{" in rest or "}" in rest:
-        raise ValueError("fmt::format: chave sem escape no pipeline")
+        raise ValueError("fmt::format: unescaped brace in the pipeline")
     return text.replace("{{", "{").replace("}}", "}")
 
 
@@ -228,7 +228,7 @@ class FakeWolf:
             desc = re.sub(r"^interpipesrc [^!]*", fake_src + " ", desc)
             pipe = Gst.parse_launch(desc)
             if pipe.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
-                raise RuntimeError("PLAYING falhou")
+                raise RuntimeError("PLAYING failed")
         except (GLib.Error, ValueError, RuntimeError) as exc:  # o Wolf: só um erro no log dele
             with self.lock:
                 self.started.append((kind, sid, text, False, str(exc)))
@@ -273,10 +273,10 @@ def main(argv=None) -> int:
     import argparse
     import signal
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--dir", default="/var/run/wolf", help="onde criar o wolf.sock")
+    p.add_argument("--dir", default="/var/run/wolf", help="where to create wolf.sock")
     p.add_argument("--video-port", type=int, default=48100)
     p.add_argument("--audio-port", type=int, default=48200)
-    p.add_argument("--lobby", default="Steam", help="nome do lobby aberto")
+    p.add_argument("--lobby", default="Steam", help="name of the open lobby")
     args = p.parse_args(argv)
     os.makedirs(args.dir, exist_ok=True)
     if os.path.exists(os.path.join(args.dir, "wolf.sock")):
@@ -284,7 +284,7 @@ def main(argv=None) -> int:
     lobby = {"id": "8f0b2c6e-0d6a-4c1e-9a52-3f2f5d7a1b10", "name": args.lobby, "multi_user": True,
              "pin_required": False, "connected_sessions": []}
     wolf = FakeWolf(args.dir, [lobby], args.video_port, args.audio_port)
-    print(f"Wolf falso: {wolf.socket_path}, ping {wolf.ports['video']}/{wolf.ports['audio']}", flush=True)
+    print(f"fake Wolf: {wolf.socket_path}, ping {wolf.ports['video']}/{wolf.ports['audio']}", flush=True)
     done = threading.Event()
     signal.signal(signal.SIGTERM, lambda *a: done.set())
     signal.signal(signal.SIGINT, lambda *a: done.set())

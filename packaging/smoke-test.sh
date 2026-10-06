@@ -23,7 +23,7 @@ import urllib.request
 
 summary = json.loads(open(sys.argv[1]).read().strip().splitlines()[-1])
 status = json.load(urllib.request.urlopen("http://127.0.0.1:5601/api/status", timeout=5))
-print("stream:", {k: summary[k] for k in ("frames", "broken", "kb_per_frame")}, "| captura:", status["capture"])
+print("stream:", {k: summary[k] for k in ("frames", "broken", "kb_per_frame")}, "| capture:", status["capture"])
 assert summary["frames"] > 20 and summary["broken"] == 0, summary
 PY
 echo "ok"

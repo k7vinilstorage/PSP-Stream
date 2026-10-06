@@ -49,7 +49,7 @@ def recv_exact(sock, size, throttle):
     while len(buf) < size:
         chunk = sock.recv(min(size - len(buf), 1460))
         if not chunk:
-            raise ConnectionError("servidor fechou a conexão")
+            raise ConnectionError("the server closed the connection")
         throttle.consume(len(chunk))
         buf += chunk
     return bytes(buf)
@@ -741,42 +741,42 @@ def build_parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("host", nargs="?", default="127.0.0.1")
     p.add_argument("--port", type=int, default=protocol.DEFAULT_PORT)
-    p.add_argument("--frames", type=int, default=100, help="quantos frames exibir")
-    p.add_argument("--seconds", type=float, default=0, help="ou rodar por N segundos")
+    p.add_argument("--frames", type=int, default=100, help="how many frames to show")
+    p.add_argument("--seconds", type=float, default=0, help="or run for N seconds")
     p.add_argument("--transport", choices=["tcp", "udp"], default="tcp")
-    p.add_argument("--loss", type=float, default=0, help="UDP: fração de pacotes perdidos (ex.: 0.02)")
+    p.add_argument("--loss", type=float, default=0, help="UDP: fraction of lost packets (e.g. 0.02)")
     p.add_argument("--loss-up", type=float, default=0,
-                   help="UDP: fração dos pedidos do PSP perdidos na subida (ex.: 0.05)")
+                   help="UDP: fraction of PSP requests lost on the way up (e.g. 0.05)")
     p.add_argument("--loss-burst-ms", type=float, default=0,
-                   help="UDP: cada perda abre uma rajada desta duração em que tudo some (ex.: 10)")
-    p.add_argument("--rtt-ms", type=float, default=0, help="UDP: atraso fixo por pedido (ex.: 21, medido no PSP)")
+                   help="UDP: each loss opens a burst of this length in which everything is lost (e.g. 10)")
+    p.add_argument("--rtt-ms", type=float, default=0, help="UDP: fixed delay per request (e.g. 21, measured on the PSP)")
     p.add_argument("--rtt-jitter-ms", type=float, default=0,
-                   help="UDP: atraso extra aleatório por pedido, exponencial com esta média (ex.: 3)")
+                   help="UDP: random extra delay per request, exponential with this mean (e.g. 3)")
     p.add_argument("--early-kb", default="auto",
-                   help="UDP: pedido antecipado, como no PSP: auto (padrão) = ida e volta x vazão, "
-                        "0 = só no fim do frame, N = quando faltarem N KB")
-    p.add_argument("--kbps", type=float, default=0, help="limitar a vazão (KB/s), ex.: 400")
-    p.add_argument("--decode-ms", type=float, default=0, help="simular o tempo de decode do PSP")
+                   help="UDP: early request, as on the PSP: auto (default) = round trip x throughput, "
+                        "0 = only at the end of the frame, N = when N KB are left")
+    p.add_argument("--kbps", type=float, default=0, help="limit the throughput (KB/s), e.g. 400")
+    p.add_argument("--decode-ms", type=float, default=0, help="simulate the PSP decode time")
     p.add_argument("--audio", action="store_true",
-                   help="UDP: pedir o som (CAP_AUDIO) e contar os pacotes de som, como o EBOOT com audio=1")
+                   help="UDP: ask for audio (CAP_AUDIO) and count the audio packets, like the EBOOT with audio=1")
     p.add_argument("--prefetch", choices=["auto", "on", "off"], default="auto",
-                   help="como o prefetch= do server.txt: auto (padrão) = sem prefetch com frames P, com no resto")
+                   help="like prefetch= in server.txt: auto (default) = no prefetch with P frames, prefetch otherwise")
     p.add_argument("--no-prefetch", action="store_true",
-                   help="o mesmo que --prefetch off: só pedir o próximo frame depois de 'decodificar' o atual")
-    p.add_argument("--save", help="salvar o último JPEG exibido neste arquivo")
+                   help="same as --prefetch off: only ask for the next frame after 'decoding' the current one")
+    p.add_argument("--save", help="save the last JPEG shown to this file")
     p.add_argument("--input-demo", action="store_true",
-                   help="enviar uma sequência de teste: X, cima, analógico p/ direita e p/ cima")
-    p.add_argument("--json", action="store_true", help="imprimir o resumo em JSON")
+                   help="send a test sequence: X, up, analog stick right and up")
+    p.add_argument("--json", action="store_true", help="print the summary as JSON")
     p.add_argument("--no-req-dup", action="store_true",
-                   help="frames P: não repetir o pedido de frame (comparação com o EBOOT v1.0)")
+                   help="P frames: do not repeat the frame request (comparison with EBOOT v1.0)")
     p.add_argument("--req-dup-ms", type=float, default=REQ_DUP_S * 1000,
-                   help="frames P: repete o pedido de frame novo depois disto (REQ_DUP_US no stream.c)")
+                   help="P frames: repeat the new frame request after this (REQ_DUP_US in stream.c)")
     p.add_argument("--no-window", action="store_true",
-                   help="frames P com prefetch auto: pedir só o próximo ao pegar cada frame (EBOOT 1.1 antes da janela)")
+                   help="P frames with prefetch auto: only ask for the next one when taking each frame (EBOOT 1.1 before the window)")
     p.add_argument("--old-retry", action="store_true",
-                   help="repetir o pedido mesmo com o decode ainda para pedir (comparação com o EBOOT v1.0)")
+                   help="repeat the request even with decodes still to ask for (comparison with EBOOT v1.0)")
     p.add_argument("--h264p", action="store_true",
-                   help="aceitar H.264 com frames P, como o EBOOT v0.9 (servidor com --codec h264p)")
+                   help="accept H.264 with P frames, like EBOOT v0.9 (server with --codec h264p)")
     return p
 
 
@@ -789,12 +789,12 @@ def main(argv=None):
     if args.json:
         print(json.dumps(summary))
     else:
-        print("{frames} frames em {seconds} s: {fps} fps, {kb_per_frame} KB/frame, {kbps} KB/s, "
-              "rede {net_ms} ms, local {local_ms} ms, descartados {dropped}, perdidos {lost}, "
-              "NACKs {nacks}, pedaços perdidos/repetidos {lost_chunks}/{dup_chunks}, pedidos repetidos {retries}, IDR pedidos "
-              "{idr_requests}, P pulados {skipped}, P sem referência {broken}, P perdidos inteiros {whole_lost}, engasgos (>= 50 ms) {hitches} "
-              "somando {hitch_ms} ms, intervalo p99 {gap_p99_ms} ms, máximo {gap_max_ms} ms; som: {audio_packets} "
-              "pacotes ({audio_kbps} KB/s, {audio_rate} Hz), {audio_lost} perdidos".format(**summary))
+        print("{frames} frames in {seconds} s: {fps} fps, {kb_per_frame} KB/frame, {kbps} KB/s, "
+              "network {net_ms} ms, local {local_ms} ms, dropped {dropped}, lost {lost}, "
+              "NACKs {nacks}, chunks lost/repeated {lost_chunks}/{dup_chunks}, repeated requests {retries}, IDR requests "
+              "{idr_requests}, P skipped {skipped}, P without reference {broken}, whole P lost {whole_lost}, hitches (>= 50 ms) {hitches} "
+              "adding up to {hitch_ms} ms, p99 gap {gap_p99_ms} ms, max {gap_max_ms} ms; audio: {audio_packets} "
+              "packets ({audio_kbps} KB/s, {audio_rate} Hz), {audio_lost} lost".format(**summary))
     return 0
 
 

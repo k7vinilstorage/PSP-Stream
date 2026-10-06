@@ -19,7 +19,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 dest=${1:?uso: install-tree.sh DESTDIR}
 share=$dest/usr/share/pspstream
 
-[ -x "$root/tools/kms/pspstream-kms" ] || { echo "compile antes: make -C tools/kms" >&2; exit 1; }
+[ -x "$root/tools/kms/pspstream-kms" ] || { echo "build it first: make -C tools/kms" >&2; exit 1; }
 
 install -d "$share/server/web" "$share/assets"
 install -m 644 "$root"/server/*.py "$root/server/keymap.json" "$share/server/"

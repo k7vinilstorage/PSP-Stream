@@ -3,7 +3,7 @@
 #   journalctl --user -u pspstream -f           # o log
 # Rode "pspstream" uma vez à mão antes, para escolher a tela no portal.
 [Unit]
-Description=PSPStream (tela e som do PC no PSP)
+Description=PSPStream (PC screen and audio on the PSP)
 Documentation=https://github.com/k7vinilstorage/PSP-Stream/wiki file:///usr/share/doc/pspstream/README.md
 PartOf=graphical-session.target
 After=graphical-session.target pipewire.service

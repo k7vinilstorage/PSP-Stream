@@ -28,8 +28,8 @@ gitw() {
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 if ! gitw clone -q --depth 1 "$url" "$work/wiki"; then
-    echo "não consegui clonar a wiki ($url). Ela existe? Em Settings > Features, marque Wikis," >&2
-    echo "abra a aba Wiki, crie uma página qualquer e rode de novo." >&2
+    echo "could not clone the wiki ($url). Does it exist? In Settings > Features, check Wikis," >&2
+    echo "open the Wiki tab, create any page and run again." >&2
     exit 1
 fi
 
@@ -38,7 +38,7 @@ cp -R "$root/wiki/." "$work/wiki/"
 cd "$work/wiki"
 git add -A
 if git diff --cached --quiet; then
-    echo "a wiki já está igual à pasta wiki/"
+    echo "the wiki already matches the wiki/ folder"
     exit 0
 fi
 git -c core.quotepath=false diff --cached --stat
@@ -47,4 +47,4 @@ git -c user.name="github-actions[bot]" \
     -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
     commit -q -m "Wiki da pasta wiki/ em $(printf %.7s "$rev")"
 gitw push -q origin HEAD
-echo "wiki publicada"
+echo "wiki published"

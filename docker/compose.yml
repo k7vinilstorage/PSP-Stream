@@ -1,17 +1,17 @@
-# Wolf (Games on Whales) + PSPStream numa instalação limpa, com GPU Intel ou
-# AMD (ou sem GPU). Com NVIDIA, use compose.nvidia.yml. Já tem o Wolf? Use
-# pspstream.yml. Passo a passo: https://github.com/k7vinilstorage/PSP-Stream/wiki/Wolf
-# (ou docker/install.sh).
+# Wolf (Games on Whales) + PSPStream on a clean install, with an Intel or AMD
+# GPU (or no GPU). With NVIDIA, use compose.nvidia.yml. Already have Wolf? Use
+# pspstream.yml. Step by step: https://github.com/k7vinilstorage/PSP-Stream/wiki/Wolf
+# (or docker/install.sh).
 #
-#   cp .env.example .env    # e ajuste
+#   cp .env.example .env    # and adjust
 #   docker compose up -d
 #
-# As configurações ficam no .env (ou nas variáveis da stack do Portainer).
+# The settings live in .env (or in the Portainer stack variables).
 
 services:
   wolf:
-    # Como na documentação do Wolf (quickstart, Intel/AMD), mais o socket da
-    # API em /var/run/wolf para o PSPStream (e o Wolf UI, que o procura lá).
+    # As in the Wolf documentation (quickstart, Intel/AMD), plus the API socket
+    # in /var/run/wolf for PSPStream (and Wolf UI, which looks for it there).
     image: ${WOLF_IMAGE:-ghcr.io/games-on-whales/wolf:stable}
     environment:
       - WOLF_SOCKET_PATH=/var/run/wolf/wolf.sock
@@ -34,12 +34,12 @@ services:
     image: ${PSPSTREAM_IMAGE:-ghcr.io/k7vinilstorage/pspstream:nightly}
     depends_on:
       - wolf
-    # O PSP fala com a porta 5123 do servidor, e o Wolf manda a imagem e o som
-    # para 127.0.0.1: a rede do host, como o Wolf.
+    # The PSP talks to port 5123 on the server, and Wolf sends the image and
+    # audio to 127.0.0.1: the host network, like Wolf.
     network_mode: host
     restart: unless-stopped
-    # O socket do Wolf é só do root (o Wolf UI também roda como root). O uid é
-    # 0, mas sem nenhuma capability, sem ganhar privilégios e só leitura.
+    # The Wolf socket belongs to root only (Wolf UI also runs as root). The uid
+    # is 0, but with no capabilities, no privilege gain and read-only.
     user: "0:0"
     cap_drop:
       - ALL
@@ -59,6 +59,7 @@ services:
       - PSPSTREAM_WOLF_TARGET=${PSPSTREAM_WOLF_TARGET:-}
       - PSPSTREAM_WOLF_PIN=${PSPSTREAM_WOLF_PIN:-}
       - PSPSTREAM_PROFILE=${PSPSTREAM_PROFILE:-xbox}
+      - PSPSTREAM_LANG=${PSPSTREAM_LANG:-en}
       - PSPSTREAM_WEB=${PSPSTREAM_WEB:-127.0.0.1:5124}
       - PSPSTREAM_WEB_PASSWORD=${PSPSTREAM_WEB_PASSWORD:-}
       - PSPSTREAM_WEB_HOSTS=${PSPSTREAM_WEB_HOSTS:-}

@@ -1,5 +1,5 @@
 # sudo ufw allow PSPStream
 [PSPStream]
 title=PSPStream
-description=Tela e som do PC no PSP (TCP e UDP 5123)
+description=PC screen and audio on the PSP (TCP and UDP 5123)
 ports=5123/tcp|5123/udp
