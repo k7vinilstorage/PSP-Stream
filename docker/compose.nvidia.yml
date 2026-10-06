@@ -1,6 +1,7 @@
-# Wolf (Games on Whales) + PSPStream numa instalação limpa, com GPU Intel ou
-# AMD (ou sem GPU). Com NVIDIA, use compose.nvidia.yml. Já tem o Wolf? Use
-# pspstream.yml. Passo a passo: docs/WOLF.md (ou docker/install.sh).
+# Wolf (Games on Whales) + PSPStream numa instalação limpa, com GPU NVIDIA.
+# Precisa do driver 530.30.02 ou mais novo, do NVIDIA Container Toolkit 1.16
+# ou mais novo e do nvidia-drm.modeset=1 (docs/WOLF.md). Intel ou AMD: use
+# compose.yml. Já tem o Wolf? Use pspstream.yml.
 #
 #   cp .env.example .env    # e ajuste
 #   docker compose up -d
@@ -9,11 +10,13 @@
 
 services:
   wolf:
-    # Como na documentação do Wolf (quickstart, Intel/AMD), mais o socket da
-    # API em /var/run/wolf para o PSPStream (e o Wolf UI, que o procura lá).
+    # Como na documentação do Wolf (quickstart, NVIDIA com o Container Toolkit),
+    # mais o socket da API em /var/run/wolf para o PSPStream (e o Wolf UI).
     image: ${WOLF_IMAGE:-ghcr.io/games-on-whales/wolf:stable}
     environment:
       - WOLF_SOCKET_PATH=/var/run/wolf/wolf.sock
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - NVIDIA_VISIBLE_DEVICES=all
     volumes:
       - /etc/wolf/:/etc/wolf
       - /var/run/docker.sock:/var/run/docker.sock:rw
@@ -26,6 +29,13 @@ services:
       - /dev/dri
       - /dev/uinput
       - /dev/uhid
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     network_mode: host
     restart: unless-stopped
 
@@ -54,7 +64,7 @@ services:
       - WOLF_SOCKET_PATH=/var/run/wolf/wolf.sock
       - WOLF_VIDEO_PING_PORT=${WOLF_VIDEO_PING_PORT:-48100}
       - WOLF_AUDIO_PING_PORT=${WOLF_AUDIO_PING_PORT:-48200}
-      - PSPSTREAM_VIDEO_CONVERT=${PSPSTREAM_VIDEO_CONVERT:-auto}
+      - PSPSTREAM_VIDEO_CONVERT=${PSPSTREAM_VIDEO_CONVERT:-nvidia}
       - PSPSTREAM_WOLF_TARGET=${PSPSTREAM_WOLF_TARGET:-}
       - PSPSTREAM_WOLF_PIN=${PSPSTREAM_WOLF_PIN:-}
       - PSPSTREAM_PROFILE=${PSPSTREAM_PROFILE:-xbox}

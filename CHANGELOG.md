@@ -157,6 +157,29 @@ de outra versão do protocolo é recusado com aviso no log.
   O CI compila a imagem e a testa contra o Wolf falso
   (`packaging/docker-test.sh`). Seção "Wolf" no README; a interface web
   mostra uma linha "Wolf" com o que está sendo espelhado.
+- **Wolf, instalação do zero:** `docker/install.sh` instala o Wolf e o
+  PSPStream num servidor com Docker (detecta a GPU, prepara o sistema como a
+  documentação do Wolf pede: módulos `uinput`/`uhid` e as regras udev do
+  Wolf; libera as portas no ufw/firewalld; escreve um `.env`; sobe tudo),
+  mostrando cada comando e perguntando antes. Compose completos em
+  `docker/compose.yml` (Intel/AMD) e `compose.nvidia.yml`, `pspstream.yml`
+  para quem já tem o Wolf, `build.yml` para compilar, e `.env.example` com
+  as configurações; o CI confere que o serviço do PSPStream é o mesmo nos
+  três e que o instalador gera um `.env` válido.
+- **Imagem pronta no ghcr.io:** o CI publica
+  `ghcr.io/k7vinilstorage/pspstream` (`nightly` a cada push na `main`, a
+  versão e `latest` a cada tag), depois de testá-la contra o Wolf falso.
+- **Interface web na rede, com senha:** `PSPSTREAM_WEB_PASSWORD`
+  (autenticação básica do HTTP, na página e na API) e `--web-allow-host` /
+  `PSPSTREAM_WEB_HOSTS` para nomes como o de um Cloudflare Tunnel (serviço
+  `cloudflared` opcional nos compose). O padrão continua só no próprio PC.
+- Padrões por variável de ambiente para o Docker (a interface web ainda
+  muda): `PSPSTREAM_WEB`, `PSPSTREAM_WOLF_TARGET`, `PSPSTREAM_VIDEO_CONVERT`,
+  `PSPSTREAM_WOLF_PIN`, `PSPSTREAM_PROFILE`.
+- Documentação do Wolf: `docs/WOLF.md` (instalação, primeiro uso, lobbies
+  Start e Coop do Wolf UI e a ordem dos controles, interface web,
+  configurações, problemas) e `docs/WOLF-INTERNALS.md` (como funciona por
+  dentro e o que foi conferido no código do Wolf).
 - O servidor encerra direito no SIGTERM (`docker stop`, `systemctl stop`),
   como no Ctrl+C.
 

@@ -1,5 +1,7 @@
 # PSPStream num container, ao lado do Wolf (Games on Whales). Como usar:
-# README.md, seção "Wolf (Games on Whales)", e docker/compose.yml.
+# docs/WOLF.md e os arquivos em docker/. A imagem pronta é publicada pelo CI
+# em ghcr.io/k7vinilstorage/pspstream (nightly = a main; latest e X.Y = as
+# versões). Para compilar:
 #
 #   docker build -t pspstream .
 #   docker build -t pspstream https://github.com/k7vinilstorage/PSP-Stream.git#main
@@ -7,6 +9,11 @@
 # Só o servidor: com --source wolf, a imagem, o som e os controles vêm pela
 # API do Wolf. Sem PipeWire, portal, evdev nem /dev/uinput.
 FROM ubuntu:24.04
+
+LABEL org.opencontainers.image.title="PSPStream" \
+      org.opencontainers.image.description="A tela, o som e os controles de um lobby do Wolf (Games on Whales) no PSP" \
+      org.opencontainers.image.source="https://github.com/k7vinilstorage/PSP-Stream" \
+      org.opencontainers.image.licenses="MIT"
 
 # GStreamer: base (tcpserversrc, videoscale, audioresample), good (jpegenc),
 # bad (gdpdepay, adpcmenc). libopenh264-7: H.264 com frames P (o servidor
@@ -40,9 +47,9 @@ RUN python3 -m compileall -q /opt/pspstream/server \
     && install -d -m 0777 /config
 
 # Usuário comum. O socket da API do Wolf é do root (o Wolf não muda a
-# permissão dele, e o próprio Wolf UI roda como root): o docker/compose.yml
-# explica as duas saídas (uid 0 sem nenhuma capability, ou liberar o socket
-# para o uid 10001).
+# permissão dele, e o próprio Wolf UI roda como root): os arquivos em docker/
+# usam o uid 0 sem nenhuma capability; a outra saída (liberar o socket para o
+# uid 10001) está em docs/WOLF.md.
 USER pspstream
 WORKDIR /config
 EXPOSE 5123/tcp 5123/udp
