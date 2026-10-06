@@ -243,10 +243,10 @@ class H264PEncoder:
         """Qualidade do QP em uso (pelo GStreamer, pode estar atrás da pedida por até qp_change_min_s)."""
         return self.quality if self._qp == qp_for_quality(self.quality) else None
 
-    def request_idr(self) -> bool:
+    def request_idr(self, force: bool = False) -> bool:
         """Próximo frame vira IDR. False se um IDR saiu há pouco (o pedido é do
-        IDR que ainda está a caminho)."""
-        if time.monotonic() - self._last_idr < IDR_MIN_INTERVAL_S:
+        IDR que ainda está a caminho). force: mesmo assim (o último nem saiu)."""
+        if not force and time.monotonic() - self._last_idr < IDR_MIN_INTERVAL_S:
             return False
         with self._lock:
             self._idr = True

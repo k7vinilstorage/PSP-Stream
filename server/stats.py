@@ -2,6 +2,7 @@
 import logging
 import statistics
 import time
+from collections import deque
 
 import protocol
 from i18n import N_, tr
@@ -16,6 +17,14 @@ HITCH_MS = 50
 # Nomes internos (status da interface web); o texto mostrado passa por tr().
 HITCH_CAUSES = ("loss", "IDR", "late request", "capture")
 HITCH_TEXT = {"loss": N_("loss"), "IDR": "IDR", "late request": N_("late request"), "capture": N_("capture")}
+# Amostras guardadas por janela. A fase (benchmark) só recomeça no --bench: sem
+# teto, as listas dela cresciam o tempo todo (~60 floats/s em cada uma, ~100 MB
+# por hora de stream). 8192 = mais de 2 min a 60 fps, mais que uma fase do benchmark.
+MAX_SAMPLES = 8192
+
+
+def _samples() -> deque:
+    return deque(maxlen=MAX_SAMPLES)
 
 
 def now_ms() -> int:
@@ -45,26 +54,26 @@ class Window:
         self.frames = 0
         self.bytes = 0
         self.keepalive = 0  # reenvios do último frame por falta de frame novo (fora da latência)
-        self.latency = []  # captura no PC -> PSP exibido (ms)
-        self.capture = []  # captura -> JPEG pronto, no GStreamer (ms)
-        self.age = []      # frame pronto -> enviado (ms)
-        self.wait = []     # pedido chegou -> frame enviado (ms): espera por frame novo
-        self.net = []      # pedido -> frame recebido, medido no PSP (ms)
-        self.transfer = [] # net - espera: tempo de rede de fato (ms)
-        self.rate = []     # KB/s estimados por frame (tamanho / transferência)
-        self.local = []    # recebido -> exibido, no PSP (ms)
-        self.decode = []   # só decode (ms)
-        self.first = []    # pedido -> primeiro pedaço, no PSP (ms): ida e volta
-        self.burst = []    # primeiro -> último pedaço (ms)
-        self.burst_rate = []  # KB/s dentro da rajada: vazão real do enlace
-        self.ping = []     # ping durante o stream, informado pelo PSP (ms)
-        self.ping_min = []
-        self.idle = []     # fim do frame anterior -> 1º pedaço deste, no PSP (ms; < 0 = chegou em fila)
-        self.early = []    # bytes que faltavam quando o PSP pediu o próximo (0 = só no fim)
+        self.latency = _samples()  # captura no PC -> PSP exibido (ms)
+        self.capture = _samples()  # captura -> JPEG pronto, no GStreamer (ms)
+        self.age = _samples()      # frame pronto -> enviado (ms)
+        self.wait = _samples()     # pedido chegou -> frame enviado (ms): espera por frame novo
+        self.net = _samples()      # pedido -> frame recebido, medido no PSP (ms)
+        self.transfer = _samples()  # net - espera: tempo de rede de fato (ms)
+        self.rate = _samples()     # KB/s estimados por frame (tamanho / transferência)
+        self.local = _samples()    # recebido -> exibido, no PSP (ms)
+        self.decode = _samples()   # só decode (ms)
+        self.first = _samples()    # pedido -> primeiro pedaço, no PSP (ms): ida e volta
+        self.burst = _samples()    # primeiro -> último pedaço (ms)
+        self.burst_rate = _samples()  # KB/s dentro da rajada: vazão real do enlace
+        self.ping = _samples()     # ping durante o stream, informado pelo PSP (ms)
+        self.ping_min = _samples()
+        self.idle = _samples()     # fim do frame anterior -> 1º pedaço deste, no PSP (ms; < 0 = chegou em fila)
+        self.early = _samples()    # bytes que faltavam quando o PSP pediu o próximo (0 = só no fim)
         self.lost0 = None  # contador de frames perdidos do PSP no início da janela
         self.lost1 = 0
         self.audio_bytes = 0  # pacotes de som enviados
-        self.hitches = []  # (intervalo ms, causa) dos engasgos
+        self.hitches = _samples()  # (intervalo ms, causa) dos engasgos
         self.idrs = 0      # frames IDR enviados no modo P (pedidos pelo PSP ou encoder refeito)
 
     def summary(self, quality=None) -> dict:
@@ -191,7 +200,7 @@ class SessionStats:
         self.sent[frame_no] = (send_ms, age_ms, size, wait_ms, capture_ms, resend)
         if len(self.sent) > 256:
             for old in sorted(self.sent)[:128]:
-                del self.sent[old]
+                self.sent.pop(old, None)  # o ack (thread do UDP) pode ter tirado no meio
         for w in (self.window, self.phase):
             w.frames += 1
             w.bytes += size
