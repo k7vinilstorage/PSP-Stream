@@ -301,6 +301,13 @@ class WindowsApiTest(unittest.TestCase):
         b.close()
         a.close()
 
+    def test_utf8_in_a_pipe(self):
+        # num pipe o Python do Windows escreveria em cp1252
+        out = subprocess.run([sys.executable, str(ROOT / "server" / "pspstream.py"), "--lang", "pt", "--help"],
+                             capture_output=True, timeout=60)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("porta TCP e UDP (padrão", out.stdout.decode("utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

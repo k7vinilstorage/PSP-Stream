@@ -111,12 +111,14 @@ def screen(exe) -> int:
 
 
 def main() -> int:
+    # o console do runner é cp1252: o que o servidor escreveu não pode derrubar o teste ao ser mostrado
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     app = Path(sys.argv[1]).resolve()
     exe = app / "pspstream.exe"
     if "--screen" in sys.argv:
         return screen(exe)
     assert "PSPStream" in run(exe, "--version").stdout
-    assert "porta TCP e UDP" in run(exe, "--lang", "pt", "--help").stdout
+    assert "porta TCP e UDP (padrão" in run(exe, "--lang", "pt", "--help").stdout  # acentos em UTF-8 num pipe
     check = run(exe, "--check")
     assert check.returncode == 0, "--check found something essential missing"
     assert "libopenh264" in check.stdout

@@ -727,12 +727,13 @@ def no_udp_connreset(sock: socket.socket) -> None:
 
 
 def utf8_console() -> None:
-    """Windows: o log com acentos não pode derrubar o servidor num console cp1252/cp850."""
+    """Windows: num pipe ou arquivo o Python escreve em cp1252 (no console já é Unicode). A saída vai em
+    UTF-8, como no Linux, e um caractere que não dê para escrever não derruba o servidor."""
     if not WINDOWS:
         return
     for stream in (sys.stdout, sys.stderr):
         try:
-            stream.reconfigure(errors="replace")
+            stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError):
             pass
 
