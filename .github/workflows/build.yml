@@ -144,9 +144,6 @@ jobs:
   windows:
     name: Windows server
     runs-on: windows-2022
-    env:
-      # o runtime oficial do GStreamer (MSVC 64 bits); daqui vão só os plugins que o servidor usa
-      GST_VERSION: "1.24.12"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -157,15 +154,11 @@ jobs:
       - name: GStreamer runtime
         shell: pwsh
         run: |
-          $url = "https://gstreamer.freedesktop.org/data/pkg/windows/$env:GST_VERSION/msvc/gstreamer-1.0-msvc-x86_64-$env:GST_VERSION.msi"
-          Invoke-WebRequest $url -OutFile gst.msi
-          # instalação administrativa: só extrai os arquivos, sem mexer no sistema
-          Start-Process msiexec -ArgumentList "/a", "gst.msi", "/qn", "TARGETDIR=$env:RUNNER_TEMP\gst" -Wait
-          $launch = Get-ChildItem "$env:RUNNER_TEMP\gst" -Recurse -Filter gst-launch-1.0.exe | Select-Object -First 1
-          $root = $launch.Directory.Parent.FullName
-          "GST_ROOT=$root" >> $env:GITHUB_ENV
-          & $launch.FullName --version
-          Get-ChildItem "$root\bin" -Filter *openh264*
+          # o runtime oficial (MSVC 64 bits) pelas wheels do PyPI, com os hashes de
+          # packaging/windows/gstreamer-wheels.txt; daqui vão só os plugins que o servidor usa
+          python packaging/windows/gstreamer.py "$env:RUNNER_TEMP\gst"
+          "GST_ROOT=$env:RUNNER_TEMP\gst" >> $env:GITHUB_ENV
+          & "$env:RUNNER_TEMP\gst\bin\gst-launch-1.0.exe" --version
       - name: dependencies
         run: python -m pip install pyinstaller pillow pefile
       - name: tests

@@ -1,0 +1,14 @@
+# O GStreamer de Windows usado pelo CI: as wheels oficiais do projeto no PyPI
+# (MSVC 64 bits), com o hash de cada arquivo. packaging/windows/gstreamer.py
+# baixa e junta tudo numa pasta com o layout do instalador (bin, lib, libexec).
+# Para atualizar: troque a versão e os hashes (pip hash, ou a página do PyPI).
+gstreamer-cli==1.28.7 \
+    --hash=sha256:d89e0036f9cdcc1f2bbb8b6fd6ac2fb3fdc1cb00fbe35e89cdebc83d6aaa183d
+gstreamer-libs==1.28.7 \
+    --hash=sha256:ea81c0f3aba25ca53053202b274c9a05e71037761def9e2dbb172982e8e961bf
+gstreamer-plugins==1.28.7 \
+    --hash=sha256:960f8cc19f4c4dfb460e782b1c8a426e95d06a300195b6f356319731a3a2b70b
+gstreamer-plugins-libs==1.28.7 \
+    --hash=sha256:5bfd41b8f3ec6ad1dac30132ad0ae4738a8a79de926606c7cc2c736bb1d22d06
+gstreamer-ext-runtime==1.28.7 \
+    --hash=sha256:838f7543ca718d05536cfe785d685a372b318505119f2190be59307a2a8a78f2
