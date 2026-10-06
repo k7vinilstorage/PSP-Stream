@@ -40,7 +40,8 @@ The full documentation is in the **[wiki](https://github.com/k7vinilstorage/PSP-
 - **Wolf (Games on Whales)**: the Wolf lobby on the PSP, with audio and
   controls, in a container next to it.
 - **Windows server (experimental)**: a zip with `pspstream.exe`, screen
-  capture through Desktop Duplication, audio and keyboard/mouse.
+  capture through Desktop Duplication, audio, keyboard/mouse and the Xbox
+  controller (with the ViGEmBus driver).
 - **English by default, Portuguese as an option**: server, web interface,
   installer and the PSP screens.
 

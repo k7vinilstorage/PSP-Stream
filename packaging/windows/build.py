@@ -115,7 +115,7 @@ This folder bundles third-party software:
   (https://gstreamer.freedesktop.org/download/, also published on PyPI as
   gstreamer-libs and gstreamer-plugins). Source code:
   https://gstreamer.freedesktop.org/src/
-{openh264}
+{openh264}{vigem}
 PSPStream itself is MIT licensed (LICENSE).
 """
 
@@ -124,6 +124,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--gstreamer", required=True, type=Path, help="GStreamer runtime root (has bin/ and lib/)")
     ap.add_argument("--out", type=Path, default=ROOT / "dist")
+    ap.add_argument("--vigem", type=Path, help="folder with ViGEmClient.dll and LICENSE.txt (vigem.py): the "
+                                               "virtual Xbox controller")
     args = ap.parse_args()
     out = args.out.resolve()
     work = out / "pyinstaller-work"
@@ -137,6 +139,12 @@ def main() -> int:
         raise SystemExit("essential GStreamer plugins are missing")
     for name in ("LICENSE", "README.md", "README.pt-BR.md", "CHANGELOG.md"):
         shutil.copy2(ROOT / name, app / name)
+    if args.vigem:
+        (app / "vigem").mkdir(exist_ok=True)
+        for name in ("ViGEmClient.dll", "LICENSE.txt"):
+            shutil.copy2(args.vigem / name, app / "vigem" / name)
+    else:
+        print("warning: no --vigem: the package goes without the virtual Xbox controller")
     gst_version = ""
     try:
         gst_version = subprocess.run([str(args.gstreamer / "bin" / "gst-launch-1.0.exe"), "--version"],
@@ -149,7 +157,10 @@ def main() -> int:
         version=version(), python=f"{v.major}.{v.minor}.{v.micro}", gst=gst_version,
         openh264=("- openh264 (BSD-2-Clause), the library from the GStreamer runtime. To use Cisco's\n"
                   "  binary instead (covered by Cisco's H.264 patent license), run pspstream --setup.\n")
-        if has_h264 else ""), encoding="utf-8")
+        if has_h264 else "",
+        vigem=("- ViGEmClient (MIT, vigem/LICENSE.txt), built from https://github.com/nefarius/ViGEmClient:\n"
+               "  the virtual Xbox controller, through the ViGEmBus driver (installed separately).\n")
+        if args.vigem else ""), encoding="utf-8")
     (app / "VERSION.txt").write_text(version() + "\n", encoding="utf-8")
     shutil.rmtree(work, ignore_errors=True)
     zip_path = out / "PSPStream-Windows-x64.zip"

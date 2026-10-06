@@ -1,7 +1,9 @@
 The PSP buttons reach the PC as an Xbox controller or as keyboard and mouse.
 Pick the profile with `--profile` or in the [Web Interface](Web-Interface).
 For that, the server needs `/dev/uinput`
-([Installation](Installation#controls-uinput)). With Wolf, the Xbox profiles
+([Installation](Installation#controls-uinput)); on Windows, keyboard and
+mouse need nothing and the Xbox controller needs the ViGEmBus driver
+([Windows](Windows#xbox-controller-vigembus)). With Wolf, the Xbox profiles
 apply inside the game ([Wolf](Wolf#controls-in-the-game)).
 
 ## Xbox controller (`--profile xbox`)

@@ -25,8 +25,10 @@ are welcome.
    ```
 
    `--setup` asks before each step: it creates the firewall rule for port
-   5123 (UDP and TCP, the Windows UAC prompt appears) and, if no openh264
-   library was found, downloads Cisco's.
+   5123 (UDP and TCP, the Windows UAC prompt appears), if no openh264
+   library was found, downloads Cisco's, and, if the ViGEmBus driver is
+   missing, opens its download page (only for the Xbox controller, see
+   below).
 4. Run the server:
 
    ```bat
@@ -51,16 +53,36 @@ For Portuguese: `pspstream --lang pt`, or **Language** in the web interface
 | screen | `--source screen` (default): the monitor through Desktop Duplication (DXGI), `--monitor 1` for the second one. The scaling to 480x272 runs on the GPU (`d3d11convert`); if that does not start, on the CPU |
 | codecs | H.264 with P frames (default), H.264 IDR only and JPEG, the same as on Linux |
 | audio | what plays on the speakers (WASAPI loopback), or `--audio-device test` |
-| controls | keyboard and mouse profiles (`game`, `desktop`, `arrows`) through SendInput |
+| controls | keyboard and mouse profiles (`game`, `desktop`, `arrows`) through SendInput; the virtual Xbox 360 controller (`xbox`, `xbox-camera`, `xbox-shoulders`) through the ViGEmBus driver |
 | web interface | the same page, with the Windows options |
 | `--source test`, `static`, `gst` | test pattern, still image, your own GStreamer elements |
 
 **Not yet:**
 
-- the virtual Xbox controller (`xbox` profiles): it needs the ViGEmBus
-  driver, planned for later;
 - capturing a single window;
 - a tray icon and starting with Windows.
+
+## Xbox controller (ViGEmBus)
+
+With `--profile xbox` (or `xbox-camera`, `xbox-shoulders`), the PSP shows up
+on the PC as a **wired Xbox 360 controller**, which games read through
+XInput, with the same profiles and the same SELECT layer as on Linux
+([Controls](Controls)). Windows has no way to create a controller without a
+driver, so this needs **ViGEmBus**, the same driver Sunshine and DS4Windows
+use:
+
+1. Install ViGEmBus once, as administrator, from its
+   [releases page](https://github.com/nefarius/ViGEmBus/releases/latest)
+   (`pspstream --setup` opens it).
+2. `pspstream --check` shows `ok  ViGEmBus` under Controls.
+3. `pspstream --profile xbox`, or **Profile** in the web interface.
+
+The `vigem\ViGEmClient.dll` next to `pspstream.exe` talks to the driver; CI
+builds it from ViGEmClient's source (MIT). Without the driver, the `xbox`
+profiles are refused with a message in the log, and keyboard and mouse
+keep working. The controller disappears when the server stops. ViGEmBus is
+no longer developed by its author (2023), but it works on Windows 10 and
+11 and is what the other streaming programs still use.
 
 ## How it works
 
@@ -115,4 +137,6 @@ official wheels on PyPI (what the zip is built from).
 | black image in a full-screen game | some older games in exclusive full screen do not show in Desktop Duplication: use borderless window mode |
 | the controls do nothing in one program | Windows does not let a normal program send input to one running as administrator: run `pspstream.exe` as administrator too. Some anti-cheats ignore injected input |
 | no audio | `--check` lists `wasapi2src` and `adpcmenc`; with nothing playing, the loopback sends nothing (the PSP plays silence) |
+| "the ViGEmBus driver is not installed" | install it from its [releases page](https://github.com/nefarius/ViGEmBus/releases/latest) as administrator (`pspstream --setup` opens it), then `pspstream --check` |
+| the game does not see the Xbox controller | the game must read XInput (most PC games do); a game that only reads DirectInput sees it too, but with the triggers on one axis, as with a real Xbox 360 controller. `joy.cpl` (Win+R) shows whether the controller is there and its buttons |
 | antivirus warning | the exe is not signed (PyInstaller builds are sometimes flagged). The zip is built by GitHub Actions from this repository |

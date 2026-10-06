@@ -56,7 +56,8 @@ continuam valendo.
 - **Wolf (Games on Whales)**: o lobby do Wolf no PSP, com som e controles,
   num container ao lado dele.
 - **Servidor para Windows (experimental)**: um zip com o `pspstream.exe`,
-  captura da tela pelo Desktop Duplication, som e teclado/mouse.
+  captura da tela pelo Desktop Duplication, som, teclado/mouse e o controle
+  de Xbox (com o driver ViGEmBus).
 
 ## Como funciona
 

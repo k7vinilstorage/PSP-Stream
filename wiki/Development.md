@@ -51,7 +51,8 @@ file's import table with `pefile`. By hand, on Windows:
 ```bat
 pip install pyinstaller pillow pefile
 python packaging\windows\gstreamer.py C:\gst
-python packaging\windows\build.py --gstreamer C:\gst
+python packaging\windows\vigem.py C:\vigem      # ViGEmClient.dll from the source (needs Visual Studio with C++)
+python packaging\windows\build.py --gstreamer C:\gst --vigem C:\vigem
 ```
 
 `--gstreamer` also takes an installed runtime
@@ -185,7 +186,7 @@ server/                server (Python 3)
   i18n.py, lang_pt.py  language: tr()/N_() and the Portuguese catalog
   gst_pipe.py          capture through gst-launch-1.0 in a child process (the Windows server; PSPSTREAM_CAPTURE=pipe on Linux)
   imaging.py           JPEG and still images through Pillow (no GStreamer in the process)
-  win_input.py, win_doctor.py   Windows: SendInput keyboard and mouse; --check and --setup
+  win_input.py, win_gamepad.py, win_doctor.py   Windows: SendInput keyboard and mouse; Xbox controller (ViGEmBus); --check and --setup
   framerate.py         FPS limiter and capture rate meter (no GStreamer needed)
   paths.py             files in the repository or installed by the package
   settings.py          general settings: schema, server.json, validation
@@ -205,8 +206,8 @@ server/                server (Python 3)
 Dockerfile, docker/    server image; compose (Wolf + PSPStream, NVIDIA, PSPStream only), .env, install.sh
 packaging/             .deb and .rpm (install-tree.sh, build-deb.sh, pspstream.spec, build-rpm.sh);
                        docker-test.sh (the image against the fake Wolf), compose-check.sh, publish-wiki.sh;
-                       windows/ (PyInstaller spec, gstreamer.py + gstreamer-wheels.txt, build.py with
-                       the GStreamer subset, smoke.py)
+                       windows/ (PyInstaller spec, gstreamer.py + gstreamer-wheels.txt, vigem.py, build.py
+                       with the GStreamer subset, smoke.py)
 .github/workflows/     build.yml (EBOOT, tests, packages, image, releases); wiki.yml (publishes the wiki)
 tools/                 fake_client.py, emu_*.py/sh, h264_probe_clips.py, kms/ (KMS helper)
 wiki/                  the pages of this wiki

@@ -61,7 +61,7 @@ def resolve_codec(args):
 
 def open_injector(args):
     """Controles do PSP no PC: (injetor, descrição). RuntimeError se não der
-    (sem /dev/uinput, perfil que não existe)."""
+    (sem /dev/uinput ou, no Windows, sem o ViGEmBus; perfil que não existe)."""
     from inject import Injector, load_profile
     try:
         profile = load_profile(args.keymap, args.profile)
@@ -69,12 +69,13 @@ def open_injector(args):
         raise RuntimeError(str(exc)) from None
     if args.source == "wolf":
         return open_wolf_injector(args, profile)
-    if profile.get("type") == "gamepad" and WINDOWS:
-        raise RuntimeError(tr("the virtual Xbox controller is not available on Windows yet: use a keyboard and mouse "
-                              "profile (game, desktop, arrows)"))
     if profile.get("type") == "gamepad":
         from gamepad import GamepadInjector
-        injector = GamepadInjector(profile, args.input_dry_run, args.input_timeout)
+        out = None
+        if WINDOWS and not args.input_dry_run:
+            import win_gamepad
+            out = win_gamepad.ViGEmPad()  # RuntimeError sem o driver ViGEmBus
+        injector = GamepadInjector(profile, args.input_dry_run, args.input_timeout, out=out)
         kind = tr("virtual Xbox 360 controller")
     else:
         injector = Injector(profile, args.input_dry_run, args.mouse_speed, args.input_timeout)

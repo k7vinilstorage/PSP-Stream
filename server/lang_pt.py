@@ -1075,8 +1075,6 @@ PT = {
     # server/capture.py, gst_pipe.py, imaging.py, win_input.py: servidor de Windows
     'what plays on the speakers':
         'o que sai nas caixas',
-    'the virtual Xbox controller is not available on Windows yet: use a keyboard and mouse profile (game, desktop, arrows)':
-        'o controle de Xbox virtual ainda não existe no Windows: use um perfil de teclado e mouse (game, desktop, arrows)',
     'bundled':
         'junto do PSPStream',
     'GStreamer not found: install the GStreamer runtime (MSVC 64-bit) from gstreamer.freedesktop.org, or use the PSPStream build that bundles it':
@@ -1122,8 +1120,6 @@ PT = {
         '0 = o monitor principal, 1 = o segundo, e assim por diante.',
     'monitor = what plays on the speakers (WASAPI loopback); test = 440 Hz tone.':
         'monitor = o que sai nas caixas (loopback do WASAPI); test = tom de 440 Hz.',
-    'Keyboard and mouse through SendInput. The virtual Xbox controller is not available on Windows yet.':
-        'Teclado e mouse pelo SendInput. O controle de Xbox virtual ainda não existe no Windows.',
     # server/win_doctor.py
     'GStreamer {version} ({where}: {path})':
         'GStreamer {version} ({where}: {path})',
@@ -1139,8 +1135,6 @@ PT = {
         'padrão de teste (--source test)',
     'SendInput: keyboard and mouse':
         'SendInput: teclado e mouse',
-    'virtual Xbox controller: not available on Windows yet':
-        'controle de Xbox virtual: ainda não existe no Windows',
     'All set: pspstream':
         'Tudo pronto: pspstream',
     'GStreamer not found: the capture does not start without it. Use the PSPStream build that bundles it, or install the GStreamer runtime (MSVC 64-bit) from gstreamer.freedesktop.org':
@@ -1167,4 +1161,35 @@ PT = {
         'regra do firewall {rule}',
     'network profile: {category}':
         'perfil da rede: {category}',
+    # Windows: controle de Xbox virtual (ViGEmBus)
+    'Keyboard and mouse through SendInput; the xbox profiles need the ViGEmBus driver (pspstream --setup).':
+        'Teclado e mouse pelo SendInput; os perfis xbox precisam do driver ViGEmBus (pspstream --setup).',
+    'Open it? [y/N] ':
+        'Abrir? [s/N] ',
+    'ViGEmBus: virtual Xbox 360 controller (the xbox profiles)':
+        'ViGEmBus: controle de Xbox 360 virtual (os perfis xbox)',
+    'The virtual Xbox controller (the xbox profiles) needs the ViGEmBus driver. Open its download page? Install it as administrator, then run pspstream --check':
+        'O controle de Xbox virtual (os perfis xbox) precisa do driver ViGEmBus. Abrir a página de download dele? Instale como administrador e depois rode pspstream --check',
+    'ViGEmBus driver not installed: no virtual Xbox controller (the xbox profiles; pspstream --setup opens its download page). Keyboard and mouse work':
+        'driver ViGEmBus não instalado: sem o controle de Xbox virtual (os perfis xbox; o pspstream --setup abre a página de download dele). Teclado e mouse funcionam',
+    'virtual Xbox controller: {reason}':
+        'controle de Xbox virtual: {reason}',
+    'ViGEmClient.dll not found (it comes with pspstream.exe, in the vigem folder; PSPSTREAM_VIGEMCLIENT points to another)':
+        'ViGEmClient.dll não encontrada (ela vem com o pspstream.exe, na pasta vigem; PSPSTREAM_VIGEMCLIENT aponta para outra)',
+    'the ViGEmBus driver is not installed: pspstream --setup opens its download page (install it once, as administrator)':
+        'o driver ViGEmBus não está instalado: o pspstream --setup abre a página de download dele (instale uma vez, como administrador)',
+    'ViGEmBus has no free controller slot (4 Xbox controllers already connected?)':
+        'o ViGEmBus não tem vaga para outro controle (já há 4 controles de Xbox conectados?)',
+    'no access to the ViGEmBus driver (another program holding it?)':
+        'sem acesso ao driver ViGEmBus (outro programa o está segurando?)',
+    'ViGEmBus error 0x{code:08X}':
+        'erro 0x{code:08X} do ViGEmBus',
+    'ViGEmClient: out of memory':
+        'ViGEmClient: sem memória',
+    'the ViGEmBus driver is too old: install the latest version ({url})':
+        'o driver ViGEmBus é antigo demais: instale a versão mais nova ({url})',
+    'gamepad: ViGEmBus refused the update: %s':
+        'controle: o ViGEmBus recusou a atualização: %s',
+    '{path} did not load: {error}':
+        '{path} não carregou: {error}',
 }

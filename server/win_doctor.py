@@ -3,9 +3,11 @@
 O que o servidor de Windows usa: o GStreamer (de preferência o que vem junto
 do pspstream.exe; senão o do instalador oficial) para o gst-launch, a
 libopenh264 (a do runtime do GStreamer, ou a do Cisco que o --setup baixa),
-o Pillow (JPEG) e o SendInput (teclado e mouse). O --setup só faz duas
-coisas, perguntando antes: a regra do firewall (como administrador, pelo
-UAC) e o download da DLL do openh264 do Cisco.
+o Pillow (JPEG), o SendInput (teclado e mouse) e, para os perfis xbox, o
+driver ViGEmBus. O --setup faz três coisas, perguntando antes: a regra do
+firewall (como administrador, pelo UAC), o download da DLL do openh264 do
+Cisco e, se o ViGEmBus faltar, abrir a página de download dele (um driver:
+instala quem baixa, como administrador).
 """
 import bz2
 import hashlib
@@ -94,7 +96,17 @@ def check_openh264(items):
 
 def check_input(items):
     items.append(Item("Controls", "ok", tr("SendInput: keyboard and mouse")))
-    items.append(Item("Controls", "info", tr("virtual Xbox controller: not available on Windows yet")))
+    import win_gamepad
+    state, detail = win_gamepad.bus_status()
+    if state == "ok":
+        items.append(Item("Controls", "ok", tr("ViGEmBus: virtual Xbox 360 controller (the xbox profiles)")))
+    elif state == "no-bus":
+        # opcional: o perfil padrão (game) é de teclado e mouse
+        items.append(Item("Controls", "info", tr("ViGEmBus driver not installed: no virtual Xbox controller (the "
+                                                 "xbox profiles; pspstream --setup opens its download page). "
+                                                 "Keyboard and mouse work")))
+    else:
+        items.append(Item("Controls", "warn", tr("virtual Xbox controller: {reason}").format(reason=detail)))
 
 
 def firewall_rule_exists() -> bool:
@@ -229,6 +241,17 @@ def setup(port: int = 5123, version: str = "", ask=input) -> int:
                 print("  " + tr("done") + f": {path}\n")
             except Exception as exc:  # noqa: BLE001 - rede, bz2, disco
                 print("  " + tr("failed: {command}").format(command=exc) + "\n")
+        else:
+            print("  " + tr("skipped") + "\n")
+    import win_gamepad
+    if win_gamepad.bus_status()[0] == "no-bus":
+        print(tr("The virtual Xbox controller (the xbox profiles) needs the ViGEmBus driver. Open its download "
+                 "page? Install it as administrator, then run pspstream --check") + ":")
+        print(f"  {win_gamepad.DOWNLOAD_URL}")
+        if yes(tr("Open it? [y/N] ")):
+            import webbrowser
+            print("  " + (tr("done") if webbrowser.open(win_gamepad.DOWNLOAD_URL) else
+                          tr("failed: {command}").format(command="webbrowser")) + "\n")
         else:
             print("  " + tr("skipped") + "\n")
     print(tr("Checking again:") + "\n")

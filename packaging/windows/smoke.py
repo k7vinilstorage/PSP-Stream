@@ -122,6 +122,8 @@ def main() -> int:
     check = run(exe, "--check")
     assert check.returncode == 0, "--check found something essential missing"
     assert "libopenh264" in check.stdout
+    if (app / "vigem" / "ViGEmClient.dll").is_file():  # a DLL do pacote carrega e consulta o driver
+        assert "ViGEmBus" in check.stdout and "ViGEmClient.dll not found" not in check.stdout
     stream(exe, "h264p", 100)
     stream(exe, "jpeg", 60)
     print("ok")
