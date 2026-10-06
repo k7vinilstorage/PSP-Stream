@@ -149,21 +149,19 @@ def check_kms(items):
         items.append(Item("Captura", "info", "auxiliar KMS não compilado (opcional: --source kms, 60 fps no GNOME 50+)",
                           ("kms",), fix="make -C tools/kms && make -C tools/kms cap"))
         return
-    caps = ""
-    if shutil.which("getcap"):
-        try:
-            caps = subprocess.run(["getcap", str(helper)], capture_output=True, text=True, timeout=3).stdout
-        except (OSError, subprocess.SubprocessError):
-            pass
-    if "cap_sys_admin" in caps:
-        items.append(Item("Captura", "ok", "auxiliar KMS pronto (--source kms)"))
+    if paths.has_cap_sys_admin(helper):
+        ignored = paths.kms_cap_ignored(helper)
+        if ignored:
+            items.append(Item("Captura", "aviso", f"captura KMS: {ignored}"))
+        else:
+            items.append(Item("Captura", "ok", "auxiliar KMS pronto (--source kms)"))
     elif helper == paths.REPO_KMS_HELPER:
         items.append(Item("Captura", "aviso", "auxiliar KMS sem a permissão de ler a tela (opcional: --source kms)",
                           fix="make -C tools/kms cap   # refaça depois de cada make"))
     else:  # o do pacote: a permissão é opcional, e só o administrador dá
         items.append(Item("Captura", "info", "captura KMS (opcional: --source kms, 60 fps no GNOME 50+): o auxiliar "
                           "do pacote precisa da permissão de ler a tela",
-                          fix=f"sudo setcap cap_sys_admin+ep {helper}"))
+                          fix=paths.kms_fix(helper)))
 
 
 def check_input(items):

@@ -35,7 +35,9 @@ Com o pacote, o servidor vira o comando `pspstream` (`pspstream --check`,
 
 A captura KMS vem compilada, mas sem a permissão de ler a tela, que só o
 administrador dá: o `pspstream --setup` oferece o comando
-(`sudo setcap cap_sys_admin+ep /usr/libexec/pspstream/pspstream-kms`).
+(`sudo setcap cap_sys_admin+ep /usr/libexec/pspstream/pspstream-kms`). Dada
+uma vez, ela continua depois das atualizações do pacote (os pacotes mais
+antigos a perdiam a cada atualização: nesse caso, rode o comando de novo).
 
 ## PC, pelo código
 
@@ -113,9 +115,10 @@ make -C tools/kms          # compila tools/kms/pspstream-kms
 make -C tools/kms cap      # sudo setcap cap_sys_admin+ep (refaça depois de cada make)
 ```
 
-Só o auxiliar tem a permissão, e ele faz uma coisa só: exporta o buffer da
-tela como DMA-BUF. A redução para 480x272 roda no servidor, sem privilégio,
-no OpenGL. O cursor do mouse não aparece (fica num plano separado da placa),
+Cada `make` troca o arquivo e apaga a permissão: rode o `make ... cap` de
+novo. Só o auxiliar tem a permissão, e ele faz uma coisa só: exporta o
+buffer da tela como DMA-BUF. A redução para 480x272 roda no servidor, sem
+privilégio, no OpenGL. O cursor do mouse não aparece (fica num plano separado da placa),
 e a captura é do monitor inteiro (`--kms-monitor 1` escolhe o segundo).
 
 ## PSP

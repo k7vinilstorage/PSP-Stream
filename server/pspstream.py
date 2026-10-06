@@ -522,7 +522,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--bind", default="0.0.0.0", help="endereço local (padrão %(default)s)")
     p.add_argument("--source", choices=["portal", "kms", "test", "x11", "gst", "static", "wolf"], default="portal",
                    help="portal = tela no Wayland (padrão); kms = direto da placa de vídeo, sem o limite de "
-                        "~40 fps do GNOME 50 (precisa de make -C tools/kms e make -C tools/kms cap); "
+                        "~40 fps do GNOME 50 (o auxiliar precisa da permissão de ler a tela: o --setup a dá); "
                         "test = padrão animado com relógio; x11 = sessão X11; gst = pipeline próprio "
                         "(--gst-src); static = uma imagem; wolf = o que roda no Wolf (Games on Whales), pela "
                         "API dele (wiki do PSPStream, página Wolf)")

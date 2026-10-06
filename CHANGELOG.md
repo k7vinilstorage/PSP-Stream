@@ -190,6 +190,13 @@ de outra versão do protocolo é recusado com aviso no log.
   `.deb` e `.rpm` levam o README, o CHANGELOG e a licença.
 - O servidor encerra direito no SIGTERM (`docker stop`, `systemctl stop`),
   como no Ctrl+C.
+- **Captura KMS, "sem permissão para ler a tela":** a mensagem (no log e na
+  interface web) diz qual auxiliar e o comando certo (o `setcap` do pacote
+  ou o `make -C tools/kms cap` do repositório), e avisa quando a permissão
+  existe mas o kernel a ignora (partição `nosuid`, ou o servidor rodando com
+  `no_new_privs`, como num terminal de Flatpak). Os pacotes `.deb` e `.rpm`
+  guardam a permissão nas atualizações: antes, cada atualização trocava o
+  auxiliar e ela sumia. O `--check` lê a permissão sem precisar do `getcap`.
 
 ## 1.0
 

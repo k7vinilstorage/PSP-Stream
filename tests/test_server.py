@@ -536,8 +536,11 @@ class KmsCaptureTest(unittest.TestCase):
         import os
         os.environ["FAKE_KMS_NOPERM"] = "1"
         try:
-            with self.assertRaisesRegex(self.kms.KmsError, "sem permissão"):
+            with self.assertRaises(self.kms.KmsError) as ctx:
                 self.kms.KmsSource(480, 272, 60, 60, helper=self.fake[1], argv_prefix=self.fake[:1])
+            # o arquivo do auxiliar e o comando que dá a permissão
+            self.assertIn("sem permissão para ler a tela", str(ctx.exception))
+            self.assertIn(f"sudo setcap cap_sys_admin+ep {self.fake[1]}", str(ctx.exception))
         finally:
             del os.environ["FAKE_KMS_NOPERM"]
 

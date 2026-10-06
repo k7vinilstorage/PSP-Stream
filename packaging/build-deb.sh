@@ -48,6 +48,17 @@ Description: tela e som do PC no PSP (servidor do PSPStream)
  e http://localhost:5124 (configurações).
 CONTROL
 echo /etc/ufw/applications.d/pspstream > "$stage/DEBIAN/conffiles"
+# A permissão de ler a tela (setcap no auxiliar KMS) é opcional e só o
+# administrador dá, mas some quando a atualização troca o arquivo: se ela
+# existia, o preinst marca e o postinst a devolve.
+cat > "$stage/DEBIAN/preinst" <<'PREINST'
+#!/bin/sh
+set -e
+if [ "$1" = upgrade ] && command -v getcap >/dev/null 2>&1 &&
+    getcap /usr/libexec/pspstream/pspstream-kms 2>/dev/null | grep -q cap_sys_admin; then
+    touch /run/pspstream-kms-cap 2>/dev/null || true
+fi
+PREINST
 cat > "$stage/DEBIAN/postinst" <<'POSTINST'
 #!/bin/sh
 set -e
@@ -58,9 +69,13 @@ if [ "$1" = configure ]; then
         udevadm control --reload-rules 2>/dev/null || true
         udevadm trigger --subsystem-match=misc --sysname-match=uinput 2>/dev/null || true
     fi
+    if [ -e /run/pspstream-kms-cap ]; then
+        setcap cap_sys_admin+ep /usr/libexec/pspstream/pspstream-kms 2>/dev/null || true
+        rm -f /run/pspstream-kms-cap
+    fi
 fi
 POSTINST
-chmod 755 "$stage/DEBIAN/postinst"
+chmod 755 "$stage/DEBIAN/preinst" "$stage/DEBIAN/postinst"
 (cd "$stage" && find usr -type f -exec md5sum {} + | sort -k2) > "$stage/DEBIAN/md5sums"
 
 file="$out/pspstream_${version}_${arch}.deb"
