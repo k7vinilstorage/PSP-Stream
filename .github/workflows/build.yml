@@ -192,7 +192,9 @@ jobs:
           "signature: $($sig.Status), $($sig.SignerCertificate.Subject)"
           if ($sig.Status -ne "Valid" -or $sig.SignerCertificate.Subject -notmatch "Nefarius") { throw "unexpected signature" }
           python -c "import sys; sys.path.insert(0, 'server'); import win_doctor; from pathlib import Path; print('installer exit code', win_doctor.install_vigembus(Path(sys.argv[1]), quiet=True, log=Path(sys.argv[2])))" $setup "$dir\install.log"
-          Get-ChildItem $dir -Filter *.log | ForEach-Object { "==== $($_.Name)"; Get-Content $_.FullName -Tail 120 }
+          # o motivo de um 1603 fica antes do "Return value 3" (a ação que falhou), não no fim do log
+          Select-String -Path "$dir\install.log" -Pattern "Return value 3" -Context 60,3 | Select-Object -First 2
+          Select-String -Path "$dir\install.log" -Pattern "error|failed|returned actual" | Select-Object -First 40
           Get-PnpDevice -FriendlyName "*ViGEm*" -ErrorAction SilentlyContinue | Format-Table -AutoSize Status, Class, FriendlyName, InstanceId
           & dist\PSPStream\pspstream.exe --check
           python -m unittest -v tests.test_windows.ViGEmBusTest
