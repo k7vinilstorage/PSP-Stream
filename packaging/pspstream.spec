@@ -46,11 +46,23 @@ e http://localhost:5124 (configurações).
 sh packaging/install-tree.sh %{buildroot}
 install -D -m 644 packaging/files/firewalld-pspstream.xml %{buildroot}%{_prefix}/lib/firewalld/services/pspstream.xml
 
+%pre
+# A permissão de ler a tela (setcap no auxiliar KMS) é opcional e só o
+# administrador dá, mas some quando a atualização troca o arquivo: se ela
+# existia, o %post a devolve.
+if [ "$1" -gt 1 ] && getcap %{_prefix}/libexec/pspstream/pspstream-kms 2>/dev/null | grep -q cap_sys_admin; then
+    touch /run/pspstream-kms-cap 2>/dev/null || :
+fi
+
 %post
 # controles: /dev/uinput agora, sem reiniciar (a regra do udev vale para a sessão ativa)
 modprobe uinput >/dev/null 2>&1 || :
 udevadm control --reload-rules >/dev/null 2>&1 || :
 udevadm trigger --subsystem-match=misc --sysname-match=uinput >/dev/null 2>&1 || :
+if [ -e /run/pspstream-kms-cap ]; then
+    setcap cap_sys_admin+ep %{_prefix}/libexec/pspstream/pspstream-kms >/dev/null 2>&1 || :
+    rm -f /run/pspstream-kms-cap
+fi
 
 %files
 %{_bindir}/pspstream

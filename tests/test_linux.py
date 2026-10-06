@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "server"))
 import distro  # noqa: E402
 import doctor  # noqa: E402
 import openh264  # noqa: E402
+import paths  # noqa: E402
 
 
 class DistroTest(unittest.TestCase):
@@ -165,6 +166,74 @@ class SetupTest(unittest.TestCase):
                 mock.patch.object(doctor, "main", return_value=0), mock.patch("builtins.print"):
             doctor.setup(5123, "t", ask=eof)
         run.assert_not_called()
+
+
+class KmsPermissionTest(unittest.TestCase):
+    """A permissão do auxiliar KMS (setcap cap_sys_admin+ep): lida do atributo
+    do arquivo, e a mensagem diz qual arquivo e o comando certo."""
+
+    PKG = Path("/usr/libexec/pspstream/pspstream-kms")
+
+    @staticmethod
+    def xattr(magic, permitted):
+        import struct
+        return struct.pack("<IIIII", magic, permitted, 0, 0, 0)
+
+    def has(self, data):
+        with mock.patch("os.getxattr", return_value=data):
+            return paths.has_cap_sys_admin(self.PKG)
+
+    def test_reads_the_capability(self):
+        self.assertTrue(self.has(self.xattr(0x02000001, 1 << 21)))     # cap_sys_admin=ep
+        self.assertFalse(self.has(self.xattr(0x02000000, 1 << 21)))    # só +p: não vale ao rodar
+        self.assertFalse(self.has(self.xattr(0x02000001, 1 << 13)))    # outra (cap_net_raw)
+        self.assertFalse(self.has(b"\x01"))
+        with mock.patch("os.getxattr", side_effect=OSError(61, "sem atributo")):
+            self.assertFalse(paths.has_cap_sys_admin(self.PKG))
+
+    def test_fix_for_repo_and_package(self):
+        self.assertEqual(paths.kms_fix(self.PKG), f"sudo setcap cap_sys_admin+ep {self.PKG}")
+        self.assertEqual(paths.kms_fix(paths.REPO_KMS_HELPER), f"make -C {ROOT / 'tools' / 'kms'} cap")
+
+    def test_problem_without_permission(self):
+        with mock.patch.object(paths, "has_cap_sys_admin", return_value=False):
+            msg = paths.kms_permission_problem(self.PKG)
+            self.assertIn(f"sudo setcap cap_sys_admin+ep {self.PKG}", msg)
+            self.assertNotIn("make", msg)
+            msg = paths.kms_permission_problem(paths.REPO_KMS_HELPER)
+            self.assertIn("make -C", msg)
+            self.assertIn("depois de cada make", msg)
+
+    def test_problem_with_permission_ignored(self):
+        nosuid = mock.Mock(f_flag=os.ST_NOSUID)
+        with mock.patch.object(paths, "has_cap_sys_admin", return_value=True):
+            with mock.patch("os.statvfs", return_value=nosuid):
+                self.assertIn("nosuid", paths.kms_permission_problem(self.PKG))
+            with mock.patch("os.statvfs", return_value=mock.Mock(f_flag=0)), \
+                    mock.patch.object(paths, "no_new_privs", return_value=True):
+                self.assertIn("no_new_privs", paths.kms_permission_problem(self.PKG))
+            with mock.patch("os.statvfs", return_value=mock.Mock(f_flag=0)), \
+                    mock.patch.object(paths, "no_new_privs", return_value=False):
+                self.assertIn("tem a permissão", paths.kms_permission_problem(self.PKG))
+
+    def test_no_new_privs_here(self):
+        status = Path("/proc/self/status").read_text()
+        self.assertEqual(paths.no_new_privs(), "NoNewPrivs:\t1" in status)
+
+    def test_doctor(self):
+        def check(cap, ignored=""):
+            items = []
+            with mock.patch.object(paths, "kms_helper", return_value=self.PKG), \
+                    mock.patch.object(Path, "exists", return_value=True), \
+                    mock.patch.object(paths, "has_cap_sys_admin", return_value=cap), \
+                    mock.patch.object(paths, "kms_cap_ignored", return_value=ignored):
+                doctor.check_kms(items)
+            return items[0]
+        self.assertEqual(check(True).state, "ok")
+        item = check(True, "x está numa partição montada com nosuid")
+        self.assertEqual(item.state, "aviso")
+        self.assertIn("nosuid", item.text)
+        self.assertEqual(check(False).fix, f"sudo setcap cap_sys_admin+ep {self.PKG}")
 
 
 class OpenH264SearchTest(unittest.TestCase):

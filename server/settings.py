@@ -66,7 +66,8 @@ SETTINGS = (
     # Captura
     Setting("source", "source", "choice", "Captura", "Fonte",
             "portal: a tela pelo portal do Wayland (pede permissão na primeira vez). kms: direto da placa de "
-            "vídeo, 60 fps no GNOME 50 (precisa do auxiliar: make -C tools/kms). x11: sessão X11. "
+            "vídeo, 60 fps no GNOME 50 (o auxiliar precisa da permissão de ler a tela: o --setup a dá). "
+            "x11: sessão X11. "
             "test: padrão animado. static: imagem fixa. wolf: o que roda no Wolf (Games on Whales); aparece "
             "quando o socket da API do Wolf existe.",
             "capture", ("portal", "kms", "x11", "test", "static", "wolf"), flag="--source"),

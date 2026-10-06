@@ -69,6 +69,7 @@ class KmsHelper:
 
     def __init__(self, path=HELPER, card=None, monitor=0, argv_prefix=()):
         path = Path(path)
+        self.path = path
         if not argv_prefix and not os.access(path, os.X_OK):
             raise KmsError(f"falta o auxiliar {path}: compile com make -C tools/kms e depois "
                            "make -C tools/kms cap (pede a senha do sudo), ou instale o pacote do PSPStream")
@@ -84,7 +85,7 @@ class KmsHelper:
         self._close_fds(fds)
         if hello.status == ST_ERROR:
             self.close()
-            raise KmsError(f"{hello.msg} ({path})")
+            raise KmsError(self._explain(hello.msg, f" ({path})"))
         if hello.status != ST_HELLO:
             self.close()
             raise KmsError(f"o auxiliar não se apresentou (status {hello.status})")
@@ -116,8 +117,15 @@ class KmsHelper:
             reply, fds = self._recv(timeout_ms / 1000 + 2.0)
         if reply.status == ST_ERROR:
             self._close_fds(fds)
-            raise KmsError(reply.msg)
+            raise KmsError(self._explain(reply.msg))
         return reply, fds
+
+    def _explain(self, msg: str, where: str = "") -> str:
+        """Sem a permissão de ler a tela, o auxiliar só sabe dizer isso: aqui
+        entram o arquivo e o comando certo (repositório ou pacote)."""
+        if msg.startswith("sem permissão para ler a tela"):
+            return f"sem permissão para ler a tela: {paths.kms_permission_problem(self.path)}"
+        return msg + where
 
     def close(self):
         try:
