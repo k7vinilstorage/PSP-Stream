@@ -17,6 +17,7 @@
  */
 #include "decode.h"
 #include "display.h"
+#include "lang.h"
 
 #include <malloc.h>
 #include <pspjpeg.h>
@@ -73,24 +74,24 @@ static int hw_decode(const uint8_t *jpeg, int size, uint32_t *dst, int *w, int *
         if (r < 0 && r != (int)SCE_JPEG_ERROR_UNSUPPORT_SAMPLING) {
             /* talvez a VRAM não seja aceita: tenta via RAM daqui em diante */
             hw_direct = 0;
-            printf("sceJpeg na VRAM falhou (0x%08X), usando buffer em RAM\n", r);
+            printf("sceJpeg in VRAM failed (0x%08X), using a RAM buffer\n", r);
         }
     }
     if (!hw_direct) {
         if (!hw_bounce && !(hw_bounce = memalign(64, FB_BYTES))) {
-            snprintf(last_error, sizeof(last_error), "sem memoria para o buffer do sceJpeg");
+            snprintf(last_error, sizeof(last_error), "%s", T("no memory for the sceJpeg buffer", "sem memoria para o buffer do sceJpeg"));
             return -1;
         }
         r = sceJpegDecodeMJpeg((u8 *)jpeg, size, (u8 *)hw_bounce, 0);
     }
     if (r < 0) {
         snprintf(last_error, sizeof(last_error), "sceJpegDecodeMJpeg: 0x%08X%s", r,
-                 r == (int)SCE_JPEG_ERROR_UNSUPPORT_SAMPLING ? " (precisa 4:2:0)" : "");
+                 r == (int)SCE_JPEG_ERROR_UNSUPPORT_SAMPLING ? T(" (needs 4:2:0)", " (precisa 4:2:0)") : "");
         return -1;
     }
     int jw = (r >> 16) & 0xFFFF, jh = r & 0xFFFF;
     if (jw > SCR_W || jh > SCR_H) {
-        snprintf(last_error, sizeof(last_error), "tamanho %dx%d invalido", jw, jh);
+        snprintf(last_error, sizeof(last_error), T("invalid size %dx%d", "tamanho %dx%d invalido"), jw, jh);
         return -1;
     }
     if (!hw_direct) {
@@ -199,7 +200,7 @@ static int avc_init(void)
     if (size <= 0)
         return avc_fail("sceMpegQueryMemSize", size);
     if (!(avc.data = memalign(64, size)) || !(avc.lli = memalign(64, sizeof(lli_t) * (AVC_MAX_AU / DMA_BLOCK + 1))))
-        return avc_fail("memoria", -1);
+        return avc_fail(T("memory", "memoria"), -1);
     if ((r = sceMpegRingbufferConstruct(&avc.rb, 0, NULL, 0, NULL, NULL)) != 0)
         return avc_fail("ringbuffer", r);
     avc.rb_made = 1;
@@ -286,7 +287,7 @@ static int avc_flush(uint32_t *dst)
     SceInt32 n = 0;
     int r = sceMpegAvcDecodeStop(&avc.mpeg, FB_STRIDE, bufs, &n);
     if (r != 0) {
-        snprintf(last_error, sizeof(last_error), "h264 Stop antes do IDR: 0x%08X", r);
+        snprintf(last_error, sizeof(last_error), T("h264 Stop before IDR: 0x%08X", "h264 Stop antes do IDR: 0x%08X"), r);
         return -1;
     }
     avc.held = 0;
@@ -318,7 +319,7 @@ static int avc_decode_packet(const uint8_t *data, int size, uint32_t *dst)
         const uint8_t *au = data + b;
         if ((uintptr_t)au & 63) {
             if (len > AVC_STAGE) {
-                snprintf(last_error, sizeof(last_error), "h264p: AU %d de %d bytes", k, len);
+                snprintf(last_error, sizeof(last_error), T("h264p: AU %d of %d bytes", "h264p: AU %d de %d bytes"), k, len);
                 return -1;
             }
             memcpy(stage, au, len);
@@ -328,7 +329,7 @@ static int avc_decode_packet(const uint8_t *data, int size, uint32_t *dst)
             return -1;
     }
     if (!got) {
-        snprintf(last_error, sizeof(last_error), "h264p: o decoder nao devolveu imagem");
+        snprintf(last_error, sizeof(last_error), "%s", T("h264p: the decoder returned no image", "h264p: o decoder nao devolveu imagem"));
         return -1;
     }
     return 0;
@@ -338,7 +339,7 @@ static int avc_decode_packet(const uint8_t *data, int size, uint32_t *dst)
 static int avc_decode(const uint8_t *data, int size, uint32_t *dst, int *w, int *h)
 {
     if (size > AVC_MAX_AU) {
-        snprintf(last_error, sizeof(last_error), "h264: frame de %d KB grande demais", size / 1024);
+        snprintf(last_error, sizeof(last_error), T("h264: %d KB frame too large", "h264: frame de %d KB grande demais"), size / 1024);
         return -1;
     }
     if (avc_init() < 0)
@@ -365,7 +366,7 @@ static int avc_decode(const uint8_t *data, int size, uint32_t *dst, int *w, int 
         return -1;
     }
     if (!got && n <= 0) {
-        snprintf(last_error, sizeof(last_error), "h264: o decoder nao devolveu imagem");
+        snprintf(last_error, sizeof(last_error), "%s", T("h264: the decoder returned no image", "h264: o decoder nao devolveu imagem"));
         return -1;
     }
     return 0;
@@ -385,7 +386,7 @@ static int sw_decode(const uint8_t *jpeg, int size, uint32_t *dst, int *w, int *
     int jw = tj3Get(tj, TJPARAM_JPEGWIDTH);
     int jh = tj3Get(tj, TJPARAM_JPEGHEIGHT);
     if (jw <= 0 || jh <= 0 || jw > SCR_W || jh > SCR_H) {
-        snprintf(last_error, sizeof(last_error), "tamanho %dx%d invalido", jw, jh);
+        snprintf(last_error, sizeof(last_error), T("invalid size %dx%d", "tamanho %dx%d invalido"), jw, jh);
         return -1;
     }
     uint32_t *out = dst + ((SCR_H - jh) / 2) * FB_STRIDE + (SCR_W - jw) / 2;
@@ -402,7 +403,7 @@ int decoder_init(int mode)
 {
     tj = tj3Init(TJINIT_DECOMPRESS);
     if (!tj) {
-        snprintf(last_error, sizeof(last_error), "tj3Init falhou");
+        snprintf(last_error, sizeof(last_error), "%s", T("tj3Init failed", "tj3Init falhou"));
         return -1;
     }
     /* Mais rápido; a perda de qualidade é quase invisível em 480x272. */

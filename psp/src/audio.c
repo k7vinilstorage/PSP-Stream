@@ -225,12 +225,12 @@ static int audio_thread(SceSize args, void *argp)
                 int r = src_reserve(want);
                 if (r < 0) {
                     if (last_error != r) /* no PSPLink e no log do emulador (tools/emu_audio_test.py) */
-                        printf("som: sceAudioSRCChReserve(%d Hz) falhou: 0x%08X\n", want, r);
+                        printf("audio: sceAudioSRCChReserve(%d Hz) failed: 0x%08X\n", want, r);
                     last_error = r;
                     sceKernelDelayThread(1000 * 1000);
                     continue;
                 }
-                printf("som: canal aberto a %d Hz\n", want);
+                printf("audio: channel open at %d Hz\n", want);
                 last_error = 0;
                 reserved = want;
             }

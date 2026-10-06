@@ -79,7 +79,7 @@ def main():
             press({"select": True, "start": True}, {"select": True, "start": True, button: True},
                   {"select": False, "start": False, button: False})
 
-        opened = "som: canal aberto"
+        opened = "audio: channel open"
         checks = {"o PSP pede o som ao conectar": wait_log("audio: turned on on the PSP"),
                   "o PSP abre o canal de som": wait_log(opened, path=psp_path)}
         checks["os pacotes de som saem"] = wait_log("| audio ")

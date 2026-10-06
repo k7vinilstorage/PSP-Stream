@@ -22,6 +22,7 @@ typedef struct {
     int menu_wait;    /* s até conectar sozinho com a tela de configuração aberta (0 = conecta direto) */
     int menu_shot;    /* testes: desenha a tela de configuração, tira o screenshot e sai */
     int audio;        /* 1 = toca o som do PC (só UDP) */
+    int lang_pt;      /* textos: 0 = inglês (padrão), 1 = português (lang=pt) */
 } ps_config_t;
 
 /* prefetch=auto (padrão). Com frames P, o próximo é pedido quando o decode

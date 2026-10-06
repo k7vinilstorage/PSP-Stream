@@ -9,6 +9,7 @@
 #include "menu.h"
 #include "decode.h"
 #include "display.h"
+#include "lang.h"
 #include "protocol.h"
 #include "version.h"
 
@@ -34,17 +35,47 @@
 
 enum {
     IT_HOST, IT_PORT, IT_WIFI, IT_FIND, IT_TRANSPORT, IT_H264, IT_H264P, IT_DECODER, IT_VSYNC, IT_OVERLAY,
-    IT_INPUT, IT_AUDIO, IT_PREFETCH, IT_EARLY, IT_RXWAIT, IT_SAVE, IT_CONNECT, IT_QUIT, IT_COUNT
+    IT_INPUT, IT_AUDIO, IT_PREFETCH, IT_EARLY, IT_RXWAIT, IT_LANG, IT_SAVE, IT_CONNECT, IT_QUIT, IT_COUNT
 };
 
-static const char *const labels[IT_COUNT] = {
+/* Inglês e português, na ordem dos itens (só ASCII: a fonte não tem acentos). */
+static const char *const labels_en[IT_COUNT] = {
+    "PC IP address", "Port", "Wi-Fi profile", "[ Find the PC on the network ]", "Transport", "H.264",
+    "H.264 with P frames", "JPEG decoder", "Vsync", "Overlay (FPS, timings)", "Controls to the PC",
+    "PC audio (UDP)", "Prefetch", "Early request (UDP)", "Packet wait (UDP)", "Language / Idioma",
+    "[ Save and connect ]", "[ Connect without saving ]", "[ Quit ]",
+};
+
+static const char *const labels_pt[IT_COUNT] = {
     "IP do PC", "Porta", "Perfil de Wi-Fi", "[ Procurar o PC na rede ]", "Transporte", "H.264",
     "H.264 com frames P", "Decoder do JPEG", "Vsync", "Overlay (FPS, tempos)", "Controles para o PC",
-    "Som do PC (UDP)", "Prefetch", "Pedido antecipado (UDP)", "Espera de pacotes (UDP)", "[ Salvar e conectar ]",
-    "[ Conectar sem salvar ]", "[ Sair ]",
+    "Som do PC (UDP)", "Prefetch", "Pedido antecipado (UDP)", "Espera de pacotes (UDP)", "Language / Idioma",
+    "[ Salvar e conectar ]", "[ Conectar sem salvar ]", "[ Sair ]",
 };
 
-static const char *const help[IT_COUNT] = {
+static const char *const help_en[IT_COUNT] = {
+    "IP of the PC running the server. X: edit",
+    "Server port (default 5123). X: edit",
+    "Profile saved in Settings > Network Settings",
+    "Turns Wi-Fi on and finds the server (it must be running)",
+    "UDP: recommended. TCP: only if UDP does not get through",
+    "Accepts H.264 (half the bytes of JPEG; the server decides)",
+    "Accepts P frames: ~10x fewer bytes (server --codec h264p)",
+    "auto = hardware (sceJpeg) with software as a fallback",
+    "Swaps the image on vblank: no tearing, +0 to 16 ms",
+    "Shows FPS, KB and timings in the corner of the screen",
+    "PSP buttons become a controller/keyboard on the PC",
+    "Plays the PC audio (~46 KB/s). In stream: SELECT+START+up",
+    "auto: P up to 2 ahead, asked at decode. 0: after showing",
+    "Asks for the next frame early (auto = measured)",
+    "auto: measures select and polling, keeps the faster",
+    "English or Portuguese (menu, overlay and messages)",
+    "Writes server.txt and connects (START does the same)",
+    "Connects with these options, without saving (O: same)",
+    "Back to the XMB",
+};
+
+static const char *const help_pt[IT_COUNT] = {
     "IP do PC que roda o servidor. X: editar",
     "Porta do servidor (padrao 5123). X: editar",
     "Perfil salvo em Ajustes > Ajustes de rede",
@@ -60,6 +91,7 @@ static const char *const help[IT_COUNT] = {
     "auto: P ate 2 a frente, pedidos no decode. 0: depois de exibir",
     "Pede o proximo frame antes do fim do atual (auto = medido)",
     "auto mede select e consulta no inicio e usa o mais rapido",
+    "Ingles ou portugues (menu, overlay e mensagens)",
     "Grava o server.txt e conecta (START faz o mesmo)",
     "Conecta com estas opcoes sem gravar (O faz o mesmo)",
     "Volta para o XMB",
@@ -147,7 +179,7 @@ static void profile_name(int id, char *out, int len)
     netData data;
     memset(&data, 0, sizeof(data));
     if (!profile_exists(id) || sceUtilityGetNetParam(id, PSP_NETPARAM_NAME, &data) < 0) {
-        snprintf(out, len, "%d: (nao existe)", id);
+        snprintf(out, len, T("%d: (missing)", "%d: (nao existe)"), id);
         return;
     }
     data.asString[sizeof(data.asString) - 1] = 0;
@@ -214,12 +246,16 @@ static void change(ps_config_t *cfg, int item, int dir)
     case IT_RXWAIT:
         cfg->rxwait = (cfg->rxwait + dir + 3) % 3;
         break;
+    case IT_LANG:
+        cfg->lang_pt = !cfg->lang_pt;
+        ps_lang_pt = cfg->lang_pt; /* a tela já redesenha no idioma novo */
+        break;
     }
 }
 
 static const char *yes(int v)
 {
-    return v ? "sim" : "nao";
+    return v ? T("yes", "sim") : T("no", "nao");
 }
 
 static void value_text(const ps_config_t *cfg, int item, char *out, int len)
@@ -227,7 +263,7 @@ static void value_text(const ps_config_t *cfg, int item, char *out, int len)
     out[0] = 0;
     switch (item) {
     case IT_HOST:
-        snprintf(out, len, "%s", cfg->host[0] ? cfg->host : "(nenhum)");
+        snprintf(out, len, "%s", cfg->host[0] ? cfg->host : T("(none)", "(nenhum)"));
         break;
     case IT_PORT:
         snprintf(out, len, "%d", cfg->port);
@@ -260,18 +296,21 @@ static void value_text(const ps_config_t *cfg, int item, char *out, int len)
         snprintf(out, len, "%s", yes(cfg->audio));
         break;
     case IT_PREFETCH:
-        snprintf(out, len, "%s", cfg->prefetch == PREFETCH_AUTO ? "auto (recomendado)" : yes(cfg->prefetch));
+        snprintf(out, len, "%s", cfg->prefetch == PREFETCH_AUTO ? T("auto (recommended)", "auto (recomendado)") : yes(cfg->prefetch));
         break;
     case IT_EARLY:
         if (cfg->early_kb < 0)
             snprintf(out, len, "auto");
         else if (cfg->early_kb == 0)
-            snprintf(out, len, "no fim do frame");
+            snprintf(out, len, "%s", T("at the end of the frame", "no fim do frame"));
         else
-            snprintf(out, len, "faltando %d KB", cfg->early_kb);
+            snprintf(out, len, T("%d KB left", "faltando %d KB"), cfg->early_kb);
         break;
     case IT_RXWAIT:
-        snprintf(out, len, "%s", cfg->rxwait == RXWAIT_SELECT ? "select" : cfg->rxwait == RXWAIT_POLL ? "consulta" : "auto");
+        snprintf(out, len, "%s", cfg->rxwait == RXWAIT_SELECT ? "select" : cfg->rxwait == RXWAIT_POLL ? T("polling", "consulta") : "auto");
+        break;
+    case IT_LANG:
+        snprintf(out, len, "%s", cfg->lang_pt ? "Portugues" : "English");
         break;
     }
 }
@@ -296,8 +335,10 @@ static void draw(const ps_config_t *cfg, const char *dir, int sel, const editor_
                  uint32_t status_color, int countdown)
 {
     display_clear_back();
-    display_text(1, 0, C_TITLE, "PSPStream v%s - configuracao", PSPSTREAM_VERSION);
+    display_text(1, 0, C_TITLE, T("PSPStream v%s - settings", "PSPStream v%s - configuracao"), PSPSTREAM_VERSION);
     display_text(1, 1, C_DIM, "%.56sserver.txt", dir);
+    const char *const *labels = ps_lang_pt ? labels_pt : labels_en;
+    const char *const *help = ps_lang_pt ? help_pt : help_en;
     for (int i = 0; i < IT_COUNT; i++) {
         int row = item_row(i);
         uint32_t color = i == sel ? C_SEL : C_TEXT;
@@ -311,20 +352,24 @@ static void draw(const ps_config_t *cfg, const char *dir, int sel, const editor_
                     display_text(x++, row, C_EDIT, ".");
                 display_text(x++, row, k == ed->cursor ? C_SEL : C_EDIT, "%c", ed->d[k]);
             }
-            display_text(x + 1, row, C_DIM, "<- ->  cima/baixo");
+            display_text(x + 1, row, C_DIM, "%s", T("<- ->  up/down", "<- ->  cima/baixo"));
         } else {
             char v[72];
             value_text(cfg, i, v, sizeof(v));
             display_text(VALUE_X, row, color, "%s", v);
         }
     }
-    display_text(1, 27, C_DIM, "%s", ed->active ? "Esq/Dir: digito  Cima/Baixo: muda  X: pronto" : help[sel]);
+    display_text(1, 27, C_DIM, "%s", ed->active ? T("Left/Right: digit  Up/Down: change  X: done",
+                                                   "Esq/Dir: digito  Cima/Baixo: muda  X: pronto") : help[sel]);
     if (status && status[0])
         display_text(1, 29, status_color, "%.58s", status);
     if (countdown > 0)
-        display_text(1, 30, C_OK, "Conectando em %d s... aperte um botao para configurar", countdown);
-    display_text(1, 32, C_DIM, "Cima/Baixo: item  Esq/Dir: muda  X: editar/escolher");
-    display_text(1, 33, C_DIM, "START: salvar e conectar   O: conectar sem salvar");
+        display_text(1, 30, C_OK, T("Connecting in %d s... press a button to configure",
+                                    "Conectando em %d s... aperte um botao para configurar"), countdown);
+    display_text(1, 32, C_DIM, "%s", T("Up/Down: item  Left/Right: change  X: edit/choose",
+                                       "Cima/Baixo: item  Esq/Dir: muda  X: editar/escolher"));
+    display_text(1, 33, C_DIM, "%s", T("START: save and connect   O: connect without saving",
+                                       "START: salvar e conectar   O: conectar sem salvar"));
     display_flip(1);
 }
 
@@ -429,7 +474,7 @@ int menu_run(ps_config_t *cfg, const char *dir, int countdown_s, const char *sta
         if (act == IT_QUIT)
             return MENU_QUIT;
         if (act == IT_FIND) {
-            draw(cfg, dir, sel, &ed, "Procurando o PC na rede...", C_OK, 0);
+            draw(cfg, dir, sel, &ed, T("Looking for the PC on the network...", "Procurando o PC na rede..."), C_OK, 0);
             char msg[96];
             int r = hooks && hooks->discover ? hooks->discover(cfg, msg, sizeof(msg)) : -1;
             snprintf(status, sizeof(status), "%s", msg);
@@ -440,7 +485,8 @@ int menu_run(ps_config_t *cfg, const char *dir, int countdown_s, const char *sta
         }
         int oct[4];
         if (!cfg->host[0] || (parse_ip(cfg->host, oct) == 0 && !oct[0])) {
-            snprintf(status, sizeof(status), "Falta o IP do PC: edite ou use Procurar o PC na rede");
+            snprintf(status, sizeof(status), "%s", T("PC IP missing: edit it or use Find the PC on the network",
+                                                   "Falta o IP do PC: edite ou use Procurar o PC na rede"));
             status_color = C_BAD;
             sel = IT_HOST;
             continue;

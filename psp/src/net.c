@@ -1,3 +1,4 @@
+#include "lang.h"
 #include "net.h"
 #include "protocol.h"
 
@@ -39,13 +40,13 @@ int net_init(void)
 static const char *state_name(int state)
 {
     switch (state) {
-    case PSP_NET_APCTL_STATE_DISCONNECTED: return "desconectado";
-    case PSP_NET_APCTL_STATE_SCANNING: return "procurando a rede";
-    case PSP_NET_APCTL_STATE_JOINING: return "associando";
-    case PSP_NET_APCTL_STATE_GETTING_IP: return "obtendo IP";
-    case PSP_NET_APCTL_STATE_GOT_IP: return "conectado";
-    case PSP_NET_APCTL_STATE_EAP_AUTH: return "autenticando (EAP)";
-    case PSP_NET_APCTL_STATE_KEY_EXCHANGE: return "trocando chaves";
+    case PSP_NET_APCTL_STATE_DISCONNECTED: return T("disconnected", "desconectado");
+    case PSP_NET_APCTL_STATE_SCANNING: return T("scanning", "procurando a rede");
+    case PSP_NET_APCTL_STATE_JOINING: return T("joining", "associando");
+    case PSP_NET_APCTL_STATE_GETTING_IP: return T("getting an IP", "obtendo IP");
+    case PSP_NET_APCTL_STATE_GOT_IP: return T("connected", "conectado");
+    case PSP_NET_APCTL_STATE_EAP_AUTH: return T("authenticating (EAP)", "autenticando (EAP)");
+    case PSP_NET_APCTL_STATE_KEY_EXCHANGE: return T("exchanging keys", "trocando chaves");
     default: return "?";
     }
 }

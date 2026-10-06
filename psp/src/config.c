@@ -18,15 +18,19 @@
  *   h264p=1          (1 = aceita também frames P, do servidor com --codec h264p)
  *   menu_wait=3      (s com a tela de configuração aberta antes de conectar sozinho; 0 = direto)
  *   audio=1          (1 = toca o som do PC; só pelo UDP)
+ *   lang=en          (en | pt: idioma das telas do PSP)
  */
 #include "config.h"
 #include "decode.h"
+#include "lang.h"
 #include "protocol.h"
 
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+int ps_lang_pt;
 
 static char *trim(char *s)
 {
@@ -79,6 +83,8 @@ static void set_key(ps_config_t *cfg, const char *key, const char *value)
         cfg->menu_shot = v;
     else if (!strcmp(key, "audio"))
         cfg->audio = v;
+    else if (!strcmp(key, "lang"))
+        cfg->lang_pt = !strncmp(value, "pt", 2);
 }
 
 int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen)
@@ -102,8 +108,9 @@ int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen)
     char path[256];
     snprintf(path, sizeof(path), "%sserver.txt", dir);
     FILE *f = fopen(path, "r");
+    ps_lang_pt = 0;
     if (!f) {
-        snprintf(err, errlen, "nao achei %s", path);
+        snprintf(err, errlen, T("could not find %s", "nao achei %s"), path);
         return -1;
     }
 
@@ -129,9 +136,10 @@ int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen)
         }
     }
     fclose(f);
+    ps_lang_pt = cfg->lang_pt;
 
     if (!cfg->host[0]) {
-        snprintf(err, errlen, "%s nao tem o IP do PC", path);
+        snprintf(err, errlen, T("%s has no PC IP", "%s nao tem o IP do PC"), path);
         return -1;
     }
     if (cfg->port <= 0 || cfg->port > 65535)
@@ -157,7 +165,7 @@ int config_save(const ps_config_t *cfg, const char *dir, char *err, int errlen)
     snprintf(tmp, sizeof(tmp), "%s.new", path);
     FILE *f = fopen(tmp, "w");
     if (!f) {
-        snprintf(err, errlen, "nao consegui gravar %s", tmp);
+        snprintf(err, errlen, T("could not write %s", "nao consegui gravar %s"), tmp);
         return -1;
     }
     char early[16];
@@ -165,7 +173,8 @@ int config_save(const ps_config_t *cfg, const char *dir, char *err, int errlen)
         snprintf(early, sizeof(early), "auto");
     else
         snprintf(early, sizeof(early), "%d", cfg->early_kb);
-    fprintf(f, "# PSPStream: gravado pela tela de configuracao do PSP (opcoes: wiki do projeto, pagina Uso no PSP)\n");
+    fprintf(f, "%s\n", T("# PSPStream: written by the PSP settings screen (options: project wiki, Using-the-PSP page)",
+                         "# PSPStream: gravado pela tela de configuracao do PSP (opcoes: wiki do projeto, pagina Using-the-PSP)"));
     if (cfg->port == PS_DEFAULT_PORT)
         fprintf(f, "%s\n", cfg->host);
     else
@@ -185,16 +194,17 @@ int config_save(const ps_config_t *cfg, const char *dir, char *err, int errlen)
     fprintf(f, "rcvbuf=%d\n", cfg->rcvbuf_kb);
     fprintf(f, "bench=%s\n", onoff(cfg->bench));
     fprintf(f, "menu_wait=%d\n", cfg->menu_wait);
+    fprintf(f, "lang=%s\n", cfg->lang_pt ? "pt" : "en");
     int ok = !ferror(f);
     if (fclose(f) != 0 || !ok) {
-        snprintf(err, errlen, "erro ao gravar %s", tmp);
+        snprintf(err, errlen, T("error writing %s", "erro ao gravar %s"), tmp);
         remove(tmp);
         return -1;
     }
     /* troca só depois de gravar inteiro: se o PSP desligar no meio, o antigo fica */
     remove(path);
     if (rename(tmp, path) != 0) {
-        snprintf(err, errlen, "nao consegui renomear %s", tmp);
+        snprintf(err, errlen, T("could not rename %s", "nao consegui renomear %s"), tmp);
         return -1;
     }
     return 0;
