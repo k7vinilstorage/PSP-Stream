@@ -9,6 +9,6 @@ ifeq ($(PSPCONFIG),)
   export PATH := $(PSPDEV)/bin:$(PATH)
 endif
 ifeq ($(PSPCONFIG),)
-  $(error pspdev não encontrado: psp-config não está no PATH nem em ~/pspdev. Instale conforme a wiki (Instalação) ou rode make PSPDEV=/caminho/do/pspdev)
+  $(error pspdev not found: psp-config is neither in PATH nor in ~/pspdev. Install it as the wiki says (Installation) or run make PSPDEV=/path/to/pspdev)
 endif
 PSPSDK := $(shell $(PSPCONFIG) --pspsdk-path)

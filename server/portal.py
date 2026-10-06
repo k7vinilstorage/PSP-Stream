@@ -16,6 +16,7 @@ import gi
 
 gi.require_version("Gio", "2.0")
 from gi.repository import Gio, GLib  # noqa: E402
+from i18n import tr  # noqa: E402
 
 log = logging.getLogger("pspstream.portal")
 
@@ -71,7 +72,7 @@ class _Portal:
         try:
             self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
         except GLib.Error as exc:
-            raise PortalError(f"sem barramento D-Bus de sessão: {exc.message}") from exc
+            raise PortalError(tr("no D-Bus session bus: {error}").format(error=exc.message)) from exc
         self.sender = self.bus.get_unique_name()[1:].replace(".", "_")
         self.counter = 0
 
@@ -81,7 +82,7 @@ class _Portal:
                                      GLib.Variant("(ss)", (IFACE, name)), GLib.VariantType("(v)"),
                                      Gio.DBusCallFlags.NONE, -1, None)
         except GLib.Error as exc:
-            raise PortalError(f"portal ScreenCast indisponível: {exc.message}") from exc
+            raise PortalError(tr("ScreenCast portal unavailable: {error}").format(error=exc.message)) from exc
         return res.unpack()[0]
 
     def request(self, method, make_args, timeout_s=120):
@@ -105,15 +106,15 @@ class _Portal:
             GLib.timeout_add_seconds(timeout_s, loop.quit)
             loop.run()
         except GLib.Error as exc:
-            raise PortalError(f"{method} falhou: {exc.message}") from exc
+            raise PortalError(tr("{method} failed: {error}").format(method=method, error=exc.message)) from exc
         finally:
             self.bus.signal_unsubscribe(sub)
         if "code" not in result:
-            raise PortalError(f"{method}: sem resposta em {timeout_s} s")
+            raise PortalError(tr("{method}: no answer in {seconds} s").format(method=method, seconds=timeout_s))
         if result["code"] == 1:
-            raise PortalError("captura cancelada no diálogo")
+            raise PortalError(tr("capture cancelled in the dialog"))
         if result["code"] != 0:
-            raise PortalError(f"{method} recusado pelo portal (código {result['code']})")
+            raise PortalError(tr("{method} refused by the portal (code {code})").format(method=method, code=result["code"]))
         return result["results"]
 
 
@@ -145,13 +146,13 @@ def open_screencast(window: bool = False, cursor: bool = True, remember: bool = 
         return GLib.Variant("(oa{sv})", (session, dict(opts, handle_token=GLib.Variant("s", tok))))
 
     portal.request("SelectSources", select_args)
-    log.info("escolha o monitor/janela no diálogo do sistema (se aparecer)...")
+    log.info(tr("choose the monitor/window in the system dialog (if it shows up)..."))
     started = portal.request("Start", lambda tok: GLib.Variant("(osa{sv})", (
         session, "", {"handle_token": GLib.Variant("s", tok)})))
 
     streams = started.get("streams") or []
     if not streams:
-        raise PortalError("o portal não devolveu nenhum stream")
+        raise PortalError(tr("the portal returned no stream"))
     node_id, props = streams[0]
     size = props.get("size")
     if remember and started.get("restore_token"):
@@ -163,5 +164,5 @@ def open_screencast(window: bool = False, cursor: bool = True, remember: bool = 
         GLib.Variant("(oa{sv})", (session, {})), GLib.VariantType("(h)"),
         Gio.DBusCallFlags.NONE, -1, None, None)
     fd = fds.get(res.unpack()[0])
-    log.info("PipeWire: nó %d, %s", node_id, f"{size[0]}x{size[1]}" if size else "tamanho ?")
+    log.info(tr("PipeWire: node %d, %s"), node_id, f"{size[0]}x{size[1]}" if size else tr("size ?"))
     return ScreenCastSession(portal.bus, session, node_id, fd, size)

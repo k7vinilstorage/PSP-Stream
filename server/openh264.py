@@ -26,6 +26,7 @@ import os
 from pathlib import Path
 from ctypes import (CFUNCTYPE, POINTER, Structure, byref, c_bool, c_char_p, c_float, c_int, c_longlong, c_ubyte,
                     c_uint, c_ushort, c_void_p, cast, string_at)
+from i18n import tr
 
 log = logging.getLogger("pspstream.openh264")
 
@@ -164,7 +165,7 @@ def library():
             except OSError as exc:
                 errors.append(str(exc))
         else:
-            raise OpenH264Error("libopenh264 não encontrada (" + "; ".join(errors[:2]) + ")")
+            raise OpenH264Error(tr("libopenh264 not found ({errors})").format(errors="; ".join(errors[:2])))
         lib.WelsCreateSVCEncoder.argtypes = [POINTER(c_void_p)]
         lib.WelsCreateSVCEncoder.restype = c_int
         lib.WelsDestroySVCEncoder.argtypes = [c_void_p]
@@ -192,7 +193,7 @@ class Encoder:
     def __init__(self, width: int, height: int, qp: int, idr_every_frame: bool = False):
         lib, version = library()
         if version < (2, 0, 0):
-            raise OpenH264Error(f"openh264 {version} antiga demais (precisa da 2.x)")
+            raise OpenH264Error(tr("openh264 {version} is too old (needs 2.x)").format(version=version))
         self.version = version
         self.width, self.height = width, height
         self.idr_every_frame = idr_every_frame
@@ -201,7 +202,7 @@ class Encoder:
         self._lib = lib
         self._enc = c_void_p()
         if lib.WelsCreateSVCEncoder(byref(self._enc)) != 0 or not self._enc:
-            raise OpenH264Error("WelsCreateSVCEncoder falhou")
+            raise OpenH264Error(tr("WelsCreateSVCEncoder failed"))
         self._vt = cast(self._enc, POINTER(POINTER(ISVCEncoderVtbl))).contents.contents
         try:
             self._init(qp)
@@ -220,7 +221,7 @@ class Encoder:
         p = SEncParamExt()
         vt, enc = self._vt, self._enc
         if vt.GetDefaultParams(enc, byref(p)) != 0:
-            raise OpenH264Error("GetDefaultParams falhou")
+            raise OpenH264Error(tr("GetDefaultParams failed"))
         # Os padrões da biblioteca (param_svc.h, FillDefault) conferem o layout:
         # campos antes, dentro e depois das camadas.
         layer1 = p.sSpatialLayers[1]
@@ -230,7 +231,7 @@ class Encoder:
                     "iLtrMarkPeriod": (p.iLtrMarkPeriod, 30), "iMultipleThreadIdc": (p.iMultipleThreadIdc, 1)}
         wrong = {k: v for k, v in expected.items() if v[0] != v[1]}
         if wrong:
-            raise OpenH264Error(f"layout de SEncParamExt inesperado na openh264 {self.version}: {wrong}")
+            raise OpenH264Error(tr("unexpected SEncParamExt layout in openh264 {version}: {fields}").format(version=self.version, fields=wrong))
         p.iUsageType = CAMERA_VIDEO_REAL_TIME
         p.iPicWidth, p.iPicHeight = self.width, self.height
         p.iTargetBitrate = p.iMaxBitrate = BITRATE
@@ -250,7 +251,7 @@ class Encoder:
         layer.sSliceArgument.uiSliceMode = SM_SINGLE_SLICE
         layer.sSliceArgument.uiSliceNum = 1
         if vt.InitializeExt(enc, byref(p)) != 0:
-            raise OpenH264Error("InitializeExt recusou os parâmetros")
+            raise OpenH264Error(tr("InitializeExt refused the parameters"))
         fmt = c_int(VIDEO_FORMAT_I420)
         vt.SetOption(enc, ENCODER_OPTION_DATAFORMAT, byref(fmt))
         self._params = p
@@ -262,7 +263,7 @@ class Encoder:
             return
         self._params.sSpatialLayers[0].iDLayerQp = qp
         if self._vt.SetOption(self._enc, ENCODER_OPTION_SVC_ENCODE_PARAM_EXT, byref(self._params)) != 0:
-            raise OpenH264Error("SetOption(SVC_ENCODE_PARAM_EXT) recusou o QP novo")
+            raise OpenH264Error(tr("SetOption(SVC_ENCODE_PARAM_EXT) refused the new QP"))
         self.qp = qp
 
     def force_idr(self) -> None:
@@ -271,7 +272,7 @@ class Encoder:
     def encode(self, i420: bytes) -> bytes:
         size = self.width * self.height
         if len(i420) != size * 3 // 2:
-            raise ValueError(f"I420 de {len(i420)} bytes, esperava {size * 3 // 2}")
+            raise ValueError(tr("I420 of {size} bytes, expected {expected}").format(size=len(i420), expected=size * 3 // 2))
         if self.idr_every_frame:
             self.force_idr()
         base = cast(c_char_p(i420), c_void_p).value  # sem cópia: o encoder só lê
@@ -281,9 +282,9 @@ class Encoder:
         self._n += 1
         info = self._info
         if self._vt.EncodeFrame(self._enc, byref(pic), byref(info)) != 0:
-            raise OpenH264Error("EncodeFrame falhou")
+            raise OpenH264Error(tr("EncodeFrame failed"))
         if info.eFrameType in (FRAME_TYPE_SKIP, 0):
-            raise OpenH264Error(f"o encoder pulou o frame (tipo {info.eFrameType})")
+            raise OpenH264Error(tr("the encoder skipped the frame (type {type})").format(type=info.eFrameType))
         parts = []
         for i in range(info.iLayerNum):
             layer = info.sLayerInfo[i]
@@ -292,8 +293,8 @@ class Encoder:
         out = b"".join(parts)
         if len(out) != info.iFrameSizeInBytes or not out.startswith((b"\x00\x00\x00\x01", b"\x00\x00\x01")):
             # camadas no lugar errado: o layout de SLayerBSInfo não é o desta versão
-            raise OpenH264Error(f"saída inconsistente na openh264 {self.version} "
-                                f"({len(out)} bytes, a biblioteca diz {info.iFrameSizeInBytes})")
+            raise OpenH264Error(tr("inconsistent output from openh264 {version} ({size} bytes, the library says {expected})")
+                                .format(version=self.version, size=len(out), expected=info.iFrameSizeInBytes))
         return out
 
     def close(self) -> None:

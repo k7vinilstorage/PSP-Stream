@@ -1,10 +1,11 @@
-"""Protocolo v5 do PSPStream (TCP ou UDP, little-endian). Ver wiki/Protocolo.md.
+"""Protocolo v5 do PSPStream (TCP ou UDP, little-endian). Ver wiki/Protocol.md.
 
 Manter em sincronia com psp/src/protocol.h.
 """
 import struct
 import zlib
 from dataclasses import dataclass
+from i18n import tr
 
 DEFAULT_PORT = 5123
 
@@ -87,14 +88,14 @@ class Request:
     @classmethod
     def unpack(cls, data: bytes) -> "Request":
         if data[:4] in MAGIC_REQ_OLD:
-            raise OldEbootError("o EBOOT do PSP é de uma versão antiga do protocolo "
-                                f"(v{data[3] - 0x30}, este servidor fala v{MAGIC_REQ[3] - 0x30}): "
-                                "compile e copie o EBOOT.PBP desta versão")
+            raise OldEbootError(tr("the PSP's EBOOT speaks an old protocol version (v{old}, this server "
+                                   "speaks v{new}): build and copy this version's EBOOT.PBP").format(
+                old=data[3] - 0x30, new=MAGIC_REQ[3] - 0x30))
         if len(data) < REQ_STRUCT.size:
-            raise ValueError(f"pedido curto: {len(data)} bytes (esperado {REQ_STRUCT.size})")
+            raise ValueError(tr("short request: {size} bytes (expected {expected})").format(size=len(data), expected=REQ_STRUCT.size))
         magic, *fields = REQ_STRUCT.unpack(data[:REQ_STRUCT.size])
         if magic != MAGIC_REQ:
-            raise ValueError(f"magic inválido no pedido: {magic!r}")
+            raise ValueError(tr("invalid magic in the request: {magic}").format(magic=repr(magic)))
         return cls(*fields)
 
 
@@ -120,7 +121,7 @@ def pack_frame_header(frame_no: int, size: int, send_ts: int) -> bytes:
 def unpack_frame_header(data: bytes) -> tuple[int, int, int]:
     magic, frame_no, size, send_ts = FRAME_HDR_STRUCT.unpack(data)
     if magic != MAGIC_FRAME:
-        raise ValueError(f"magic inválido no frame: {magic!r}")
+        raise ValueError(tr("invalid magic in the frame: {magic}").format(magic=repr(magic)))
     return frame_no, size, send_ts
 
 
@@ -139,7 +140,7 @@ def unpack_chunk(data: bytes):
     """Devolve (frame_no, size, send_ts, index, count, hdr, payload)."""
     magic, frame_no, size, send_ts, index, count, hdr = CHUNK_HDR_STRUCT.unpack_from(data)
     if magic != MAGIC_CHUNK:
-        raise ValueError(f"magic inválido no pedaço: {magic!r}")
+        raise ValueError(tr("invalid magic in the chunk: {magic}").format(magic=repr(magic)))
     return frame_no, size, send_ts, index, count, hdr, data[CHUNK_HDR_STRUCT.size:]
 
 
@@ -153,7 +154,7 @@ def unpack_audio(data: bytes):
     """Devolve (seq, pos, taxa, canais, codec, amostras, bloco)."""
     magic, seq, pos, rate, channels, codec, samples, _ = AUDIO_HDR_STRUCT.unpack_from(data)
     if magic != MAGIC_AUDIO:
-        raise ValueError(f"magic inválido no som: {magic!r}")
+        raise ValueError(tr("invalid magic in the audio: {magic}").format(magic=repr(magic)))
     return seq, pos, rate, channels, codec, samples, data[AUDIO_HDR_STRUCT.size:]
 
 

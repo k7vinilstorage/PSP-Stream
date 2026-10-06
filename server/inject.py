@@ -2,7 +2,7 @@
 
 uinput cria um teclado + mouse virtuais no kernel, então funciona no Wayland
 (o pynput não injeta entrada no Wayland) e em jogos. Requer acesso de
-escrita a /dev/uinput (wiki/Instalação.md).
+escrita a /dev/uinput (wiki/Installation.md).
 
 Os botões viram teclas assim que o pedido chega. O analógico vira movimento
 de mouse numa thread a 125 Hz: o PSP só manda a posição quando ela muda, e o
@@ -18,6 +18,7 @@ import logging
 import threading
 import time
 from pathlib import Path
+from i18n import tr
 
 log = logging.getLogger("pspstream.input")
 
@@ -31,11 +32,21 @@ PSP_BUTTONS = {
 MOUSE_HZ = 125
 
 
+# Nomes antigos dos perfis (em português), aceitos em --profile, PSPSTREAM_PROFILE e server.json.
+PROFILE_ALIASES = {"jogo": "game", "setas": "arrows", "xbox-ombros": "xbox-shoulders"}
+
+
+def canonical_profile(name: str) -> str:
+    return PROFILE_ALIASES.get(name, name)
+
+
 def load_profile(path: str, profile: str) -> dict:
+    profile = canonical_profile(profile)
     data = json.loads(Path(path).read_text())
     if profile not in data:
         names = ", ".join(k for k in data if not k.startswith("_"))
-        raise SystemExit(f"perfil '{profile}' não existe em {path} (disponíveis: {names})")
+        raise SystemExit(tr("profile '{profile}' does not exist in {path} (available: {names})").format(
+            profile=profile, path=path, names=names))
     return data[profile]
 
 
@@ -47,7 +58,7 @@ class _DryRun:
 
     def key(self, code: str, down: bool):
         self.events.append(("key", code, down))
-        log.info("tecla %s %s", code, "pressionada" if down else "solta")
+        log.info(tr("key %s %s"), code, tr("pressed") if down else tr("released"))
 
     def move(self, dx: int, dy: int):
         self.events.append(("move", dx, dy))
@@ -63,14 +74,14 @@ class _UInput:
             from evdev import UInput, ecodes
         except ImportError as exc:
             import distro
-            raise RuntimeError(f"python-evdev não instalado ({distro.hint('evdev')})") from exc
+            raise RuntimeError(tr("python-evdev is not installed ({hint})").format(hint=distro.hint("evdev"))) from exc
         self.ec = ecodes
         keys = sorted({getattr(ecodes, c) for c in codes} | {ecodes.BTN_LEFT, ecodes.BTN_RIGHT, ecodes.BTN_MIDDLE})
         caps = {ecodes.EV_KEY: keys, ecodes.EV_REL: [ecodes.REL_X, ecodes.REL_Y, ecodes.REL_WHEEL]}
         try:
             self.ui = UInput(caps, name="PSPStream (PSP)")
         except Exception as exc:  # OSError/PermissionError ou evdev.UInputError (módulo não carregado)
-            raise RuntimeError(f"sem acesso a /dev/uinput ({exc}); veja a página Instalação da wiki do PSPStream, Controles (uinput)") from exc
+            raise RuntimeError(tr("no access to /dev/uinput ({error}); see \"Controls (uinput)\" on the Installation page of the PSPStream wiki").format(error=exc)) from exc
 
     def key(self, code: str, down: bool):
         self.ui.write(self.ec.EV_KEY, getattr(self.ec, code), 1 if down else 0)
@@ -92,7 +103,7 @@ class Injector:
         self.buttons = {}  # máscara PSP -> lista de códigos evdev
         for name, action in profile.get("buttons", {}).items():
             if name not in PSP_BUTTONS:
-                raise SystemExit(f"botão desconhecido no keymap: {name}")
+                raise SystemExit(tr("unknown button in the keymap: {name}").format(name=name))
             self.buttons[PSP_BUTTONS[name]] = [c.strip() for c in action.split("+") if c.strip()]
         analog = profile.get("analog", {})
         self.mode = analog.get("mode", "mouse")
@@ -125,7 +136,7 @@ class Injector:
             return  # sem evdev só o dry-run funciona; os nomes não são conferidos
         bad = [c for c in codes if not hasattr(ecodes, c)]
         if bad:
-            raise SystemExit(f"códigos desconhecidos no keymap: {', '.join(bad)}")
+            raise SystemExit(tr("unknown codes in the keymap: {codes}").format(codes=", ".join(bad)))
 
     def _press(self, code: str, down: bool):
         n = self.held.get(code, 0)
@@ -185,7 +196,7 @@ class Injector:
             time.sleep(period)
             if self.timeout and not self.timed_out and self._active() and \
                     time.monotonic() - self.last_update > self.timeout:
-                log.warning("controles: PSP sem mandar nada há %.0f ms, soltando tudo",
+                log.warning(tr("controls: nothing from the PSP for %.0f ms, releasing everything"),
                             (time.monotonic() - self.last_update) * 1000)
                 self.release_all()
                 self.timed_out = True

@@ -23,11 +23,11 @@ concurrency:
 
 jobs:
   publish:
-    name: publicar a wiki
+    name: publish the wiki
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: publicar
+      - name: publish
         env:
           # O token do próprio workflow; um WIKI_TOKEN nos secrets vale mais.
           WIKI_TOKEN: ${{ secrets.WIKI_TOKEN || github.token }}

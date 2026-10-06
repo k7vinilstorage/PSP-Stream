@@ -34,6 +34,7 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
+from i18n import catalog, language, tr
 
 log = logging.getLogger("pspstream.web")
 
@@ -88,7 +89,7 @@ def parse_addr(text: str):
     host = host.strip("[]") or "127.0.0.1"
     port = int(port)
     if not 0 <= port <= 65535:
-        raise ValueError("porta inválida")
+        raise ValueError(tr("invalid port"))
     return host, port
 
 
@@ -162,14 +163,14 @@ def make_handler(controller, ring, password=None, allow_hosts=()):
 
         def _checked(self) -> bool:
             if not host_allowed(self.headers.get("Host", ""), extra):
-                self._json(403, {"error": "endereço não permitido (use http://localhost, o IP do PC ou um nome "
-                                          "liberado com --web-allow-host)"})
+                self._json(403, {"error": tr("address not allowed (use http://localhost, the PC's IP or a name "
+                                             "allowed with --web-allow-host)")})
                 return False
             if password and not password_ok(self.headers.get("Authorization", ""), password):
                 if self.headers.get("Authorization"):
-                    log.warning("web: senha errada vinda de %s", self.client_address[0])
+                    log.warning(tr("web: wrong password from %s"), self.client_address[0])
                     time.sleep(AUTH_DELAY_S)
-                body = json.dumps({"error": "senha"}).encode()
+                body = json.dumps({"error": tr("password")}, ensure_ascii=False).encode()
                 self._send(401, body, "application/json; charset=utf-8",
                            [("WWW-Authenticate", 'Basic realm="PSPStream", charset="UTF-8"')])
                 return False
@@ -184,11 +185,13 @@ def make_handler(controller, ring, password=None, allow_hosts=()):
                 try:
                     body = (WEB_DIR / name).read_bytes()
                 except OSError:
-                    self._json(500, {"error": f"faltou o arquivo {name}"})
+                    self._json(500, {"error": tr("missing file {name}").format(name=name)})
                     return
                 self._send(200, body, ctype)
             elif path == "/api/config":
                 self._json(200, controller.config())
+            elif path == "/api/i18n":
+                self._json(200, {"lang": language(), "messages": catalog()})
             elif path == "/api/status":
                 try:
                     since = int(parse_qs(query).get("since", ["0"])[0])
@@ -196,7 +199,7 @@ def make_handler(controller, ring, password=None, allow_hosts=()):
                     since = 0
                 self._json(200, {**controller.status(), "log": ring.since(since) if ring else []})
             else:
-                self._json(404, {"error": "não existe"})
+                self._json(404, {"error": tr("not found")})
 
         do_HEAD = do_GET
 
@@ -204,11 +207,11 @@ def make_handler(controller, ring, password=None, allow_hosts=()):
             if not self._checked():
                 return
             if self.path.partition("?")[0] != "/api/config":
-                self._json(404, {"error": "não existe"})
+                self._json(404, {"error": tr("not found")})
                 return
             origin = self.headers.get("Origin")
             if origin and urlsplit(origin).netloc.lower() != self.headers.get("Host", "").lower():
-                self._json(403, {"error": "origem não permitida"})
+                self._json(403, {"error": tr("origin not allowed")})
                 return
             ctype = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
             if ctype != "application/json":
@@ -219,16 +222,16 @@ def make_handler(controller, ring, password=None, allow_hosts=()):
             except ValueError:
                 length = -1
             if not 0 < length <= MAX_BODY:
-                self._json(413, {"error": "pedido vazio ou grande demais"})
+                self._json(413, {"error": tr("empty or too large request")})
                 return
             try:
                 body = json.loads(self.rfile.read(length))
             except ValueError:
-                self._json(400, {"error": "JSON inválido"})
+                self._json(400, {"error": tr("invalid JSON")})
                 return
             values = body.get("values") if isinstance(body, dict) else None
             if not isinstance(values, dict):
-                self._json(400, {"error": "esperava {\"values\": {...}}"})
+                self._json(400, {"error": tr('expected {"values": {...}}')})
                 return
             self._json(200, controller.apply(values))
 

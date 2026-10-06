@@ -31,6 +31,7 @@ import threading
 import wolf_source
 from gamepad import GamepadInjector
 from wolf_api import WolfApiError
+from i18n import tr
 
 log = logging.getLogger("pspstream.wolf")
 
@@ -126,7 +127,7 @@ class WolfPad:
     def _say(self, msg: str) -> None:
         if msg != self.said:
             self.said = msg
-            log.warning("controles: %s", msg)
+            log.warning(tr("controls: %s"), msg)
 
     def _loop(self) -> None:
         while True:
@@ -158,12 +159,12 @@ class WolfPad:
                 src.api.send_input(sid, arrival_packet(self.number))
                 self.link = (src, generation)
                 dirty = True  # o estado atual vai logo depois
-                log.info("controles: controle de Xbox virtual ligado na sessão %s do Wolf", sid)
+                log.info(tr("controls: virtual Xbox controller plugged into Wolf session %s"), sid)
             if dirty:
                 src.api.send_input(sid, state_packet(state, self.number))
             self.said = None
         except WolfApiError as exc:
-            self._say(f"o Wolf não recebeu o controle: {exc}")
+            self._say(tr("Wolf did not take the controller: {error}").format(error=exc))
             self.link = None  # anuncia de novo (o Wolf ignora um controle repetido)
 
     def _unplug(self) -> None:
@@ -176,7 +177,7 @@ class WolfPad:
             try:
                 src.api.send_input(where[0], state_packet(GamepadInjector._neutral(), self.number, connected=False))
             except WolfApiError as exc:
-                log.debug("controles: desligando o controle no Wolf: %s", exc)
+                log.debug(tr("controls: unplugging the controller in Wolf: %s"), exc)
         self.link = None
 
 

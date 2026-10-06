@@ -43,12 +43,12 @@ class ProtocolTest(unittest.TestCase):
     def test_bad_magic(self):
         with self.assertRaises(ValueError):
             protocol.Request.unpack(b"XXXX" + bytes(48))
-        with self.assertRaisesRegex(ValueError, "curto"):
+        with self.assertRaisesRegex(ValueError, "short request"):
             protocol.Request.unpack(protocol.MAGIC_REQ + bytes(44))
 
     def test_old_eboot_rejected_clearly(self):
         for magic in (b"PSC1", b"PSC2", b"PSC3", b"PSC4"):
-            with self.assertRaisesRegex(protocol.OldEbootError, "versão antiga"):
+            with self.assertRaisesRegex(protocol.OldEbootError, "old protocol version"):
                 protocol.Request.unpack(magic + bytes(44))
 
     def test_matches_c_header(self):
@@ -284,7 +284,7 @@ class UdpEndToEndTest(unittest.TestCase):
         self.assertGreater(summary["frames"], 10)
         self.assertEqual(fake_client.h264_packet_kind(got), 0)
         self.assertTrue(h264.is_idr(got))
-        self.assertTrue(any("frames P" in m for m in logs.output), logs.output)
+        self.assertTrue(any("P frames" in m for m in logs.output), logs.output)
 
     def test_early_request_keeps_streaming(self):
         # Com pedido antecipado, uma perda no fim do frame N vira pulo para o
@@ -305,7 +305,7 @@ class UdpEndToEndTest(unittest.TestCase):
         self.assertTrue(w.idle)
         s = w.summary(60)
         self.assertGreater(s["early_kb"], 0)
-        self.assertIn("tempo morto", stats.format_summary(s))
+        self.assertIn("dead time", stats.format_summary(s))
 
     def test_no_new_session_while_closing(self):
         # Ctrl+C com o PSP mandando pedidos: um pedido que chega durante o
@@ -475,7 +475,7 @@ class DmabufCaptureTest(unittest.TestCase):
             self.assertIsNotNone(source.wait_newer(0, 5), "o modo normal não entregou frame")
         finally:
             source.stop()
-        self.assertIn("--dmabuf não funcionou", logs.output[0])
+        self.assertIn("--dmabuf did not work", logs.output[0])
 
 
 class KmsCaptureTest(unittest.TestCase):
@@ -502,10 +502,10 @@ class KmsCaptureTest(unittest.TestCase):
 
     def test_real_helper_reports_errors(self):
         helper = self.build_helper()
-        with self.assertRaisesRegex(self.kms.KmsError, "precisa ser /dev/dri/cardN"):
+        with self.assertRaisesRegex(self.kms.KmsError, "must be /dev/dri/cardN"):
             self.kms.KmsHelper(helper, card="/etc/passwd")
         if not Path("/dev/dri").exists():
-            with self.assertRaisesRegex(self.kms.KmsError, "nenhum monitor ligado"):
+            with self.assertRaisesRegex(self.kms.KmsError, "no connected monitor"):
                 self.kms.KmsHelper(helper)
 
     def test_missing_helper_explains_build(self):
@@ -539,7 +539,7 @@ class KmsCaptureTest(unittest.TestCase):
             with self.assertRaises(self.kms.KmsError) as ctx:
                 self.kms.KmsSource(480, 272, 60, 60, helper=self.fake[1], argv_prefix=self.fake[:1])
             # o arquivo do auxiliar e o comando que dá a permissão
-            self.assertIn("sem permissão para ler a tela", str(ctx.exception))
+            self.assertIn("no permission to read the screen", str(ctx.exception))
             self.assertIn(f"sudo setcap cap_sys_admin+ep {self.fake[1]}", str(ctx.exception))
         finally:
             del os.environ["FAKE_KMS_NOPERM"]
@@ -586,7 +586,7 @@ class NetcheckTest(unittest.TestCase):
         self.assertEqual(level, logging.INFO)
         level, msg = netcheck.band_advice(2437, "wlp0s20f3")
         self.assertEqual(level, logging.WARNING)
-        self.assertIn("canal 6", msg)
+        self.assertIn("channel 6", msg)
         self.assertIn("802-11-wireless.band a", msg)
         self.assertEqual(netcheck.channel_24(2484), 14)
 
@@ -841,10 +841,10 @@ class HitchStatsTest(unittest.TestCase):
         summary = s.window.summary()
         self.assertEqual(summary["hitches"], 4)
         self.assertEqual(summary["hitch_max_ms"], 63)
-        self.assertEqual(summary["hitch_causes"], {"perda": 1, "IDR": 1, "pedido atrasado": 1, "captura": 1})
+        self.assertEqual(summary["hitch_causes"], {"loss": 1, "IDR": 1, "late request": 1, "capture": 1})
         self.assertEqual(summary["idrs"], 1)
         line = stats.format_summary(summary)
-        self.assertIn("engasgos 4 (pior 63 ms: 1 perda, 1 IDR, 1 pedido atrasado, 1 captura)", line)
+        self.assertIn("hitches 4 (worst 63 ms: 1 loss, 1 IDR, 1 late request, 1 capture)", line)
         self.assertIn("1 IDR", line)
 
 
@@ -854,7 +854,7 @@ class H264QualityTest(unittest.TestCase):
             import h264
         except (ImportError, ValueError):
             self.skipTest("sem GStreamer")
-        # calibrado na mesma SSIM do jpegenc (wiki/Medições.md)
+        # calibrado na mesma SSIM do jpegenc (wiki/Measurements.md)
         self.assertEqual([h264.qp_for_quality(q) for q in (30, 50, 70, 90)], [40, 37, 33, 30])
         self.assertEqual(h264.qp_for_quality(1), 44)
         self.assertEqual(h264.qp_for_quality(100), 29)

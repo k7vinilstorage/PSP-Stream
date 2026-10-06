@@ -16,6 +16,7 @@ from pathlib import Path
 
 import distro
 import paths
+from i18n import N_, tr
 
 ROOT = Path(__file__).resolve().parent.parent
 UINPUT_RULE = """echo uinput | sudo tee /etc/modules-load.d/uinput.conf
@@ -31,10 +32,16 @@ PORTAL_BACKENDS = (  # XDG_CURRENT_DESKTOP -> backend do portal
 )
 
 
+# Grupos e estados: identificadores internos; o texto mostrado passa por tr().
+GROUPS = {"System": N_("System"), "GStreamer": "GStreamer", "Video": N_("Video"), "Capture": N_("Capture"),
+          "Controls": N_("Controls"), "Audio": N_("Audio"), "Network": N_("Network")}
+STATES = {"ok": "ok", "warn": N_("warn"), "missing": N_("missing"), "info": "info"}
+
+
 @dataclass
 class Item:
     group: str
-    state: str           # ok | aviso | falta | info
+    state: str           # ok | warn | missing | info
     text: str
     needs: tuple = ()    # chaves do distro.PACKAGES que resolvem
     extra: list = field(default_factory=list)  # pacotes fora do distro.PACKAGES (backend do portal)
@@ -60,57 +67,59 @@ def _missing(Gst, names):
 def check_system(items):
     _, pretty = distro.current()
     fam = distro.current()[0]
-    items.append(Item("Sistema", "ok" if fam else "aviso",
-                      pretty + ("" if fam else " (distribuição desconhecida: os comandos abaixo são do Ubuntu)")))
+    items.append(Item("System", "ok" if fam else "warn",
+                      pretty + ("" if fam else tr(" (unknown distribution: the commands below are Ubuntu's)"))))
     v = sys.version_info
     if v >= (3, 10):
-        items.append(Item("Sistema", "ok", f"Python {v.major}.{v.minor}.{v.micro}"))
+        items.append(Item("System", "ok", f"Python {v.major}.{v.minor}.{v.micro}"))
     else:
-        items.append(Item("Sistema", "falta", f"Python {v.major}.{v.minor}: o servidor precisa do 3.10 ou mais novo",
-                          essential=True))
+        items.append(Item("System", "missing", tr("Python {version}: the server needs 3.10 or newer").format(
+            version=f"{v.major}.{v.minor}"), essential=True))
     session = os.environ.get("XDG_SESSION_TYPE", "")
-    desktop = os.environ.get("XDG_CURRENT_DESKTOP", "")
+    desktop = os.environ.get("XDG_CURRENT_DESKTOP", "") or "?"
     if session == "x11":
-        items.append(Item("Sistema", "info", f"sessão X11 ({desktop or '?'}): use --source x11 (ou --source kms)"))
+        items.append(Item("System", "info", tr("X11 session ({desktop}): use --source x11 (or --source kms)").format(
+            desktop=desktop)))
     elif session == "wayland":
-        items.append(Item("Sistema", "ok", f"sessão Wayland ({desktop or '?'}): captura pelo portal (o padrão) "
-                                           "ou --source kms"))
+        items.append(Item("System", "ok", tr("Wayland session ({desktop}): capture through the portal (the default) "
+                                             "or --source kms").format(desktop=desktop)))
     else:
-        items.append(Item("Sistema", "info", "sem sessão gráfica neste terminal (SSH?): rode o servidor de dentro "
-                                             "da sessão, ou use --source kms"))
+        items.append(Item("System", "info", tr("no graphical session in this terminal (SSH?): run the server from "
+                                               "inside the session, or use --source kms")))
 
 
 def check_gstreamer(items):
     Gst = _gst()
     if Gst is None:
         # sem o gi não dá para conferir os plugins: sugere o conjunto todo
-        items.append(Item("GStreamer", "falta", "PyGObject com o GStreamer (gi): sem ele o servidor não abre",
+        items.append(Item("GStreamer", "missing", tr("PyGObject with GStreamer (gi): the server does not open without it"),
                           ("gi", "base", "good", "bad", "pipewire", "gl"), essential=True))
         return None
     major, minor, micro, _ = Gst.version()
-    state = "ok" if (major, minor) >= (1, 20) else "aviso"
-    items.append(Item("GStreamer", state, f"GStreamer {major}.{minor}.{micro} e PyGObject"
-                      + ("" if state == "ok" else ": testado do 1.20 em diante")))
+    state = "ok" if (major, minor) >= (1, 20) else "warn"
+    items.append(Item("GStreamer", state, tr("GStreamer {version} and PyGObject").format(version=f"{major}.{minor}.{micro}")
+                      + ("" if state == "ok" else tr(": tested from 1.20 on"))))
     base = _missing(Gst, ("videoscale", "videoconvert", "appsink", "queue", "videotestsrc", "audioconvert",
                           "audioresample"))
     if base:
-        items.append(Item("GStreamer", "falta", "elementos básicos: " + ", ".join(base), ("base",), essential=True))
+        items.append(Item("GStreamer", "missing", tr("basic elements: {names}").format(names=", ".join(base)), ("base",),
+                          essential=True))
     else:
-        items.append(Item("GStreamer", "ok", "elementos básicos (videoscale, videoconvert, appsink)"))
+        items.append(Item("GStreamer", "ok", tr("basic elements (videoscale, videoconvert, appsink)")))
     checks = (
-        (("pipewiresrc",), ("pipewire",), "captura pelo portal (o padrão no Wayland)"),
-        (("jpegenc",), ("good",), "JPEG (EBOOT antigo ou --codec jpeg)"),
-        (("pulsesrc",), ("good",), "som (captura)"),
-        (("adpcmenc",), ("bad",), "som (IMA ADPCM)"),
-        (("glupload", "gldownload", "glcolorscale"), ("gl",), "captura KMS e --dmabuf (redução na GPU)"),
-        (("ximagesrc",), ("good",), "captura X11 (--source x11)"),
+        (("pipewiresrc",), ("pipewire",), N_("capture through the portal (the default on Wayland)")),
+        (("jpegenc",), ("good",), N_("JPEG (old EBOOT or --codec jpeg)")),
+        (("pulsesrc",), ("good",), N_("audio (capture)")),
+        (("adpcmenc",), ("bad",), N_("audio (IMA ADPCM)")),
+        (("glupload", "gldownload", "glcolorscale"), ("gl",), N_("KMS capture and --dmabuf (scaling on the GPU)")),
+        (("ximagesrc",), ("good",), N_("X11 capture (--source x11)")),
     )
     for names, needs, what in checks:
         missing = _missing(Gst, names)
         if missing:
-            items.append(Item("GStreamer", "aviso", f"{', '.join(missing)}: {what}", needs))
+            items.append(Item("GStreamer", "warn", f"{', '.join(missing)}: {tr(what)}", needs))
         else:
-            items.append(Item("GStreamer", "ok", f"{', '.join(names)}: {what}"))
+            items.append(Item("GStreamer", "ok", f"{', '.join(names)}: {tr(what)}"))
     return Gst
 
 
@@ -118,11 +127,12 @@ def check_openh264(items):
     try:
         import openh264
         lib, ver = openh264.library()
-        items.append(Item("Vídeo", "ok", f"libopenh264 {ver[0]}.{ver[1]}.{ver[2]}: H.264 com frames P (o padrão)"))
+        items.append(Item("Video", "ok", tr("libopenh264 {version}: H.264 with P frames (the default)").format(
+            version=f"{ver[0]}.{ver[1]}.{ver[2]}")))
     except Exception:  # noqa: BLE001 - ImportError, OpenH264Error, ctypes
-        items.append(Item("Vídeo", "aviso", "libopenh264: sem ela o servidor manda JPEG (~10x mais bytes por frame)."
-                          " Sem o pacote na sua distribuição: a biblioteca do Cisco "
-                          "(github.com/cisco/openh264/releases) em ~/.local/lib", ("openh264",)))
+        items.append(Item("Video", "warn", tr("libopenh264: without it the server sends JPEG (~10x more bytes per "
+                                              "frame). Without a package in your distribution: Cisco's library "
+                                              "(github.com/cisco/openh264/releases) in ~/.local/lib"), ("openh264",)))
 
 
 def check_portal(items, have_gst):
@@ -135,32 +145,35 @@ def check_portal(items, have_gst):
     try:
         from portal import _Portal
         version = _Portal().prop("version")
-        items.append(Item("Captura", "ok", f"portal ScreenCast v{version}"
-                          + (" (lembra a tela escolhida)" if version >= 4 else " (pergunta a tela a cada partida)")))
+        items.append(Item("Capture", "ok", tr("ScreenCast portal v{version}").format(version=version)
+                          + (tr(" (remembers the chosen screen)") if version >= 4 else
+                             tr(" (asks for the screen on every start)"))))
     except Exception as exc:  # noqa: BLE001 - PortalError, GLib.Error
-        items.append(Item("Captura", "aviso", f"portal ScreenCast indisponível ({exc}): instale o "
-                          f"xdg-desktop-portal e o backend do seu ambiente{f' ({backend})' if backend else ''}",
+        items.append(Item("Capture", "warn", tr("ScreenCast portal unavailable ({error}): install xdg-desktop-portal "
+                                                "and your desktop's backend{backend}").format(
+                              error=exc, backend=f" ({backend})" if backend else ""),
                           extra=["xdg-desktop-portal"] + ([backend] if backend else [])))
 
 
 def check_kms(items):
     helper = paths.kms_helper()
     if not helper.exists():
-        items.append(Item("Captura", "info", "auxiliar KMS não compilado (opcional: --source kms, 60 fps no GNOME 50+)",
+        items.append(Item("Capture", "info", tr("KMS helper not built (optional: --source kms, 60 fps on GNOME 50+)"),
                           ("kms",), fix="make -C tools/kms && make -C tools/kms cap"))
         return
     if paths.has_cap_sys_admin(helper):
         ignored = paths.kms_cap_ignored(helper)
         if ignored:
-            items.append(Item("Captura", "aviso", f"captura KMS: {ignored}"))
+            items.append(Item("Capture", "warn", tr("KMS capture: {problem}").format(problem=ignored)))
         else:
-            items.append(Item("Captura", "ok", "auxiliar KMS pronto (--source kms)"))
+            items.append(Item("Capture", "ok", tr("KMS helper ready (--source kms)")))
     elif helper == paths.REPO_KMS_HELPER:
-        items.append(Item("Captura", "aviso", "auxiliar KMS sem a permissão de ler a tela (opcional: --source kms)",
-                          fix="make -C tools/kms cap   # refaça depois de cada make"))
+        items.append(Item("Capture", "warn", tr("KMS helper without permission to read the screen (optional: "
+                                                "--source kms)"),
+                          fix="make -C tools/kms cap   # " + tr("again after every make")))
     else:  # o do pacote: a permissão é opcional, e só o administrador dá
-        items.append(Item("Captura", "info", "captura KMS (opcional: --source kms, 60 fps no GNOME 50+): o auxiliar "
-                          "do pacote precisa da permissão de ler a tela",
+        items.append(Item("Capture", "info", tr("KMS capture (optional: --source kms, 60 fps on GNOME 50+): the "
+                                                "package's helper needs permission to read the screen"),
                           fix=paths.kms_fix(helper)))
 
 
@@ -173,23 +186,23 @@ def check_input(items):
     dev = Path("/dev/uinput")
     writable = dev.exists() and os.access(dev, os.W_OK)
     if evdev_ok and writable:
-        items.append(Item("Controles", "ok", "uinput e python-evdev: teclado, mouse e controle de Xbox virtuais"))
+        items.append(Item("Controls", "ok", tr("uinput and python-evdev: virtual keyboard, mouse and Xbox controller")))
         return
     problems = []
     if not evdev_ok:
-        problems.append("python-evdev não instalado")
+        problems.append(tr("python-evdev is not installed"))
     if not dev.exists():
-        problems.append("/dev/uinput não existe (módulo uinput)")
+        problems.append(tr("/dev/uinput does not exist (uinput module)"))
     elif not writable:
-        problems.append("sem permissão de escrita no /dev/uinput")
-    items.append(Item("Controles", "aviso", "; ".join(problems) + " (o servidor transmite sem os controles)",
+        problems.append(tr("no write permission on /dev/uinput"))
+    items.append(Item("Controls", "warn", "; ".join(problems) + tr(" (the server streams without the controls)"),
                       () if evdev_ok else ("evdev",), fix="" if writable else UINPUT_RULE))
 
 
 def check_audio(items):
     if not shutil.which("pactl"):
-        items.append(Item("Som", "aviso", "pactl não encontrado: o som usa a saída padrão, sem listar as fontes",
-                          ("pactl",)))
+        items.append(Item("Audio", "warn", tr("pactl not found: the audio uses the default output, without listing "
+                                              "the sources"), ("pactl",)))
         return
     try:
         out = subprocess.run(["pactl", "info"], capture_output=True, text=True, timeout=3).stdout
@@ -197,9 +210,9 @@ def check_audio(items):
         out = ""
     server = next((line.split(":", 1)[1].strip() for line in out.splitlines() if line.startswith("Server Name")), "")
     if server:
-        items.append(Item("Som", "ok", f"servidor de som: {server}"))
+        items.append(Item("Audio", "ok", tr("sound server: {name}").format(name=server)))
     else:
-        items.append(Item("Som", "aviso", "pactl não achou o servidor de som (PipeWire/PulseAudio) desta sessão"))
+        items.append(Item("Audio", "warn", tr("pactl did not find this session's sound server (PipeWire/PulseAudio)")))
 
 
 def check_network(items, port):
@@ -208,16 +221,17 @@ def check_network(items, port):
             try:
                 s.bind(("0.0.0.0", port))
             except OSError:
-                items.append(Item("Rede", "aviso", f"porta {port}/{label} em uso (outro servidor rodando?)"))
+                items.append(Item("Network", "warn", tr("port {port}/{proto} in use (another server running?)").format(
+                    port=port, proto=label)))
                 break
     else:
-        items.append(Item("Rede", "ok", f"porta {port} livre (TCP e UDP)"))
+        items.append(Item("Network", "ok", tr("port {port} free (TCP and UDP)").format(port=port)))
     fw = distro.firewall()
     if fw:
-        items.append(Item("Rede", "info", f"firewall {fw} ativo: se o PSP não achar o PC, libere a porta",
-                          fix=distro.firewall_command(port, fw)))
+        items.append(Item("Network", "info", tr("{firewall} firewall active: if the PSP does not find the PC, open the "
+                                                "port").format(firewall=fw), fix=distro.firewall_command(port, fw)))
     else:
-        items.append(Item("Rede", "ok", "nenhum firewall ativo reconhecido (ufw, firewalld)"))
+        items.append(Item("Network", "ok", tr("no known firewall active (ufw, firewalld)")))
 
 
 def run_checks(port: int = 5123) -> list:
@@ -234,62 +248,63 @@ def run_checks(port: int = 5123) -> list:
 
 
 def report(items, color: bool = False) -> str:
-    colors = {"ok": "32", "aviso": "33", "falta": "31", "info": "36"}
+    colors = {"ok": "32", "warn": "33", "missing": "31", "info": "36"}
     lines, group = [], None
     for item in items:
         if item.group != group:
             group = item.group
-            lines.append(f"\n{group}")
-        tag = f"{item.state:<6}"
+            lines.append(f"\n{tr(GROUPS.get(group, group))}")
+        tag = f"{tr(STATES[item.state]):<7}"
         if color:
             tag = f"\033[{colors[item.state]}m{tag}\033[0m"
         lines.append(f"  {tag} {item.text}")
-    todo = [i for i in items if i.state in ("falta", "aviso")]
+    todo = [i for i in items if i.state in ("missing", "warn")]
     needs = [n for i in todo for n in i.needs]
     extra = [p for i in todo for p in i.extra]
     fam = distro.current()[0] or "debian"
     pkgs = distro.packages(needs, fam) + [p for p in extra if p not in distro.packages(needs, fam)]
     if pkgs:
-        lines += ["", "Para instalar o que falta:", f"  {distro.INSTALL[fam]} {' '.join(pkgs)}"]
-        notes = sorted({distro.NOTES[(n, fam)] for n in needs if (n, fam) in distro.NOTES})
+        lines += ["", tr("To install what is missing:"), f"  {distro.INSTALL[fam]} {' '.join(pkgs)}"]
+        notes = sorted({tr(distro.NOTES[(n, fam)]) for n in needs if (n, fam) in distro.NOTES})
         lines += [f"  ({note})" for note in notes]
-    fixes = [i for i in items if i.fix and (i.state in ("falta", "aviso") or i.group == "Rede")]
+    fixes = [i for i in items if i.fix and (i.state in ("missing", "warn") or i.group == "Network")]
     for item in fixes:
-        lines += ["", f"{item.group}:"] + [f"  {line}" for line in item.fix.splitlines()]
-    info = [i for i in items if i.fix and i.state == "info" and i.group != "Rede"]
+        lines += ["", f"{tr(GROUPS.get(item.group, item.group))}:"] + [f"  {line}" for line in item.fix.splitlines()]
+    info = [i for i in items if i.fix and i.state == "info" and i.group != "Network"]
     for item in info:
-        lines += ["", f"Opcional ({item.text.split(' (')[0]}):"]
+        lines += ["", tr("Optional ({what}):").format(what=item.text.split(" (")[0])]
         if item.needs:
             lines.append(f"  {distro.install_command(item.needs, fam)}")
         lines += [f"  {line}" for line in item.fix.splitlines()]
     if not todo:
-        lines += ["", "Tudo pronto: python3 server/pspstream.py"]
+        lines += ["", tr("All set: python3 server/pspstream.py")]
     return "\n".join(lines).lstrip("\n")
 
 
 def plan(items, fam: str) -> list:
     """Passos do --setup: [(título, [comandos])], só com o que falta."""
-    todo = [i for i in items if i.state in ("falta", "aviso")]
+    todo = [i for i in items if i.state in ("missing", "warn")]
     needs = [n for i in todo for n in i.needs]
     pkgs = distro.packages(needs, fam)
     pkgs += [p for i in todo for p in i.extra if p not in pkgs]
     steps = []
     if pkgs and fam:
-        steps.append(("Instalar os pacotes que faltam", [f"{distro.INSTALL[fam]} {' '.join(pkgs)}"]))
+        steps.append((tr("Install the missing packages"), [f"{distro.INSTALL[fam]} {' '.join(pkgs)}"]))
     for item in todo:
-        if item.fix and item.group == "Controles":
-            steps.append(("Liberar o /dev/uinput para os controles", item.fix.replace("\\\n", "").splitlines()))
-    kms = next((i for i in items if i.group == "Captura" and i.fix.startswith(("make", "sudo setcap"))), None)
+        if item.fix and item.group == "Controls":
+            steps.append((tr("Open /dev/uinput for the controls"), item.fix.replace("\\\n", "").splitlines()))
+    kms = next((i for i in items if i.group == "Capture" and i.fix.startswith(("make", "sudo setcap"))), None)
     if kms is not None:
         if kms.fix.startswith("sudo setcap"):  # o auxiliar do pacote
             cmds = [kms.fix]
         else:
             cmds = ([distro.install_command(kms.needs, fam)] if kms.needs and fam else []) + [
                 f"make -C {ROOT / 'tools' / 'kms'}", f"make -C {ROOT / 'tools' / 'kms'} cap"]
-        steps.append(("Captura KMS (opcional: 60 fps no GNOME 50+; dá ao auxiliar a permissão de ler a tela)", cmds))
-    fw = next((i for i in items if i.group == "Rede" and i.fix), None)
+        steps.append((tr("KMS capture (optional: 60 fps on GNOME 50+; gives the helper permission to read the "
+                         "screen)"), cmds))
+    fw = next((i for i in items if i.group == "Network" and i.fix), None)
     if fw is not None:
-        steps.append(("Liberar a porta no firewall", [fw.fix]))
+        steps.append((tr("Open the port in the firewall"), [fw.fix]))
     return steps
 
 
@@ -299,41 +314,43 @@ def setup(port: int = 5123, version: str = "", ask=input) -> int:
     entrada do usuário."""
     fam = distro.current()[0]
     items = run_checks(port)
-    print(f"PSPStream {version}: preparando esta máquina ({distro.current()[1]})\n")
+    print(tr("PSPStream {version}: preparing this machine ({system})").format(version=version, system=distro.current()[1])
+          + "\n")
     if not fam:
-        print("Distribuição desconhecida: instale os pacotes como em https://github.com/k7vinilstorage/PSP-Stream/wiki/Instalação. "
-              "O resto (uinput, firewall) segue abaixo.\n")
+        print(tr("Unknown distribution: install the packages as in {url}. The rest (uinput, firewall) follows below.")
+              .format(url="https://github.com/k7vinilstorage/PSP-Stream/wiki/Installation") + "\n")
     steps = plan(items, fam)
     if not steps:
-        print("Nada a fazer.")
+        print(tr("Nothing to do."))
     for title, cmds in steps:
         print(f"{title}:")
         for cmd in cmds:
             print(f"  {cmd}")
         try:
-            answer = ask("Executar? [s/N] ").strip().lower()
+            answer = ask(tr("Run it? [y/N] ")).strip().lower()
         except EOFError:
             answer = ""
-        if answer not in ("s", "sim", "y", "yes"):
-            print("  pulado\n")
+        if answer not in ("y", "yes", "s", "sim"):
+            print("  " + tr("skipped") + "\n")
             continue
         for cmd in cmds:
             if subprocess.run(cmd, shell=True).returncode != 0:  # noqa: S602 - comandos fixos, ver acima
-                print(f"  falhou: {cmd}\n")
+                print("  " + tr("failed: {command}").format(command=cmd) + "\n")
                 break
         else:
-            print("  feito\n")
+            print("  " + tr("done") + "\n")
     import importlib
     importlib.invalidate_caches()  # o gi recém-instalado aparece no import
-    print("Conferindo de novo:\n")
+    print(tr("Checking again:") + "\n")
     return main(port, version)
 
 
 def main(port: int = 5123, version: str = "") -> int:
     items = run_checks(port)
-    head = f"PSPStream {version}: conferindo esta máquina\n" if version else "PSPStream: conferindo esta máquina\n"
+    head = (tr("PSPStream {version}: checking this machine").format(version=version) if version
+            else tr("PSPStream: checking this machine")) + "\n"
     print(head + "\n" + report(items, color=sys.stdout.isatty()))
-    return 1 if any(i.essential and i.state == "falta" for i in items) else 0
+    return 1 if any(i.essential and i.state == "missing" for i in items) else 0
 
 
 if __name__ == "__main__":

@@ -15,19 +15,19 @@
  *     número desenhado em 8 blocos (branco = bit 1); lendo os blocos no frame
  *     que saiu, sabemos qual foi. Frames segurados = latência a mais no stream.
  *
- * O resultado aparece na tela e vai para resultado_h264.txt na pasta do EBOOT.
+ * O resultado aparece na tela e vai para result_h264.txt na pasta do EBOOT.
  *
  * v4: o stream com frames P (openh264, frame + 2 cópias) desligou o PSP, e o
  * mesmo esquema com x264 tinha funcionado na v2. Cada diferença entre os dois
  * vira um passo, do mais seguro para o mais arriscado. Antes de cada passo o
- * relatório é gravado com "iniciando", e passo_atual.txt guarda qual é: se o
- * PSP desligar, na próxima vez o passo vai para travou_h264.txt e é pulado,
+ * relatório é gravado com "starting", e current_step.txt guarda qual é: se o
+ * PSP desligar, na próxima vez o passo vai para crashed_h264.txt e é pulado,
  * e os outros rodam.
  *
  * v4.1: os 6 passos rodaram no PSP-3000 sem desligar (60 frames cada). O
  * passo 7 roda 12000 frames sem IDR: frame_num e POC do openh264 dão a volta
  * no AU 32768 (frame ~10900), o que o stream faria em ~3 min. O progresso vai
- * para progresso_h264.txt a cada 500 frames.
+ * para progress_h264.txt a cada 500 frames.
  *
  * v4.2: na v4.1 o passo 7 passou (a volta dos contadores não importa) e o 8
  * DESLIGOU o PSP: um IDR no meio de uma sequência de P, sem Stop. Os passos
@@ -299,7 +299,7 @@ static int run(const clip_t *cl, const pass_t *ps, uint8_t *stage, u32 *ram_fb)
     const char *step = "";
     int r = avc_open(&a, &step);
     if (r != 0) {
-        say("%s: falhou em %s (%08x)", ps->label, step, r);
+        say("%s: failed at %s (%08x)", ps->label, step, r);
         avc_close(&a);
         write_report(g_argv0);
         return -1;
@@ -429,32 +429,32 @@ static int run(const clip_t *cl, const pass_t *ps, uint8_t *stage, u32 *ram_fb)
             memcpy(VRAM_UNCACHED, out, FB_SIZE); /* mostra o progresso */
         if (cl->frames > 1000 && shown % 500 == 0) { /* clipe longo: onde estava, se desligar */
             char line[96];
-            snprintf(line, sizeof(line), "%s: frame %d de %d, AU %d, %d erros\r\n", ps->label, shown,
+            snprintf(line, sizeof(line), "%s: frame %d of %d, AU %d, %d errors\r\n", ps->label, shown,
                      cl->frames / ps->group, i + 1, errors);
-            write_small("progresso_h264.txt", line, 0);
+            write_small("progress_h264.txt", line, 0);
         }
     }
-    say("%s: %d/%d chamadas ok, %.1f KB por frame", ps->label, ok, calls, bytes / 1024.0f / (shown ? shown : 1));
+    say("%s: %d/%d calls ok, %.1f KB per frame", ps->label, ok, calls, bytes / 1024.0f / (shown ? shown : 1));
     if (errors)
-        say("  erro %08x no AU %d (%d erros)", first_err, first_err_at, errors);
+        say("  error %08x at AU %d (%d errors)", first_err, first_err_at, errors);
     if (no_picture)
-        say("  %d chamadas sem imagem (status 0)", no_picture);
+        say("  %d calls without an image (status 0)", no_picture);
     if (shown > 1)
-        say("  por frame mostrado %.2f ms (min %.2f, max %.2f)", t_sum / 1000.0f / (shown - 1), t_min / 1000.0f,
+        say("  per frame shown %.2f ms (min %.2f, max %.2f)", t_sum / 1000.0f / (shown - 1), t_min / 1000.0f,
             t_max / 1000.0f);
     if (extra_n)
-        say("  chamadas extras: %.2f ms cada (%d)", extra_sum / 1000.0f / extra_n, extra_n);
+        say("  extra calls: %.2f ms each (%d)", extra_sum / 1000.0f / extra_n, extra_n);
     if (ps->mode == MODE_STOP)
-        say("  Stop soltou %d imagens", stop_imgs);
+        say("  Stop released %d images", stop_imgs);
     if (idr_stops)
-        say("  Stop antes do IDR: %d, %.2f ms cada, soltou %d imagens", idr_stops,
+        say("  Stop before IDR: %d, %.2f ms each, released %d images", idr_stops,
             idr_stop_t / 1000.0f / idr_stops, idr_stop_imgs);
     if (readable)
-        say("  frames de atraso: %d a %d (1o legivel no frame %d)", delay_min, delay_max, held_first);
+        say("  frames of delay: %d to %d (1st readable at frame %d)", delay_min, delay_max, held_first);
     else
-        say("  nenhum frame legivel saiu (%d ilegiveis)", unreadable);
+        say("  no readable frame came out (%d unreadable)", unreadable);
     if (unreadable && readable)
-        say("  %d frames ilegiveis", unreadable);
+        say("  %d unreadable frames", unreadable);
     avc_close(&a);
     write_report(g_argv0); /* a cada passo: se o próximo travar o PSP, este fica gravado */
     return ok;
@@ -474,11 +474,11 @@ static int app_file(char *path, int size, const char *name)
 static void write_report(const char *argv0)
 {
     char path[256];
-    if (!app_file(path, sizeof(path), "resultado_h264.txt"))
+    if (!app_file(path, sizeof(path), "result_h264.txt"))
         return;
     SceUID fd = sceIoOpen(path, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
     if (fd < 0) {
-        pspDebugScreenPrintf("nao consegui gravar %s (%08x)\n", path, fd);
+        pspDebugScreenPrintf("could not write %s (%08x)\n", path, fd);
         return;
     }
     for (int i = 0; i < nlines; i++) {
@@ -525,17 +525,17 @@ static void remove_small(const char *name)
         sceIoRemove(path);
 }
 
-/* passo_atual.txt sobrou = o PSP desligou durante aquele passo. */
+/* current_step.txt sobrou = o PSP desligou durante aquele passo. */
 static void load_crashed(void)
 {
     char buf[128];
-    if (read_small("passo_atual.txt", buf, sizeof(buf)) > 0) {
+    if (read_small("current_step.txt", buf, sizeof(buf)) > 0) {
         char line[16];
         snprintf(line, sizeof(line), "%d\n", atoi(buf));
-        write_small("travou_h264.txt", line, 1);
-        remove_small("passo_atual.txt");
+        write_small("crashed_h264.txt", line, 1);
+        remove_small("current_step.txt");
     }
-    if (read_small("travou_h264.txt", buf, sizeof(buf)) > 0)
+    if (read_small("crashed_h264.txt", buf, sizeof(buf)) > 0)
         for (char *p = buf; *p;) {
             int k = atoi(p);
             if (k >= 1 && k <= MAX_PASSES)
@@ -574,18 +574,18 @@ int main(int argc, char *argv[])
     pspDebugScreenInitEx(VRAM, PSP_DISPLAY_PIXEL_FORMAT_8888, 1);
 
     g_argv0 = argc > 0 ? argv[0] : "";
-    say("PSPStream - teste do decoder H.264 (v4.2)");
+    say("PSPStream - H.264 decoder test (v4.2)");
     load_crashed();
     /* Como os jogos fazem nos firmwares novos (0x300 = codecs do ME, 0x303 =
      * mpeg.prx); o sceUtilityLoadAvModule antigo fica de reserva. 0x80020139 =
      * já carregado. */
     int m1 = sceUtilityLoadModule(PSP_MODULE_AV_AVCODEC);
     int m2 = sceUtilityLoadModule(PSP_MODULE_AV_MPEGBASE);
-    say("modulos: avcodec %08x, mpegbase %08x", m1, m2);
+    say("modules: avcodec %08x, mpegbase %08x", m1, m2);
     if ((m1 < 0 && m1 != (int)0x80020139) || (m2 < 0 && m2 != (int)0x80020139)) {
         m1 = sceUtilityLoadAvModule(PSP_AV_MODULE_AVCODEC);
         m2 = sceUtilityLoadAvModule(PSP_AV_MODULE_MPEGBASE);
-        say("modulos (metodo antigo): avcodec %08x, mpegbase %08x", m1, m2);
+        say("modules (old method): avcodec %08x, mpegbase %08x", m1, m2);
     }
     write_report(g_argv0);
 
@@ -594,7 +594,7 @@ int main(int argc, char *argv[])
     uint8_t *stage = memalign(64, MAX_AU);
     u32 *ram_fb = memalign(64, FB_SIZE);
     if (!n || !stage || !ram_fb) {
-        say("clipes ou memoria indisponiveis (%d clipes)", n);
+        say("clips or memory unavailable (%d clips)", n);
     } else {
         sceKernelDelayThread(500 * 1000);
         pspDebugScreenClear();
@@ -603,51 +603,51 @@ int main(int argc, char *argv[])
          * (é o --codec h264). v4: o --codec h264p (openh264 + 2 cópias)
          * desligou o PSP; os passos separam as diferenças para o x264 da v2:
          * nível 4.1, e o stream do openh264 (POC tipo 0, frame_num de 15 bits). */
-#define OK41 "ok na v4.1"
+#define OK41 "ok in v4.1"
         static const pass_t passes[] = {
-            {"1 x264 + 2 copias, nivel 3.0 (v2)", MODE_GROUP, 3, 0, -1, 0, 0, OK41},
-            {"2 x264 + 2 copias, nivel 4.1", MODE_GROUP, 3, 0, -1, 0, 0, OK41},
+            {"1 x264 + 2 copies, level 3.0 (v2)", MODE_GROUP, 3, 0, -1, 0, 0, OK41},
+            {"2 x264 + 2 copies, level 4.1", MODE_GROUP, 3, 0, -1, 0, 0, OK41},
             {"3 openh264 IDR + Stop (h264)", MODE_STOP, 1, 1, -1, 0, 0, OK41},
-            {"4 openh264 P, 1 chamada, nivel 3.0", MODE_PLAIN, 1, 1, -1, 0, 0, OK41},
-            {"5 openh264 P + 2 copias, nivel 3.0", MODE_GROUP, 3, 1, -1, 0, 0, OK41},
-            {"6 openh264 P + 2 copias, nivel 4.1", MODE_GROUP, 3, 1, -1, 0, 0, OK41},
-            {"7 openh264 + 2 copias, 12000 frames", MODE_GROUP, 3, 1, -1, 0, 0, OK41},
+            {"4 openh264 P, 1 call, level 3.0", MODE_PLAIN, 1, 1, -1, 0, 0, OK41},
+            {"5 openh264 P + 2 copies, level 3.0", MODE_GROUP, 3, 1, -1, 0, 0, OK41},
+            {"6 openh264 P + 2 copies, level 4.1", MODE_GROUP, 3, 1, -1, 0, 0, OK41},
+            {"7 openh264 + 2 copies, 12000 frames", MODE_GROUP, 3, 1, -1, 0, 0, OK41},
             /* frames 20-29 (AUs 60-89) não entram; o IDR do frame 30 entra sem Stop */
-            {"8 openh264 + 2 copias, perde 10, IDR", MODE_GROUP, 3, 1, 60, 90, 0, "DESLIGOU o PSP na v4.1"},
+            {"8 openh264 + 2 copies, loses 10, IDR", MODE_GROUP, 3, 1, 60, 90, 0, "POWERED OFF the PSP in v4.1"},
             /* oh_idr10: IDR nos frames 0, 10, 20... (AUs 0, 30, 60...) */
-            {"9 IDR a cada 10, Stop antes", MODE_GROUP, 3, 1, -1, 0, 1, NULL},
+            {"9 IDR every 10, Stop before", MODE_GROUP, 3, 1, -1, 0, 1, NULL},
             /* frames 15-19 (AUs 45-59) não entram; Stop e o IDR do frame 20 */
-            {"10 perde 5, Stop, IDR", MODE_GROUP, 3, 1, 45, 60, 1, NULL},
+            {"10 loses 5, Stop, IDR", MODE_GROUP, 3, 1, 45, 60, 1, NULL},
         };
         static const int clip_of[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 8};
         for (int k = 0; k < 4; k++)
             g_stop_bufs[k] = memalign(64, FB_SIZE);
-        _Static_assert(sizeof(passes) / sizeof(passes[0]) == sizeof(clip_of) / sizeof(clip_of[0]), "um clipe por passo");
+        _Static_assert(sizeof(passes) / sizeof(passes[0]) == sizeof(clip_of) / sizeof(clip_of[0]), "one clip per step");
         _Static_assert(sizeof(passes) / sizeof(passes[0]) <= MAX_PASSES, "MAX_PASSES");
         for (unsigned p = 0; p < sizeof(passes) / sizeof(passes[0]); p++) {
             if (passes[p].done) {
-                say("%s: %s (nao roda)", passes[p].label, passes[p].done);
+                say("%s: %s (not run)", passes[p].label, passes[p].done);
                 continue;
             }
             if (crashed[p]) {
-                say("%s: DESLIGOU O PSP antes (pulado)", passes[p].label);
+                say("%s: POWERED OFF THE PSP before (skipped)", passes[p].label);
                 write_report(g_argv0);
                 continue;
             }
             if (clip_of[p] >= n || (passes[p].mode == MODE_STOP && !g_stop_bufs[3])) {
-                say("%s: clipe ou memoria indisponivel", passes[p].label);
+                say("%s: clip or memory unavailable", passes[p].label);
                 continue;
             }
             /* gravado antes: se o PSP desligar aqui, a próxima rodada sabe onde */
             char num[16];
             snprintf(num, sizeof(num), "%u\n", p + 1);
-            write_small("passo_atual.txt", num, 0);
-            say("iniciando: %s", passes[p].label);
+            write_small("current_step.txt", num, 0);
+            say("starting: %s", passes[p].label);
             write_report(g_argv0);
-            if (nlines > 0 && !strncmp(report[nlines - 1], "iniciando", 9))
-                nlines--; /* a linha "iniciando" sai do relatório quando o passo termina */
+            if (nlines > 0 && !strncmp(report[nlines - 1], "starting", 8))
+                nlines--; /* a linha "starting" sai do relatório quando o passo termina */
             run(&cl[clip_of[p]], &passes[p], stage, ram_fb);
-            remove_small("passo_atual.txt");
+            remove_small("current_step.txt");
         }
     }
 
@@ -659,7 +659,7 @@ int main(int argc, char *argv[])
     for (int i = 0; i < nlines; i++)
         pspDebugScreenPrintf("%s\n", report[i]);
     write_report(g_argv0);
-    pspDebugScreenPrintf("\nGravado em resultado_h264.txt. X ou O para sair.\n");
+    pspDebugScreenPrintf("\nWritten to result_h264.txt. X or O to quit.\n");
 
     SceCtrlData pad;
     unsigned t0 = now_us();

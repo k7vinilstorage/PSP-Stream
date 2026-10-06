@@ -22,12 +22,12 @@ OVERHEAD = 16 + 40 * 1.0 / 1460  # cabeçalho do frame + TCP/IP por segmento (ap
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--group", nargs="+", action="append", metavar=("NOME", "IMAGEM"), required=True,
-                   help="nome do grupo seguido das imagens")
+    p.add_argument("--group", nargs="+", action="append", metavar=("NAME", "IMAGE"), required=True,
+                   help="group name followed by the images")
     p.add_argument("--qualities", default="30,40,50,60,70,80,90")
     p.add_argument("--size", default="480x272")
     p.add_argument("--scale", default="bilinear")
-    p.add_argument("--kbps", default="300,400,500", help="vazões (KB/s) para a projeção de FPS")
+    p.add_argument("--kbps", default="300,400,500", help="throughputs (KB/s) for the FPS projection")
     args = p.parse_args(argv)
 
     w, h = (int(v) for v in args.size.split("x"))
@@ -35,9 +35,9 @@ def main(argv=None):
     rates = [float(r) for r in args.kbps.split(",")]
 
     for name, *images in args.group:
-        print(f"\n### {name} ({len(images)} imagens, {w}x{h}, {args.scale})\n")
-        header = "| qualidade | KB/frame (mediana) | min - max | " + " | ".join(
-            f"FPS teto @ {r:.0f} KB/s" for r in rates) + " | encode (ms) |"
+        print(f"\n### {name} ({len(images)} images, {w}x{h}, {args.scale})\n")
+        header = "| quality | KB/frame (median) | min - max | " + " | ".join(
+            f"FPS ceiling @ {r:.0f} KB/s" for r in rates) + " | encode (ms) |"
         print(header)
         print("|" + "---|" * (header.count("|") - 1))
         for q in qualities:
@@ -52,8 +52,8 @@ def main(argv=None):
             fps = " | ".join(f"{r * 1024 / per_frame:5.1f}" for r in rates)
             print(f"| {q} | {med / 1024:5.1f} | {min(sizes) / 1024:.1f} - {max(sizes) / 1024:.1f} | {fps} | "
                   f"{statistics.median(times):.1f}* |")
-        print("\n\\* inclui abrir e decodificar a imagem de origem; no servidor ao vivo o encode "
-              "em 480x272 custa ~1 ms.")
+        print("\n\\* includes opening and decoding the source image; on the live server the encode "
+              "at 480x272 costs ~1 ms.")
     return 0
 
 

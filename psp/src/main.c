@@ -29,6 +29,7 @@
 #include "config.h"
 #include "decode.h"
 #include "display.h"
+#include "lang.h"
 #include "menu.h"
 #include "net.h"
 #include "protocol.h"
@@ -79,7 +80,7 @@ static void status(const char *msg)
 
 static void wait_exit(void)
 {
-    display_console("Aperte HOME para sair.");
+    display_console("%s", T("Press HOME to quit.", "Aperte HOME para sair."));
     while (g_running)
         sceKernelDelayThread(100 * 1000);
     sceKernelExitGame();
@@ -139,7 +140,7 @@ static void stats_add(stats_t *s, const ps_frame_t *f, unsigned dec_us, unsigned
         s->dec_ms = s->dec_us / n / 1000.0f;
         s->net_ms = s->net_us / n / 1000.0f;
         s->local_ms = s->local_us / n / 1000.0f;
-        printf("%.1f fps %.1f KB %.0f KB/s dec %.1f ms (%s) rede %.1f ms local %.1f ms drop %u\n", s->fps, s->kb,
+        printf("%.1f fps %.1f KB %.0f KB/s dec %.1f ms (%s) net %.1f ms local %.1f ms drop %u\n", s->fps, s->kb,
                s->kbps, s->dec_ms, decoder_name(), s->net_ms, s->local_ms, stream_dropped());
         s->t0 = now;
         s->frames = 0;
@@ -254,7 +255,7 @@ static void apply_menu(ui_t *ui, unsigned seen[ACT_COUNT])
             case ACT_DECODER: {
                 int k = decoder_select(decoder_kind() == DEC_HW ? DEC_SW : DEC_HW);
                 snprintf(msg, sizeof(msg), "decoder: %s%s", decoder_name(),
-                         k == DEC_SW && decoder_error()[0] ? " (hw falhou)" : "");
+                         k == DEC_SW && decoder_error()[0] ? T(" (hw failed)", " (hw falhou)") : "");
                 toast(ui, msg);
                 break;
             }
@@ -267,15 +268,16 @@ static void apply_menu(ui_t *ui, unsigned seen[ACT_COUNT])
                 ui->prefetch = ui->prefetch == PREFETCH_AUTO ? 1 : ui->prefetch ? 0 : PREFETCH_AUTO;
                 stream_set_prefetch(ui->prefetch);
                 snprintf(msg, sizeof(msg), "prefetch: %s",
-                         ui->prefetch == PREFETCH_AUTO ? "auto" : ui->prefetch ? "sim (antecipado)" : "nao (depois de exibir)");
+                         ui->prefetch == PREFETCH_AUTO ? "auto" : ui->prefetch ? T("yes (early)", "sim (antecipado)")
+                                                                                : T("no (after showing)", "nao (depois de exibir)"));
                 toast(ui, msg);
                 break;
             case ACT_AUDIO:
                 ui->audio = !ui->audio;
                 audio_set_enabled(ui->audio);
                 stream_set_audio(ui->audio); /* sem o pedido de som, o PC para de mandar */
-                snprintf(msg, sizeof(msg), "som: %s%s", ui->audio ? "ligado" : "desligado",
-                         ui->audio && !ui->udp ? " (so no UDP)" : "");
+                snprintf(msg, sizeof(msg), T("audio: %s%s", "som: %s%s"), ui->audio ? T("on", "ligado") : T("off", "desligado"),
+                         ui->audio && !ui->udp ? T(" (UDP only)", " (so no UDP)") : "");
                 toast(ui, msg);
                 break;
             case ACT_TRANSPORT:
@@ -293,35 +295,40 @@ static void draw_overlay(const ui_t *ui, const stats_t *s)
 {
     if (ui->overlay) {
         display_text(0, 0, 0xFF00FF00, "%4.1f fps %5.1f KB %4.0f KB/s", s->fps, s->kb, s->kbps);
-        display_text(0, 1, 0xFF00FF00, "dec %4.1f ms (%s) rede %4.1f ms %s drop %u", s->dec_ms, decoder_name(),
+        display_text(0, 1, 0xFF00FF00, T("dec %4.1f ms (%s) net %4.1f ms %s drop %u", "dec %4.1f ms (%s) rede %4.1f ms %s drop %u"),
+                     s->dec_ms, decoder_name(),
                      s->net_ms, ui->udp ? "udp" : "tcp", stream_dropped());
         if (ui->udp) {
             unsigned sel, poll, live, live_min;
             int polling;
             stream_ping(&sel, &poll, &polling, &live, &live_min);
-            display_text(0, 2, 0xFF00FF00, "perdidos %u nack %u repet %u idr %u ping %.1f ms (min %.1f, ini %.1f %s)",
+            display_text(0, 2, 0xFF00FF00, T("lost %u nack %u rep %u idr %u ping %.1f ms (min %.1f, ini %.1f %s)",
+                                             "perdidos %u nack %u repet %u idr %u ping %.1f ms (min %.1f, ini %.1f %s)"),
                          stream_lost(), stream_nacks(), stream_retries(), stream_idr_requests(), live / 1000.0f,
                          live_min / 1000.0f, (polling ? poll : sel) / 1000.0f, polling ? "poll" : "sel");
             unsigned early = stream_early();
             if (!stream_prefetch_on())
-                display_text(0, 3, 0xFF00FF00, "pede o proximo depois de exibir (sem prefetch)");
+                display_text(0, 3, 0xFF00FF00, "%s", T("asks for the next after showing (no prefetch)", "pede o proximo depois de exibir (sem prefetch)"));
             else if (stream_p_mode() && ui->prefetch == PREFETCH_AUTO)
-                display_text(0, 3, 0xFF00FF00, "pede ate 2 frames a frente quando o decode comeca (auto)");
+                display_text(0, 3, 0xFF00FF00, "%s", T("asks up to 2 frames ahead when decoding starts (auto)",
+                                                         "pede ate 2 frames a frente quando o decode comeca (auto)"));
             else if (early)
-                display_text(0, 3, 0xFF00FF00, "pede o proximo faltando %.1f KB%s", early / 1024.0f,
+                display_text(0, 3, 0xFF00FF00, T("asks for the next with %.1f KB left%s", "pede o proximo faltando %.1f KB%s"), early / 1024.0f,
                              ui->early_auto ? " (auto)" : "");
             else
-                display_text(0, 3, 0xFF00FF00, "pede o proximo no fim do frame");
+                display_text(0, 3, 0xFF00FF00, "%s", T("asks for the next at the end of the frame", "pede o proximo no fim do frame"));
             audio_stats_t a;
             audio_get_stats(&a);
             if (!ui->audio)
-                display_text(0, 4, 0xFF00FF00, "som desligado (SELECT+START+cima)");
+                display_text(0, 4, 0xFF00FF00, "%s", T("audio off (SELECT+START+up)", "som desligado (SELECT+START+cima)"));
             else if (a.error < 0)
-                display_text(0, 4, 0xFF00FF00, "som: erro no canal de audio 0x%08X", a.error);
+                display_text(0, 4, 0xFF00FF00, T("audio: audio channel error 0x%08X", "som: erro no canal de audio 0x%08X"), a.error);
             else if (!a.rate)
-                display_text(0, 4, 0xFF00FF00, "som: esperando o PC (servidor sem --no-audio?)");
+                display_text(0, 4, 0xFF00FF00, "%s", T("audio: waiting for the PC (server without --no-audio?)",
+                                                         "som: esperando o PC (servidor sem --no-audio?)"));
             else
-                display_text(0, 4, 0xFF00FF00, "som %.1f kHz buf %d ms (alvo %d) perdidos %u vazio %u pulos %u",
+                display_text(0, 4, 0xFF00FF00, T("audio %.1f kHz buf %d ms (target %d) lost %u empty %u skips %u",
+                                             "som %.1f kHz buf %d ms (alvo %d) perdidos %u vazio %u pulos %u"),
                              a.rate / 1000.0f, a.buffered_ms, a.target_ms, a.lost, a.underruns, a.skips);
         }
     }
@@ -334,7 +341,8 @@ static void draw_overlay(const ui_t *ui, const stats_t *s)
 static void decode_bench(const ps_frame_t *f)
 {
     if (decoder_is_h264(f->data, f->size)) { /* hw x sw só existe para JPEG */
-        display_console("Benchmark de decode: so para JPEG (o servidor esta em H.264).");
+        display_console("%s", T("Decode benchmark: JPEG only (the server is on H.264).",
+                                "Benchmark de decode: so para JPEG (o servidor esta em H.264)."));
         sceKernelDelayThread(2 * 1000 * 1000);
         return;
     }
@@ -344,7 +352,7 @@ static void decode_bench(const ps_frame_t *f)
     char line[2][64];
     for (int k = 0; k < 2; k++) {
         if (decoder_select(kinds[k]) != kinds[k]) {
-            snprintf(line[k], sizeof(line[k]), "%s: indisponivel (%s)", kinds[k] == DEC_HW ? "hw" : "sw",
+            snprintf(line[k], sizeof(line[k]), T("%s: unavailable (%s)", "%s: indisponivel (%s)"), kinds[k] == DEC_HW ? "hw" : "sw",
                      decoder_error());
             continue;
         }
@@ -355,13 +363,13 @@ static void decode_bench(const ps_frame_t *f)
             fails += decoder_decode(f->data, f->size, display_back(), &w, &h) < 0;
         unsigned dt = now_us() - t0;
         snprintf(line[k], sizeof(line[k]), "%-6s %5.2f ms/frame (%dx%d, %.1f KB)%s", decoder_name(),
-                 dt / 1000.0f / runs, w, h, f->size / 1024.0f, fails ? " COM ERROS" : "");
+                 dt / 1000.0f / runs, w, h, f->size / 1024.0f, fails ? T(" WITH ERRORS", " COM ERROS") : "");
     }
     decoder_select(original);
-    display_console("Benchmark de decode (%d execucoes):", runs);
+    display_console(T("Decode benchmark (%d runs):", "Benchmark de decode (%d execucoes):"), runs);
     display_console("  %s", line[0]);
     display_console("  %s", line[1]);
-    display_console("O stream continua em 5 s...");
+    display_console("%s", T("The stream goes on in 5 s...", "O stream continua em 5 s..."));
     sceKernelDelayThread(5 * 1000 * 1000);
 }
 
@@ -379,7 +387,7 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
         audio_start(ui->audio);
     int early = cfg->early_kb < 0 ? STREAM_EARLY_AUTO : cfg->early_kb * 1024;
     if (stream_start(sock, ui->udp, dest, ui->prefetch, early, cfg->rxwait, &g_running) < 0) {
-        status("Erro ao iniciar a thread de rede");
+        status(T("Could not start the network thread", "Erro ao iniciar a thread de rede"));
         audio_stop();
         return -1;
     }
@@ -422,9 +430,11 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
                 break;
             /* No UDP não há "conexão": avisa se o PC não responde. */
             if (ui->udp && !stream_completed() && now_us() - t_start > 3 * 1000 * 1000 && !waiting_msg) {
-                status("Sem resposta do PC via UDP. Servidor rodando?");
-                status("Firewall do PC liberado? Rode no PC: pspstream.py --check");
-                status("SELECT + START + R: tela de configuracao (IP, procurar o PC)");
+                status(T("No answer from the PC over UDP. Server running?", "Sem resposta do PC via UDP. Servidor rodando?"));
+                status(T("PC firewall open? Run on the PC: pspstream --check",
+                         "Firewall do PC liberado? Rode no PC: pspstream --check"));
+                status(T("SELECT + START + R: settings screen (IP, find the PC)",
+                         "SELECT + START + R: tela de configuracao (IP, procurar o PC)"));
                 waiting_msg = 1;
             }
             continue;
@@ -514,24 +524,25 @@ static int wifi_ensure(int profile)
     if (wifi_profile_up == profile && net_ap_connected())
         return 0;
     if (wifi_profile_up) { /* caiu, ou o perfil mudou na configuração */
-        display_console("Desconectando do Wi-Fi (perfil %d)...", wifi_profile_up);
+        display_console(T("Disconnecting from Wi-Fi (profile %d)...", "Desconectando do Wi-Fi (perfil %d)..."), wifi_profile_up);
         sceNetApctlDisconnect();
         wifi_profile_up = 0;
     }
-    display_console("Conectando ao Wi-Fi (perfil %d)...", profile);
+    display_console(T("Connecting to Wi-Fi (profile %d)...", "Conectando ao Wi-Fi (perfil %d)..."), profile);
     char ip[32];
     int r = net_connect_ap(profile, ip, sizeof(ip), status, &g_running);
     if (r < 0)
         return r;
     wifi_profile_up = profile;
-    display_console("IP do PSP: %s", ip);
+    display_console(T("PSP IP: %s", "IP do PSP: %s"), ip);
     net_ap_info_t ap;
     net_ap_info(&ap);
-    display_console("Sinal %d%%, canal %d", ap.strength, ap.channel);
+    display_console(T("Signal %d%%, channel %d", "Sinal %d%%, canal %d"), ap.strength, ap.channel);
     if (ap.power_save == 1) {
-        status("AVISO: 'Economia de energia WLAN' esta LIGADA.");
-        status("  Ela desliga o radio entre beacons e aumenta muito a latencia.");
-        status("  Desligue em Ajustes > Ajustes de economia de energia.");
+        status(T("WARNING: 'WLAN Power Save' is ON.", "AVISO: 'Economia de energia WLAN' esta LIGADA."));
+        status(T("  It turns the radio off between beacons: much more latency.",
+                 "  Ela desliga o radio entre beacons e aumenta muito a latencia."));
+        status(T("  Turn it off in Settings > Power Save Settings.", "  Desligue em Ajustes > Ajustes de economia de energia."));
     }
     return 0;
 }
@@ -541,17 +552,18 @@ static int menu_discover(ps_config_t *cfg, char *msg, int len)
     display_console_clear();
     int r = wifi_ensure(cfg->wifi_profile);
     if (r < 0) {
-        snprintf(msg, len, "Falha no Wi-Fi (perfil %d): 0x%08X", cfg->wifi_profile, r);
+        snprintf(msg, len, T("Wi-Fi failed (profile %d): 0x%08X", "Falha no Wi-Fi (perfil %d): 0x%08X"), cfg->wifi_profile, r);
         return -1;
     }
-    display_console("Procurando o servidor na porta %d...", cfg->port);
+    display_console(T("Looking for the server on port %d...", "Procurando o servidor na porta %d..."), cfg->port);
     char found[32];
     if (net_discover(cfg->port, found, sizeof(found), 2 * 1000 * 1000) < 0) {
-        snprintf(msg, len, "Ninguem respondeu na porta %d. Servidor rodando? Firewall?", cfg->port);
+        snprintf(msg, len, T("Nobody answered on port %d. Server running? Firewall?", "Ninguem respondeu na porta %d. Servidor rodando? Firewall?"),
+                 cfg->port);
         return -1;
     }
     snprintf(cfg->host, sizeof(cfg->host), "%s", found);
-    snprintf(msg, len, "PC achado: %s (START salva e conecta)", found);
+    snprintf(msg, len, T("PC found: %s (START saves and connects)", "PC achado: %s (START salva e conecta)"), found);
     return 0;
 }
 
@@ -601,7 +613,7 @@ int main(int argc, char *argv[])
 
     int r;
     if ((r = net_init()) < 0) {
-        display_console("Erro ao iniciar a rede: 0x%08X", r);
+        display_console(T("Could not start the network: 0x%08X", "Erro ao iniciar a rede: 0x%08X"), r);
         wait_exit();
     }
 
@@ -631,34 +643,36 @@ int main(int argc, char *argv[])
         }
         if (!decoder_ready) {
             if (decoder_init(cfg.decoder) < 0) {
-                display_console("Decoder falhou: %s", decoder_error());
+                display_console(T("Decoder failed: %s", "Decoder falhou: %s"), decoder_error());
                 wait_exit();
             }
             if (cfg.decoder != DEC_SW && decoder_kind() != DEC_HW)
-                display_console("sceJpeg indisponivel (%s), usando software", decoder_error());
+                display_console(T("sceJpeg unavailable (%s), using software", "sceJpeg indisponivel (%s), usando software"), decoder_error());
             decoder_ready = 1;
         }
         if ((r = wifi_ensure(cfg.wifi_profile)) < 0) {
-            display_console("Falha no Wi-Fi: 0x%08X", r);
-            status("O perfil existe? A chave WLAN esta ligada?");
-            status("START: tela de configuracao (ou espere: tenta de novo em 3 s)");
+            display_console(T("Wi-Fi failed: 0x%08X", "Falha no Wi-Fi: 0x%08X"), r);
+            status(T("Does the profile exist? Is the WLAN switch on?", "O perfil existe? A chave WLAN esta ligada?"));
+            status(T("START: settings screen (or wait: retries in 3 s)",
+                     "START: tela de configuracao (ou espere: tenta de novo em 3 s)"));
             if (wait_or_menu(3 * 1000 * 1000))
                 need_menu = 1;
             continue;
         }
         struct sockaddr_in dest;
         int sock;
-        display_console("Servidor: %s:%d, decoder %s", cfg.host, cfg.port, decoder_name());
+        display_console(T("Server: %s:%d, decoder %s", "Servidor: %s:%d, decoder %s"), cfg.host, cfg.port, decoder_name());
         if (ui.udp) {
-            display_console("Conectando ao PC %s:%d via UDP...", cfg.host, cfg.port);
+            display_console(T("Connecting to the PC %s:%d over UDP...", "Conectando ao PC %s:%d via UDP..."), cfg.host, cfg.port);
             sock = net_open_udp(cfg.host, cfg.port, cfg.rcvbuf_kb, &dest);
         } else {
-            display_console("Conectando ao PC %s:%d via TCP...", cfg.host, cfg.port);
+            display_console(T("Connecting to the PC %s:%d over TCP...", "Conectando ao PC %s:%d via TCP..."), cfg.host, cfg.port);
             sock = net_connect_server(cfg.host, cfg.port, cfg.rcvbuf_kb);
         }
         if (sock < 0) {
-            status("Sem conexao. Servidor rodando? Firewall liberado?");
-            status("START: tela de configuracao (ou espere: tenta de novo em 2 s)");
+            status(T("No connection. Server running? Firewall open?", "Sem conexao. Servidor rodando? Firewall liberado?"));
+            status(T("START: settings screen (or wait: retries in 2 s)",
+                     "START: tela de configuracao (ou espere: tenta de novo em 2 s)"));
             if (wait_or_menu(2 * 1000 * 1000))
                 need_menu = 1;
             continue;
@@ -669,7 +683,7 @@ int main(int argc, char *argv[])
         close(sock);
         if (e == 1) {
             ui.udp = !ui.udp;
-            display_console("Trocando para %s...", ui.udp ? "UDP" : "TCP");
+            display_console(T("Switching to %s...", "Trocando para %s..."), ui.udp ? "UDP" : "TCP");
         } else if (e == 2) {
             /* a tela mostra o estado atual, inclusive o que os atalhos mudaram */
             cfg.overlay = ui.overlay;
@@ -679,7 +693,7 @@ int main(int argc, char *argv[])
             cfg.audio = ui.audio;
             need_menu = 1;
         } else if (g_running) {
-            display_console("Conexao perdida (%d). Reconectando...", e);
+            display_console(T("Connection lost (%d). Reconnecting...", "Conexao perdida (%d). Reconectando..."), e);
         }
     }
 

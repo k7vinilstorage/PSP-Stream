@@ -1,7 +1,7 @@
 """Captura KMS (--source kms): a imagem que a placa de vídeo está mostrando.
 
 No GNOME 50, a captura pelo portal fica em ~40 fps por causa do limitador do
-mutter (wiki/Medições.md). O KMS não passa pelo compositor: o auxiliar
+mutter (wiki/Measurements.md). O KMS não passa pelo compositor: o auxiliar
 tools/kms/pspstream-kms (o único com CAP_SYS_ADMIN) exporta o buffer da tela
 como DMA-BUF a cada quadro novo, e este processo, sem privilégio, reduz para
 480x272 no OpenGL (o mesmo caminho do --dmabuf).
@@ -27,6 +27,7 @@ from gi.repository import Gst, GstAllocators, GstVideo  # noqa: E402
 
 from gst_source import GstSource  # noqa: E402
 import paths  # noqa: E402
+from i18n import language, tr  # noqa: E402
 
 log = logging.getLogger("pspstream.kms")
 
@@ -49,7 +50,7 @@ class Reply:
         (magic, self.status, self.fb_id, self.width, self.height, self.fourcc, self.modifier, self.n_planes,
          *rest) = REPLY.unpack(data)
         if magic != b"PSK1":
-            raise KmsError(f"resposta inválida do auxiliar: {magic!r}")
+            raise KmsError(tr("invalid reply from the helper: {magic}").format(magic=repr(magic)))
         self.pitches = list(rest[0:4])
         self.offsets = list(rest[4:8])
         self.refresh_mhz, self.crtc_id = rest[8], rest[9]
@@ -71,12 +72,15 @@ class KmsHelper:
         path = Path(path)
         self.path = path
         if not argv_prefix and not os.access(path, os.X_OK):
-            raise KmsError(f"falta o auxiliar {path}: compile com make -C tools/kms e depois "
-                           "make -C tools/kms cap (pede a senha do sudo), ou instale o pacote do PSPStream")
+            raise KmsError(tr("the helper {path} is missing: build it with make -C tools/kms and then "
+                              "make -C tools/kms cap (asks for the sudo password), or install the PSPStream package")
+                           .format(path=path))
         ours, theirs = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
         args = [*argv_prefix, str(path), str(theirs.fileno()), "--monitor", str(monitor)]
         if card:
             args += ["--card", card]
+        if language() != "en":  # as mensagens do auxiliar (um auxiliar antigo ignora)
+            args += ["--lang", language()]
         self.proc = subprocess.Popen(args, pass_fds=(theirs.fileno(),), stdin=subprocess.DEVNULL)
         theirs.close()
         self.sock = ours
@@ -88,7 +92,7 @@ class KmsHelper:
             raise KmsError(self._explain(hello.msg, f" ({path})"))
         if hello.status != ST_HELLO:
             self.close()
-            raise KmsError(f"o auxiliar não se apresentou (status {hello.status})")
+            raise KmsError(tr("the helper did not introduce itself (status {status})").format(status=hello.status))
         self.hello = hello
 
     @staticmethod
@@ -101,13 +105,13 @@ class KmsHelper:
         try:
             data, fds, _, _ = socket.recv_fds(self.sock, REPLY.size, 4)
         except socket.timeout:
-            raise KmsError("o auxiliar não respondeu") from None
+            raise KmsError(tr("the helper did not answer")) from None
         if len(data) != REPLY.size:
             self._close_fds(fds)
             if not data:
                 code = self.proc.poll()
-                raise KmsError(f"o auxiliar saiu (código {code})")
-            raise KmsError(f"resposta de {len(data)} bytes do auxiliar (esperado {REPLY.size})")
+                raise KmsError(tr("the helper exited (code {code})").format(code=code))
+            raise KmsError(tr("{size}-byte reply from the helper (expected {expected})").format(size=len(data), expected=REPLY.size))
         return Reply(data), fds
 
     def next_frame(self, timeout_ms: int):
@@ -123,8 +127,8 @@ class KmsHelper:
     def _explain(self, msg: str, where: str = "") -> str:
         """Sem a permissão de ler a tela, o auxiliar só sabe dizer isso: aqui
         entram o arquivo e o comando certo (repositório ou pacote)."""
-        if msg.startswith("sem permissão para ler a tela"):
-            return f"sem permissão para ler a tela: {paths.kms_permission_problem(self.path)}"
+        if msg.startswith(("no permission to read the screen", "sem permiss")):  # o auxiliar antigo fala português
+            return tr("no permission to read the screen: {problem}").format(problem=paths.kms_permission_problem(self.path))
         return msg + where
 
     def close(self):
@@ -217,23 +221,23 @@ class KmsSource(GstSource):
                     reply, fds = self.helper.next_frame(self.POLL_MS)
             except (KmsError, OSError) as exc:
                 if not self._stop.is_set():
-                    self.failed = f"captura KMS: {exc}"
+                    self.failed = tr("KMS capture: {problem}").format(problem=exc)
                     log.error("%s", self.failed)
                 return
             if reply.status != ST_FRAME:
                 continue
             if reply.modifier == MOD_INVALID and "mod" not in self._warned:
                 self._warned.add("mod")
-                log.warning("KMS: o framebuffer não informa o modificador; tratando como linear")
+                log.warning(tr("KMS: the framebuffer has no modifier; treating it as linear"))
             if (reply.width, reply.height) != self._size and "size" not in self._warned:
                 self._warned.add("size")
-                log.warning("KMS: a tela mudou para %dx%d; reinicie o servidor para a proporção certa",
+                log.warning(tr("KMS: the screen changed to %dx%d; restart the server for the right aspect ratio"),
                             reply.width, reply.height)
             key = (reply.fourcc, reply.modifier, reply.width, reply.height)
             if key != self._caps:
                 self._caps = key
                 self.appsrc.set_property("caps", caps_for(reply))
-                log.info("KMS: formato %s, %dx%d, %d plano(s)", drm_format(reply.fourcc, reply.modifier),
+                log.info(tr("KMS: format %s, %dx%d, %d plane(s)"), drm_format(reply.fourcc, reply.modifier),
                          reply.width, reply.height, reply.n_planes)
             self.appsrc.emit("push-buffer", make_buffer(reply, fds, self.allocator))
 

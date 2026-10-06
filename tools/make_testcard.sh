@@ -26,4 +26,4 @@ drawtext=fontfile=$font:text='PSPStream':x=(w-tw)/2:y=150:fontsize=40:fontcolor=
 drawtext=fontfile=$font:text='480x272  4\\:2\\:0':x=(w-tw)/2:y=206:fontsize=18:fontcolor=white,\
 drawbox=x=0:y=0:w=$w:h=$h:c=white:t=2,\
 format=yuvj420p" -c:v mjpeg -q:v 3 -f image2 "$out"
-echo "gerado: $out ($(wc -c < "$out") bytes)"
+echo "generated: $out ($(wc -c < "$out") bytes)"

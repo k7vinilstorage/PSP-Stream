@@ -30,5 +30,5 @@ sleep 1
     --screenshot-save="$shot" "$game/EBOOT.PBP" || true
 
 sleep 0.5
-echo "---- servidor ----"
+echo "---- server ----"
 cat "$work/server.log"

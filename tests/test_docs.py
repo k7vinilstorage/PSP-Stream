@@ -100,8 +100,8 @@ class DocLinksTest(unittest.TestCase):
             self.check_repo_file(where, m.group(1), m.group(2))
 
     def test_repo_docs(self):
-        """README e CHANGELOG: arquivos do repositório, âncoras e páginas da wiki."""
-        for name in ("README.md", "CHANGELOG.md"):
+        """READMEs e CHANGELOG: arquivos do repositório, âncoras e páginas da wiki."""
+        for name in ("README.md", "README.pt-BR.md", "CHANGELOG.md"):
             path = ROOT / name
             for n, url in links(path):
                 where = f"{name}:{n}"
@@ -140,9 +140,10 @@ class DocLinksTest(unittest.TestCase):
             self.assertEqual(pages - linked, set(), f"páginas fora de wiki/{index}.md")
 
     def test_slug(self):
-        self.assertEqual(slug("5. Já tenho o Wolf"), "5-já-tenho-o-wolf")
-        self.assertEqual(slug("8. Configurações (`.env`)"), "8-configurações-env")
-        self.assertEqual(slug("Controle de Xbox (`--profile xbox`)"), "controle-de-xbox---profile-xbox")
+        self.assertEqual(slug("5. I already have Wolf"), "5-i-already-have-wolf")
+        self.assertEqual(slug("8. Settings (`.env`)"), "8-settings-env")
+        self.assertEqual(slug("Xbox controller (`--profile xbox`)"), "xbox-controller---profile-xbox")
+        self.assertEqual(slug("Configurações (`.env`)"), "configurações-env")  # acentos ficam na âncora
         self.assertEqual(slug("UDP"), "udp")
 
 

@@ -4,6 +4,7 @@ import statistics
 import time
 
 import protocol
+from i18n import N_, tr
 
 log = logging.getLogger("pspstream.stats")
 
@@ -12,7 +13,9 @@ log = logging.getLogger("pspstream.stats")
 # próximo frame depois de receber o atual, então uma espera no PSP também
 # aparece aqui.
 HITCH_MS = 50
-HITCH_CAUSES = ("perda", "IDR", "pedido atrasado", "captura")
+# Nomes internos (status da interface web); o texto mostrado passa por tr().
+HITCH_CAUSES = ("loss", "IDR", "late request", "capture")
+HITCH_TEXT = {"loss": N_("loss"), "IDR": "IDR", "late request": N_("late request"), "capture": N_("capture")}
 
 
 def now_ms() -> int:
@@ -111,37 +114,37 @@ class Window:
 
 
 def format_summary(s: dict) -> str:
-    source = f" (fonte {s['source_fps']:4.1f})" if s["source_fps"] is not None else ""
-    line = (
-        f"{s['fps']:5.1f} fps{source} | {s['kb_per_frame']:5.1f} KB/frame | "
-        f"Wi-Fi {s['wifi_kbps']:5.0f} KB/s | "
-        f"latência {s['latency_ms']:5.1f} ms (p95 {s['latency_p95_ms']:5.1f}) ~ "
-        f"captura {s['capture_ms']:4.1f} + idade {s['age_ms']:4.1f} + "
-        f"rede {s['transfer_ms']:5.1f} + psp {s['local_ms']:5.1f} "
-        f"| rede = 1º pedaço {s['first_ms']:4.1f} + rajada {s['burst_ms']:4.1f} ms ({s['burst_kbps']:4.0f} KB/s) "
-        f"| decode {s['decode_ms']:4.1f} ms | espera por frame novo {s['wait_ms']:4.1f} ms"
-    )
+    source = tr(" (source {fps:4.1f})").format(fps=s["source_fps"]) if s["source_fps"] is not None else ""
+    line = tr("{fps:5.1f} fps{source} | {kb:5.1f} KB/frame | Wi-Fi {wifi:5.0f} KB/s | "
+              "latency {latency:5.1f} ms (p95 {p95:5.1f}) ~ capture {capture:4.1f} + age {age:4.1f} + "
+              "network {network:5.1f} + psp {psp:5.1f} | network = 1st chunk {first:4.1f} + burst {burst:4.1f} ms "
+              "({burst_kbps:4.0f} KB/s) | decode {decode:4.1f} ms | wait for a new frame {wait:4.1f} ms").format(
+        fps=s["fps"], source=source, kb=s["kb_per_frame"], wifi=s["wifi_kbps"], latency=s["latency_ms"],
+        p95=s["latency_p95_ms"], capture=s["capture_ms"], age=s["age_ms"], network=s["transfer_ms"],
+        psp=s["local_ms"], first=s["first_ms"], burst=s["burst_ms"], burst_kbps=s["burst_kbps"],
+        decode=s["decode_ms"], wait=s["wait_ms"])
     if s["idle_ms"] is not None:
-        line += f" | tempo morto {s['idle_ms']:+5.1f} ms"
+        line += tr(" | dead time {ms:+5.1f} ms").format(ms=s["idle_ms"])
         if s["early_kb"]:
-            line += f" (antecipa {s['early_kb']:.1f} KB)"
+            line += tr(" (early by {kb:.1f} KB)").format(kb=s["early_kb"])
     if s["ping_ms"]:
-        line += f" | ping no stream {s['ping_ms']:4.1f} ms (mín {s['ping_min_ms']:4.1f})"
+        line += tr(" | in-stream ping {ms:4.1f} ms (min {min:4.1f})").format(ms=s["ping_ms"], min=s["ping_min_ms"])
     if s["quality"] is not None:
         line += f" | q {s['quality']}"
     if s["keepalive"]:
-        line += f" | {s['keepalive']} reenvios (tela parada)"
+        line += tr(" | {n} resends (still screen)").format(n=s["keepalive"])
     if s["resent_pct"]:
-        line += f" | {s['resent_pct']:.1f}% pedaços UDP reenviados"
+        line += tr(" | {pct:.1f}% UDP chunks resent").format(pct=s["resent_pct"])
     if s["lost"]:
-        line += f" | {s['lost']} frames perdidos"
+        line += tr(" | {n} frames lost").format(n=s["lost"])
     if s.get("audio_kbps"):
-        line += f" | som {s['audio_kbps']:.0f} KB/s"
+        line += tr(" | audio {kbps:.0f} KB/s").format(kbps=s["audio_kbps"])
     if s.get("idrs"):
         line += f" | {s['idrs']} IDR"
     if s.get("hitches"):
-        causes = ", ".join(f"{n} {c}" for c, n in s["hitch_causes"].items())
-        line += f" | engasgos {s['hitches']} (pior {s['hitch_max_ms']:.0f} ms: {causes})"
+        causes = ", ".join(f"{n} {tr(HITCH_TEXT.get(c, c))}" for c, n in s["hitch_causes"].items())
+        line += tr(" | hitches {n} (worst {ms:.0f} ms: {causes})").format(n=s["hitches"], ms=s["hitch_max_ms"],
+                                                                        causes=causes)
     return line
 
 
@@ -175,11 +178,11 @@ class SessionStats:
                 if idr:
                     cause = "IDR"  # o PSP perdeu a corrente (ou o encoder foi refeito)
                 elif resent != self.resent_mark:
-                    cause = "perda"  # pedaço ou frame reenviado no intervalo
+                    cause = "loss"  # pedaço ou frame reenviado no intervalo
                 elif wait_ms >= gap / 2:
-                    cause = "captura"  # o pedido esperou o PC ter frame novo
+                    cause = "capture"  # o pedido esperou o PC ter frame novo
                 else:
-                    cause = "pedido atrasado"  # o pedido demorou a chegar: Wi-Fi ou PSP
+                    cause = "late request"  # o pedido demorou a chegar: Wi-Fi ou PSP
                 for w in (self.window, self.phase):
                     w.hitches.append((gap, cause))
         # reenvio por tela parada: o intervalo seguinte não é engasgo

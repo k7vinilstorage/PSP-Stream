@@ -57,11 +57,11 @@ def main():
             except OSError:
                 time.sleep(0.2)
         if ws is None:
-            print("FALHOU: depurador do PPSSPP não respondeu")
+            print("FAILED: the PPSSPP debugger did not answer")
             return 1
         # espera o stream começar
         for _ in range(100):
-            if "PSP iniciou o stream" in log_path.read_text():
+            if "the PSP started the stream" in log_path.read_text():
                 break
             time.sleep(0.1)
         time.sleep(1.0)
@@ -88,12 +88,12 @@ def main():
     moves = [line.split("mouse ")[1].split() for line in log.splitlines() if "mouse +" in line or "mouse -" in line]
     right = sum(int(dx) for dx, dy in moves if int(dx) > 0)
     checks = {
-        "X -> KEY_SPACE pressionada": "tecla KEY_SPACE pressionada" in log,
-        "X -> KEY_SPACE solta": "tecla KEY_SPACE solta" in log,
-        f"analógico p/ direita -> mouse andou {right} px p/ direita": right > 100,
-        "analógico solto -> mouse parou": bool(moves) and log.rstrip().splitlines()[-1].find("mouse +") < 0,
+        "X -> KEY_SPACE pressed": "key KEY_SPACE pressed" in log,
+        "X -> KEY_SPACE released": "key KEY_SPACE released" in log,
+        f"analog right -> mouse moved {right} px right": right > 100,
+        "analog released -> mouse stopped": bool(moves) and log.rstrip().splitlines()[-1].find("mouse +") < 0,
     }
-    print("\n".join(f"{'ok ' if v else 'FALHOU'} {k}" for k, v in checks.items()))
+    print("\n".join(f"{'ok    ' if v else 'FAILED'} {k}" for k, v in checks.items()))
     shutil.rmtree(work, ignore_errors=True)
     return 0 if all(checks.values()) else 1
 

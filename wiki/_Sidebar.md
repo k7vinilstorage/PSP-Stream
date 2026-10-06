@@ -1,26 +1,26 @@
 **[PSPStream](Home)**
 
-**Começar**
-- [Instalação](Instalação)
-- [Guia do Ubuntu](Guia-do-Ubuntu)
-- [Uso no PSP](Uso-no-PSP)
-- [Controles](Controles)
-- [Interface web](Interface-web)
+**Getting started**
+- [Installation](Installation)
+- [Ubuntu Guide](Ubuntu-Guide)
+- [Using the PSP](Using-the-PSP)
+- [Controls](Controls)
+- [Web Interface](Web-Interface)
 - [Wolf](Wolf)
 
-**Referência**
-- [Opções do servidor](Opções-do-servidor)
-- [Solução de problemas](Solução-de-problemas)
-- [Limitações](Limitações)
+**Reference**
+- [Server Options](Server-Options)
+- [Troubleshooting](Troubleshooting)
+- [Limitations](Limitations)
 
-**Por dentro**
-- [Desempenho](Desempenho)
-- [Medições](Medições)
-- [Protocolo](Protocolo)
-- [Decisões técnicas](Decisões-técnicas)
-- [Wolf por dentro](Wolf-por-dentro)
-- [Desenvolvimento](Desenvolvimento)
-- [Servidor para Windows](Servidor-para-Windows)
+**Under the hood**
+- [Performance](Performance)
+- [Measurements](Measurements)
+- [Protocol](Protocol)
+- [Design Decisions](Design-Decisions)
+- [Wolf Internals](Wolf-Internals)
+- [Development](Development)
+- [Windows Server Plan](Windows-Server-Plan)
 
-[Repositório](https://github.com/k7vinilstorage/PSP-Stream) ·
+[Repository](https://github.com/k7vinilstorage/PSP-Stream) ·
 [Releases](https://github.com/k7vinilstorage/PSP-Stream/releases)

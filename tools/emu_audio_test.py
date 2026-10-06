@@ -67,7 +67,7 @@ def main():
             except OSError:
                 time.sleep(0.2)
         if ws is None:
-            print("FALHOU: depurador do PPSSPP não respondeu")
+            print("FAILED: the PPSSPP debugger did not answer")
             return 1
 
         def press(*seq):
@@ -79,23 +79,23 @@ def main():
             press({"select": True, "start": True}, {"select": True, "start": True, button: True},
                   {"select": False, "start": False, button: False})
 
-        opened = "som: canal aberto"
-        checks = {"o PSP pede o som ao conectar": wait_log("som: ligado no PSP"),
-                  "o PSP abre o canal de som": wait_log(opened, path=psp_path)}
-        checks["os pacotes de som saem"] = wait_log("| som ")
+        opened = "audio: channel open"
+        checks = {"the PSP asks for audio on connect": wait_log("audio: turned on on the PSP"),
+                  "the PSP opens the audio channel": wait_log(opened, path=psp_path)}
+        checks["audio packets go out"] = wait_log("| audio ")
         time.sleep(1.0)
         combo("up")
-        checks["SELECT + START + cima desliga"] = wait_log("som: desligado no PSP")
+        checks["SELECT + START + up turns it off"] = wait_log("audio: turned off on the PSP")
         time.sleep(0.5)
         combo("up")
-        checks["... e liga de novo"] = wait_log("som: ligado no PSP", count=2)
-        checks["... com o canal aberto de novo"] = wait_log(opened, count=2, path=psp_path)
+        checks["... and on again"] = wait_log("audio: turned on on the PSP", count=2)
+        checks["... with the channel open again"] = wait_log(opened, count=2, path=psp_path)
         time.sleep(1.0)
         combo("rtrigger")  # tela de configuração
         time.sleep(1.5)
         press({"circle": True}, {"circle": False})  # conectar sem salvar
-        checks["depois da configuração, o som volta"] = wait_log("som: ligado no PSP", count=3, timeout=20)
-        checks["... e o canal abre"] = wait_log(opened, count=3, timeout=10, path=psp_path)
+        checks["after the settings screen, audio comes back"] = wait_log("audio: turned on on the PSP", count=3, timeout=20)
+        checks["... and the channel opens"] = wait_log(opened, count=3, timeout=10, path=psp_path)
         checks["o canal nunca falhou"] = "falhou" not in psp_path.read_text(errors="replace")
         ws.close()
     finally:
@@ -104,10 +104,10 @@ def main():
         server.terminate()
         server.wait(timeout=10)
 
-    print("\n".join(f"{'ok ' if v else 'FALHOU'} {k}" for k, v in checks.items()))
+    print("\n".join(f"{'ok    ' if v else 'FAILED'} {k}" for k, v in checks.items()))
     if not all(checks.values()):
         print("---- PSP ----")
-        print("\n".join(line for line in psp_path.read_text(errors="replace").splitlines() if "som" in line))
+        print("\n".join(line for line in psp_path.read_text(errors="replace").splitlines() if "audio" in line))
     shutil.rmtree(work, ignore_errors=True)
     return 0 if all(checks.values()) else 1
 

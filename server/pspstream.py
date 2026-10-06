@@ -26,6 +26,8 @@ from stats import SessionStats, Window, format_summary, now_ms
 import transports
 import wolf_api
 from transports import DSCP, TcpTransport, UdpTransport, parse_datagram, set_dscp
+import i18n
+from i18n import N_, tr
 
 log = logging.getLogger("pspstream")
 
@@ -82,7 +84,7 @@ class Session:
         self.started = time.monotonic()
 
     def run(self) -> None:
-        log.info("PSP conectado via %s: %s:%d", self.transport.name.upper(), *self.transport.addr)
+        log.info(tr("PSP connected over %s: %s:%d"), self.transport.name.upper(), *self.transport.addr)
         self.transport.start(self)
         audio_listening = hasattr(self.transport, "send_audio")  # o som só vai pelo UDP
         with self.cond:
@@ -95,7 +97,7 @@ class Session:
             self._sender()
         except OSError as exc:
             if self.alive:
-                log.info("envio falhou: %s", exc)
+                log.info(tr("sending failed: %s"), exc)
         finally:
             self.close()
             with self.cond:
@@ -107,9 +109,9 @@ class Session:
             if self.injector:
                 self.injector.release_all()
             saved = getattr(self.transport, "hdr_saved", 0)
-            log.info("PSP desconectado (%d frames, %.1f MB enviados%s)",
+            log.info(tr("PSP disconnected (%d frames, %.1f MB sent%s)"),
                      self.stats.total_frames, self.stats.total_bytes / 1e6,
-                     f", {saved / 1024:.0f} KB de cabeçalho JPEG economizados" if saved else "")
+                     tr(", {kb:.0f} KB of JPEG headers saved").format(kb=saved / 1024) if saved else "")
 
     def set_source(self, source) -> None:
         """Captura nova com o PSP conectado (interface web): a numeração dos
@@ -142,14 +144,14 @@ class Session:
 
     def on_request(self, req: Request) -> None:
         if req.flags & protocol.REQ_BYE:
-            log.info("PSP saiu")
+            log.info(tr("the PSP left"))
             self.close()
             return
         if req.flags & REQ_HELLO:
             if not self.hello_seen:
-                log.info("PSP iniciou o stream")
+                log.info(tr("the PSP started the stream"))
             else:
-                log.debug("HELLO repetido (PSP achou que o stream parou)")
+                log.debug(tr("repeated HELLO (the PSP thought the stream stopped)"))
             self.hello_seen = True
         if self.injector:
             self.injector.update(req.buttons, req.lx, req.ly)
@@ -161,12 +163,12 @@ class Session:
             self.idr_wanted = True
         if self.args.codec in ("h264", "h264p") and not req.wflags & protocol.CAP_H264 and not self.h264_warned:
             self.h264_warned = True
-            log.warning("o PSP não decodifica H.264 (EBOOT anterior à v0.5, ou h264=0 no server.txt): "
-                        "atualize o EBOOT ou rode o servidor com --codec jpeg")
+            log.warning(tr("the PSP does not decode H.264 (EBOOT older than v0.5, or h264=0 in server.txt): "
+                           "update the EBOOT or run the server with --codec jpeg"))
         ping = (req.ping_select, req.ping_poll, req.wflags & protocol.WIFI_RX_POLL)
         if ping[:2] != (0, 0) and ping != self.ping:
             self.ping = ping
-            log.info("ida e volta pura PSP <-> PC (pacote pequeno, rede parada): %s",
+            log.info(tr("pure PSP <-> PC round trip (small packet, idle network): %s"),
                      format_ping(*ping))
         if req.ack_frame:
             self.stats.on_ack(req, now_ms())
@@ -193,12 +195,12 @@ class Session:
             return  # TCP: o PSP nem pede som (só vai pelo UDP)
         if not on:
             if self.audio is not None:
-                log.info("som: desligado no PSP")
+                log.info(tr("audio: turned off on the PSP"))
         elif self.audio is None:
-            log.info("som: o PSP pediu, mas o servidor está sem som (--no-audio, ou a captura não abriu)")
+            log.info(tr("audio: the PSP asked, but the server has no audio (--no-audio, or the capture did not open)"))
         else:
-            log.info("som: ligado no PSP (%d Hz, %s, ~%.0f KB/s)", self.audio.rate,
-                     "estéreo" if self.audio.channels == 2 else "mono", self.audio.kbps)
+            log.info(tr("audio: turned on on the PSP (%d Hz, %s, ~%.0f KB/s)"), self.audio.rate,
+                     tr("stereo") if self.audio.channels == 2 else "mono", self.audio.kbps)
 
     def _on_audio(self, seq, pos, rate, channels, samples, block) -> None:
         """Thread da captura de som: um bloco para o PSP, se ele quer som."""
@@ -211,11 +213,11 @@ class Session:
         self.wifi = (signal, flags)
         power_save = flags & protocol.WIFI_POWER_SAVE
         if old is None or (old[1] & protocol.WIFI_POWER_SAVE) != power_save or abs(old[0] - signal) >= 15:
-            log.info("Wi-Fi do PSP: sinal %d%%, economia de energia WLAN %s", signal,
-                     "LIGADA" if power_save else "desligada")
+            log.info(tr("PSP Wi-Fi: signal %d%%, WLAN power save ON") if power_save else
+                     tr("PSP Wi-Fi: signal %d%%, WLAN power save off"), signal)
             if power_save:
-                log.warning("a economia de energia WLAN do PSP segura os pacotes no roteador e aumenta "
-                            "muito a latência: desligue em Ajustes > Ajustes de economia de energia")
+                log.warning(tr("the PSP's WLAN power save holds the packets at the router and raises the latency a "
+                               "lot: turn it off in Settings > Power Save Settings"))
 
     def _next_frame(self, source, last_seq: int):
         """Frame de `source` mais novo que last_seq; após KEEPALIVE_S reenvia o
@@ -262,7 +264,7 @@ class Session:
             if source.raw_i420:
                 jpeg = self._encode(jpeg)
             if len(jpeg) > protocol.MAX_JPEG:
-                log.warning("frame de %d KB excede o limite de %d KB; descartado",
+                log.warning(tr("a %d KB frame exceeds the %d KB limit; dropped"),
                             len(jpeg) // 1024, protocol.MAX_JPEG // 1024)
                 last_seq = seq
                 continue
@@ -294,20 +296,20 @@ class Session:
                 # no benchmark cada fase troca a qualidade de propósito: aplica já
                 self.encoder = h264.H264PEncoder(w, h, quality, 0.0 if self.args.bench else h264.QP_CHANGE_MIN_S)
                 if self.encoder.live_qp:
-                    log.info("H.264: frames P (IDR só quando o PSP pede; a qualidade muda sem IDR)")
+                    log.info(tr("H.264: P frames (IDR only when the PSP asks; quality changes without IDR)"))
                 else:
-                    log.info("H.264: frames P (IDR só quando o PSP pede; qualidade nova no máximo a cada %.0f s)",
+                    log.info(tr("H.264: P frames (IDR only when the PSP asks; new quality at most every %.0f s)"),
                              self.encoder.qp_change_min_s)
             else:
                 self.encoder = h264.H264Encoder(w, h, quality)
-                log.warning("o EBOOT do PSP não aceita frames P (anterior à v0.9, ou h264p=0 no server.txt): "
-                            "mandando todo frame IDR")
+                log.warning(tr("the PSP's EBOOT does not take P frames (older than v0.9, or h264p=0 in server.txt): "
+                               "sending every frame as IDR"))
             self.idr_wanted = False  # encoder novo: o primeiro frame já é IDR
         self.encoder.set_quality(quality)
         if self.encoder_p and self.idr_wanted:
             self.idr_wanted = False
             if self.encoder.request_idr():
-                log.debug("IDR pedido pelo PSP")
+                log.debug(tr("IDR requested by the PSP"))
         return self.encoder.encode(i420)
 
     def _bench(self) -> None:
@@ -316,7 +318,7 @@ class Session:
         rows = []
         for q in qualities:
             self.source.set_quality(q)
-            log.info("benchmark: qualidade %d (%.0f s)", q, self.args.bench_seconds)
+            log.info(tr("benchmark: quality %d (%.0f s)"), q, self.args.bench_seconds)
             time.sleep(2)  # aquecimento: frames da qualidade anterior saem do caminho
             if not self.alive:
                 return
@@ -328,48 +330,50 @@ class Session:
             log.info("benchmark q%s: %s", q, format_summary(summary))
             rows.append(summary)
         table = [
-            "| q | KB/frame | FPS | fonte (fps) | Wi-Fi (KB/s) | latência média (ms) | p95 (ms) | rede (ms) "
-            "| 1º pedaço (ms) | ping no stream (ms) | rajada (ms) | vazão na rajada (KB/s) "
-            "| espera por frame novo (ms) | tempo morto entre frames (ms) | pedido antecipado (KB) "
-            "| decode (ms) | PSP recebido->exibido (ms) | reenvios 1 s | pedaços reenviados | frames perdidos |",
+            tr("| q | KB/frame | FPS | source (fps) | Wi-Fi (KB/s) | average latency (ms) | p95 (ms) | network (ms) "
+               "| 1st chunk (ms) | in-stream ping (ms) | burst (ms) | burst throughput (KB/s) "
+               "| wait for a new frame (ms) | dead time between frames (ms) | early request (KB) "
+               "| decode (ms) | PSP received->shown (ms) | resends 1 s | chunks resent | frames lost |"),
             "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
         ] + [
             f"| {r['quality']} | {r['kb_per_frame']:.1f} | {r['fps']:.1f} | "
             f"{'-' if r['source_fps'] is None else format(r['source_fps'], '.1f')} | "
             f"{r['wifi_kbps']:.0f} | {r['latency_ms']:.1f} | {r['latency_p95_ms']:.1f} | {r['transfer_ms']:.1f} | "
-            f"{r['first_ms']:.1f} (mín {r['first_min_ms']:.1f}, mediana {r['first_med_ms']:.1f}) | "
-            f"{r['ping_ms']:.1f} (mín {r['ping_min_ms']:.1f}) | {r['burst_ms']:.1f} | "
+            + tr("{first:.1f} (min {min:.1f}, median {median:.1f}) | ").format(
+                first=r["first_ms"], min=r["first_min_ms"], median=r["first_med_ms"])
+            + tr("{ping:.1f} (min {min:.1f}) | ").format(ping=r["ping_ms"], min=r["ping_min_ms"])
+            + f"{r['burst_ms']:.1f} | "
             f"{r['burst_kbps']:.0f} | "
             f"{r['wait_ms']:.1f} | {'-' if r['idle_ms'] is None else format(r['idle_ms'], '+.1f')} | "
-            f"{format(r['early_kb'], '.1f') if r['early_kb'] else 'no fim'} | "
+            f"{format(r['early_kb'], '.1f') if r['early_kb'] else tr('at the end')} | "
             f"{r['decode_ms']:.1f} | {r['local_ms']:.1f} | {r['keepalive']} | "
             f"{r['resent_pct']:.1f}% | {r['lost']} |"
             for r in rows
         ]
         wifi = self.wifi or (0, 0)
         table.append("")
-        table.append(f"Wi-Fi do PSP: sinal {wifi[0]}%, economia de energia WLAN "
-                     f"{'LIGADA' if wifi[1] & protocol.WIFI_POWER_SAVE else 'desligada'}")
+        table.append((tr("PSP Wi-Fi: signal {signal}%, WLAN power save ON") if wifi[1] & protocol.WIFI_POWER_SAVE
+                      else tr("PSP Wi-Fi: signal {signal}%, WLAN power save off")).format(signal=wifi[0]))
         if self.ping:
-            table.append(f"Ida e volta pura (ping no início do stream): {format_ping(*self.ping)}")
+            table.append(tr("Pure round trip (ping at the start of the stream): {ping}").format(ping=format_ping(*self.ping)))
         if isinstance(self.transport, UdpTransport):
-            table.append(f"Cache do cabeçalho JPEG: {'ligado' if self.transport.hdr_cache else 'desligado'}; "
-                         f"DSCP: {self.args.dscp}")
+            table.append((tr("JPEG header cache: on; DSCP: {dscp}") if self.transport.hdr_cache
+                          else tr("JPEG header cache: off; DSCP: {dscp}")).format(dscp=self.args.dscp))
         out = Path(f"bench_{time.strftime('%Y%m%d_%H%M%S')}.md")
-        out.write_text(f"Fonte: {self.args.source} {self.args.size[0]}x{self.args.size[1]}, "
-                       f"codec: {self.args.codec.upper()}, "
-                       f"transporte: {self.transport.name.upper()}\n\n" + "\n".join(table) + "\n")
-        log.info("benchmark concluído, tabela salva em %s:\n%s", out, "\n".join(table))
+        out.write_text(tr("Source: {source} {width}x{height}, codec: {codec}, transport: {transport}").format(
+            source=self.args.source, width=self.args.size[0], height=self.args.size[1],
+            codec=self.args.codec.upper(), transport=self.transport.name.upper()) + "\n\n" + "\n".join(table) + "\n")
+        log.info(tr("benchmark done, table saved to %s:\n%s"), out, "\n".join(table))
 
 
 def format_ping(select_t: int, poll_t: int, polling: int) -> str:
     """Valores do PSP em 0,1 ms."""
     parts = []
     if select_t:
-        parts.append(f"{select_t / 10:.1f} ms esperando com select()")
+        parts.append(tr("{ms:.1f} ms waiting with select()").format(ms=select_t / 10))
     if poll_t:
-        parts.append(f"{poll_t / 10:.1f} ms consultando o socket")
-    return ", ".join(parts) + f"; PSP usando {'consulta' if polling else 'select()'}"
+        parts.append(tr("{ms:.1f} ms polling the socket").format(ms=poll_t / 10))
+    return ", ".join(parts) + tr("; PSP using {mode}").format(mode=tr("polling") if polling else "select()")
 
 
 class Server:
@@ -470,7 +474,7 @@ class Server:
             try:
                 cur.transport.feed(req, nack)
             except Exception:  # um datagrama ruim não pode derrubar a thread do UDP
-                log.exception("erro tratando pedido UDP")
+                log.exception(tr("error handling a UDP request"))
 
     def close(self):
         with self.lock:
@@ -483,147 +487,158 @@ def parse_size(text: str):
     try:
         w, h = (int(v) for v in text.lower().split("x"))
     except ValueError:
-        raise argparse.ArgumentTypeError("use LARGURAxALTURA, ex.: 480x272") from None
+        raise argparse.ArgumentTypeError(tr("use WIDTHxHEIGHT, e.g. 480x272")) from None
     if not (16 <= w <= 480 and 16 <= h <= 272):
-        raise argparse.ArgumentTypeError("o PSP exibe no máximo 480x272")
+        raise argparse.ArgumentTypeError(tr("the PSP shows at most 480x272"))
     return w, h
 
 
 def parse_pin(text: str) -> str:
     if not text.isdigit() or len(text) > 16:
-        raise argparse.ArgumentTypeError("o PIN são só dígitos")
+        raise argparse.ArgumentTypeError(tr("the PIN is digits only"))
     return text
+
+
+def parse_lang(text: str) -> str:
+    try:
+        return i18n.normalize(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
 
 
 def build_parser() -> argparse.ArgumentParser:
     here = Path(__file__).resolve().parent
-    p = argparse.ArgumentParser(description="PSPStream: transmite a tela do PC para o PSP (H.264 ou MJPEG).")
+    p = argparse.ArgumentParser(description=tr("PSPStream: streams the PC screen to the PSP (H.264 or MJPEG)."))
     p.add_argument("--version", action="version", version=f"PSPStream {VERSION}")
+    p.add_argument("--lang", type=parse_lang, choices=i18n.LANGS, default=i18n.from_argv([]),
+                   help=tr("language of the messages and of the web interface: en (default) or pt. Default also in "
+                           "PSPSTREAM_LANG"))
     p.add_argument("--port", type=int, default=protocol.DEFAULT_PORT,
-                   help="porta TCP e UDP (padrão %(default)s)")
+                   help=tr("TCP and UDP port (default %(default)s)"))
     p.add_argument("--codec", choices=["auto", "jpeg", "h264", "h264p"], default="auto",
-                   help="h264p: H.264 com frames P, ~10x menos bytes por frame (EBOOT v0.9+; um EBOOT antigo "
-                        "recebe todo frame IDR). h264: todo frame IDR (EBOOT v0.5+). auto (padrão) = h264p se "
-                        "o openh264 estiver instalado, senão jpeg")
+                   help=tr("h264p: H.264 with P frames, ~10x fewer bytes per frame (EBOOT v0.9+; an old EBOOT gets "
+                           "every frame as IDR). h264: every frame IDR (EBOOT v0.5+). auto (default) = h264p if "
+                           "openh264 is installed, otherwise jpeg"))
     p.add_argument("--h264-encoder", choices=["auto", "openh264", "gstreamer"], default="auto",
-                   help="frames P e imagem estática: auto (padrão) = libopenh264 direto, com o openh264enc do "
-                        "GStreamer de reserva; openh264 ou gstreamer forçam um dos dois")
+                   help=tr("P frames and still image: auto (default) = libopenh264 directly, with GStreamer's "
+                           "openh264enc as a fallback; openh264 or gstreamer force one of them"))
     p.add_argument("--udp-pace", type=float, default=0, metavar="KB/s",
-                   help="UDP: limitar a taxa de envio dos pedaços (0 = sem limite, padrão)")
+                   help=tr("UDP: limit the rate the chunks are sent at (0 = no limit, default)"))
     p.add_argument("--p-redundancy-ms", type=float, default=transports.REDUNDANCY_S * 1000, metavar="MS",
-                   help="frames P por UDP: o último pedaço de cada frame vai de novo depois de MS ms, e a perda "
-                        "dele não para o stream esperando o NACK (padrão %(default).0f; 0 = desliga)")
+                   help=tr("P frames over UDP: the last chunk of each frame is sent again after MS ms, and losing it "
+                           "does not stall the stream waiting for the NACK (default %(default).0f; 0 = off)"))
     p.add_argument("--no-hdr-cache", dest="hdr_cache", action="store_false",
-                   help="UDP: mandar o cabeçalho JPEG em todo frame (para comparar; o padrão manda só "
-                        "quando muda)")
+                   help=tr("UDP: send the JPEG header with every frame (to compare; the default sends it only when "
+                           "it changes)"))
     p.add_argument("--dscp", choices=list(DSCP), default="ef",
-                   help="marcação dos pacotes do servidor para a fila de prioridade do Wi-Fi (WMM): "
-                        "ef = voz (padrão), cs5/af41 = vídeo, 0 = nenhuma")
-    p.add_argument("--bind", default="0.0.0.0", help="endereço local (padrão %(default)s)")
+                   help=tr("marking of the server's packets for the Wi-Fi priority queue (WMM): ef = voice "
+                           "(default), cs5/af41 = video, 0 = none"))
+    p.add_argument("--bind", default="0.0.0.0", help=tr("local address (default %(default)s)"))
     p.add_argument("--source", choices=["portal", "kms", "test", "x11", "gst", "static", "wolf"], default="portal",
-                   help="portal = tela no Wayland (padrão); kms = direto da placa de vídeo, sem o limite de "
-                        "~40 fps do GNOME 50 (o auxiliar precisa da permissão de ler a tela: o --setup a dá); "
-                        "test = padrão animado com relógio; x11 = sessão X11; gst = pipeline próprio "
-                        "(--gst-src); static = uma imagem; wolf = o que roda no Wolf (Games on Whales), pela "
-                        "API dele (wiki do PSPStream, página Wolf)")
+                   help=tr("portal = screen on Wayland (default); kms = straight from the graphics card, without "
+                           "GNOME 50's ~40 fps limit (the helper needs permission to read the screen: --setup gives "
+                           "it); test = animated pattern with a clock; x11 = X11 session; gst = your own pipeline "
+                           "(--gst-src); static = an image; wolf = what runs in Wolf (Games on Whales), through its "
+                           "API (PSPStream wiki, Wolf page)"))
     p.add_argument("--kms-monitor", type=int, default=0, metavar="N",
-                   help="kms: qual monitor ligado (0 = o primeiro; o log mostra quantos há)")
-    p.add_argument("--kms-card", metavar="/dev/dri/cardN", help="kms: placa de vídeo (padrão: procura em todas)")
+                   help=tr("kms: which connected monitor (0 = the first; the log shows how many there are)"))
+    p.add_argument("--kms-card", metavar="/dev/dri/cardN",
+                   help=tr("kms: graphics card (default: searches all of them)"))
     p.add_argument("--image", default=str(here.parent / "assets" / "testcard.jpg"),
-                   help="imagem do modo static (padrão: assets/testcard.jpg)")
-    p.add_argument("--gst-src", help="elementos GStreamer da fonte para --source gst")
-    p.add_argument("--wolf-socket", default=wolf_api.default_socket(), metavar="CAMINHO",
-                   help="wolf: socket da API do Wolf (padrão: WOLF_SOCKET_PATH ou %(default)s). Ele dá controle "
-                        "total do Wolf: monte-o só no container do PSPStream e nunca o exponha por TCP")
+                   help=tr("image for the static mode (default: assets/testcard.jpg)"))
+    p.add_argument("--gst-src", help=tr("GStreamer elements of the source for --source gst"))
+    p.add_argument("--wolf-socket", default=wolf_api.default_socket(), metavar=tr("PATH"),
+                   help=tr("wolf: the Wolf API socket (default: WOLF_SOCKET_PATH or %(default)s). It gives full "
+                           "control of Wolf: mount it only in the PSPStream container and never expose it over TCP"))
     p.add_argument("--wolf-target", default=os.environ.get("PSPSTREAM_WOLF_TARGET", ""), metavar="ID",
-                   help="wolf: o que espelhar: id ou nome do lobby, ou id da sessão (padrão: o único lobby "
-                        "aberto; com vários, o log lista as opções). Padrão também em PSPSTREAM_WOLF_TARGET")
+                   help=tr("wolf: what to mirror: lobby id or name, or session id (default: the only open lobby; "
+                           "with several, the log lists the options). Default also in PSPSTREAM_WOLF_TARGET"))
     p.add_argument("--wolf-video-convert", default=os.environ.get("PSPSTREAM_VIDEO_CONVERT") or "auto",
-                   metavar="auto|nvidia|va|cpu|ELEMENTOS",
-                   help="wolf: como o Wolf desce a imagem para a memória comum em 480x272. nvidia = CUDA (o "
-                        "padrão do Wolf com NVIDIA); va = Intel/AMD; cpu = Wolf com WOLF_USE_ZERO_COPY=FALSE; "
-                        "auto (padrão) tenta nessa ordem. Ou elementos GStreamer que entreguem I420 na "
-                        "resolução enviada. Padrão também em PSPSTREAM_VIDEO_CONVERT")
-    p.add_argument("--wolf-pin", type=parse_pin, metavar="DÍGITOS",
+                   metavar=tr("auto|nvidia|va|cpu|ELEMENTS"),
+                   help=tr("wolf: how Wolf brings the image down to regular memory at 480x272. nvidia = CUDA (Wolf's "
+                           "default with NVIDIA); va = Intel/AMD; cpu = Wolf with WOLF_USE_ZERO_COPY=FALSE; auto "
+                           "(default) tries them in that order. Or GStreamer elements that deliver I420 at the sent "
+                           "resolution. Default also in PSPSTREAM_VIDEO_CONVERT"))
+    p.add_argument("--wolf-pin", type=parse_pin, metavar=tr("DIGITS"),
                    default=os.environ.get("PSPSTREAM_WOLF_PIN") or None,
-                   help="wolf: PIN do lobby, se ele pede (para os controles entrarem no lobby). Padrão: "
-                        "PSPSTREAM_WOLF_PIN")
+                   help=tr("wolf: the lobby's PIN, if it asks for one (for the controls to join the lobby). Default: "
+                           "PSPSTREAM_WOLF_PIN"))
     p.add_argument("--wolf-rtp-port", type=int,
-                   default=wolf_api.env_port("WOLF_VIDEO_PING_PORT", wolf_api.VIDEO_PING_PORT), metavar="PORTA",
-                   help="wolf: porta UDP do ping de vídeo do Wolf (padrão: WOLF_VIDEO_PING_PORT ou %(default)s)")
+                   default=wolf_api.env_port("WOLF_VIDEO_PING_PORT", wolf_api.VIDEO_PING_PORT), metavar=tr("PORT"),
+                   help=tr("wolf: Wolf's UDP port for the video ping (default: WOLF_VIDEO_PING_PORT or %(default)s)"))
     p.add_argument("--wolf-audio-rtp-port", type=int,
-                   default=wolf_api.env_port("WOLF_AUDIO_PING_PORT", wolf_api.AUDIO_PING_PORT), metavar="PORTA",
-                   help="wolf: porta UDP do ping de som do Wolf (padrão: WOLF_AUDIO_PING_PORT ou %(default)s)")
-    p.add_argument("--size", type=parse_size, default=(480, 272), help="resolução enviada (padrão 480x272)")
+                   default=wolf_api.env_port("WOLF_AUDIO_PING_PORT", wolf_api.AUDIO_PING_PORT), metavar=tr("PORT"),
+                   help=tr("wolf: Wolf's UDP port for the audio ping (default: WOLF_AUDIO_PING_PORT or %(default)s)"))
+    p.add_argument("--size", type=parse_size, default=(480, 272), help=tr("sent resolution (default 480x272)"))
     p.add_argument("--fps", type=int, default=60,
-                   help="taxa máxima de captura (padrão %(default)s). Capturar acima do que o PSP "
-                        "exibe reduz a idade do frame enviado")
+                   help=tr("maximum capture rate (default %(default)s). Capturing above what the PSP shows makes "
+                           "the sent frame younger"))
     p.add_argument("-q", "--quality", type=int, default=60,
-                   help="qualidade JPEG 1-100: inicial (adaptativo) ou fixa (--fixed-quality). Padrão %(default)s")
+                   help=tr("JPEG quality 1-100: starting (adaptive) or fixed (--fixed-quality). Default %(default)s"))
     p.add_argument("--fixed-quality", dest="adaptive", action="store_false",
-                   help="não adaptar a qualidade à banda medida")
+                   help=tr("do not adapt the quality to the measured bandwidth"))
     p.add_argument("--target-fps", type=float, default=20,
-                   help="adaptativo: FPS que a banda precisa sustentar (padrão %(default)s, medido no "
-                        "PSP-3000: ~q55 com ~48 ms; 30 é inalcançável no 802.11b e derruba a qualidade "
-                        "para o mínimo). Menor = mais qualidade e mais latência por frame")
-    p.add_argument("--q-min", type=int, default=25, help="adaptativo: qualidade mínima (padrão %(default)s)")
-    p.add_argument("--q-max", type=int, default=90, help="adaptativo: qualidade máxima (padrão %(default)s)")
+                   help=tr("adaptive: FPS the bandwidth must sustain (default %(default)s, measured on the PSP-3000: "
+                           "~q55 at ~48 ms; 30 is out of reach on 802.11b and drops the quality to the minimum). "
+                           "Lower = more quality and more latency per frame"))
+    p.add_argument("--q-min", type=int, default=25, help=tr("adaptive: minimum quality (default %(default)s)"))
+    p.add_argument("--q-max", type=int, default=90, help=tr("adaptive: maximum quality (default %(default)s)"))
     p.add_argument("--scale", default="bilinear2",
                    choices=["nearest-neighbour", "bilinear", "bilinear2", "lanczos", "mitchell", "catrom"],
-                   help="filtro de redução. bilinear2 (padrão) não serrilha e gera frames ~27%% menores que "
-                        "bilinear; lanczos = texto um pouco mais nítido, ~2 ms a mais")
-    p.add_argument("--stretch", action="store_true", help="esticar em vez de manter a proporção")
-    p.add_argument("--window", action="store_true", help="portal: escolher uma janela em vez de um monitor")
+                   help=tr("scaling filter. bilinear2 (default) does not alias and makes frames ~27%% smaller than "
+                           "bilinear; lanczos = slightly sharper text, ~2 ms more"))
+    p.add_argument("--stretch", action="store_true", help=tr("stretch instead of keeping the aspect ratio"))
+    p.add_argument("--window", action="store_true", help=tr("portal: choose a window instead of a monitor"))
     p.add_argument("--dmabuf", action="store_true",
-                   help="portal, experimental: receber a tela na memória da GPU (DMA-BUF) e reduzir para "
-                        "480x272 no OpenGL; só a imagem pequena vem para a CPU. Se não funcionar, volta "
-                        "sozinho para o modo normal")
-    p.add_argument("--no-cursor", action="store_true", help="portal: não desenhar o cursor")
-    p.add_argument("--forget", action="store_true", help="portal: não reutilizar/guardar a escolha de tela")
-    p.add_argument("--no-audio", action="store_true", help="não capturar nem mandar o som")
-    p.add_argument("--audio-device", default="monitor", metavar="NOME",
-                   help="som: fonte do PipeWire/PulseAudio (pactl list short sources); monitor (padrão) = o que "
-                        "sai nas caixas (com --source wolf, o som do alvo no Wolf); wolf = o som do Wolf; "
-                        "test = tom de 440 Hz")
+                   help=tr("portal, experimental: receive the screen in GPU memory (DMA-BUF) and scale it to 480x272 "
+                           "in OpenGL; only the small image comes to the CPU. If it does not work, it falls back to "
+                           "the normal mode on its own"))
+    p.add_argument("--no-cursor", action="store_true", help=tr("portal: do not draw the cursor"))
+    p.add_argument("--forget", action="store_true", help=tr("portal: do not reuse/save the screen choice"))
+    p.add_argument("--no-audio", action="store_true", help=tr("do not capture or send the audio"))
+    p.add_argument("--audio-device", default="monitor", metavar=tr("NAME"),
+                   help=tr("audio: PipeWire/PulseAudio source (pactl list short sources); monitor (default) = what "
+                           "plays on the speakers (with --source wolf, the target's audio in Wolf); wolf = Wolf's "
+                           "audio; test = 440 Hz tone"))
     p.add_argument("--audio-rate", type=int, default=44100, choices=[22050, 32000, 44100, 48000],
-                   help="som: taxa (padrão %(default)s Hz, a do PSP; IMA ADPCM estéreo ~ taxa/1000 KB/s)")
-    p.add_argument("--audio-mono", action="store_true", help="som: mono (metade dos bytes)")
-    p.add_argument("--no-input", action="store_true", help="não injetar os controles do PSP no PC")
+                   help=tr("audio: rate (default %(default)s Hz, the PSP's; stereo IMA ADPCM ~ rate/1000 KB/s)"))
+    p.add_argument("--audio-mono", action="store_true", help=tr("audio: mono (half the bytes)"))
+    p.add_argument("--no-input", action="store_true", help=tr("do not inject the PSP controls on the PC"))
     p.add_argument("--input-dry-run", action="store_true",
-                   help="só mostrar no log as teclas/movimentos que seriam injetados")
-    p.add_argument("--keymap", default=str(here / "keymap.json"), help="arquivo de mapeamento (padrão keymap.json)")
-    p.add_argument("--profile", default=os.environ.get("PSPSTREAM_PROFILE") or "jogo",
-                   help="perfil do keymap: jogo, desktop, setas (teclado e mouse); xbox, xbox-camera, "
-                        "xbox-ombros (controle de Xbox 360 virtual; com --source wolf, só estes). Padrão "
-                        "%(default)s")
-    p.add_argument("--mouse-speed", type=float, default=1.0, help="multiplica a velocidade do mouse do perfil")
+                   help=tr("only show in the log the keys/movements that would be injected"))
+    p.add_argument("--keymap", default=str(here / "keymap.json"), help=tr("mapping file (default keymap.json)"))
+    p.add_argument("--profile", default=os.environ.get("PSPSTREAM_PROFILE") or "game",
+                   help=tr("keymap profile: game, desktop, arrows (keyboard and mouse); xbox, xbox-camera, "
+                           "xbox-shoulders (virtual Xbox 360 controller; with --source wolf, only these). The old "
+                           "names jogo, setas and xbox-ombros still work. Default %(default)s"))
+    p.add_argument("--mouse-speed", type=float, default=1.0, help=tr("multiplies the profile's mouse speed"))
     p.add_argument("--input-timeout", type=float, default=0.5, metavar="S",
-                   help="solta todas as teclas se o PSP ficar S segundos sem mandar nada enquanto algo está "
-                        "segurado (padrão %(default)s; o PSP reafirma o estado a cada ~100 ms)")
-    p.add_argument("--stats-interval", type=float, default=2.0, help="segundos entre linhas de estatística")
+                   help=tr("releases every key if the PSP sends nothing for S seconds while something is held "
+                           "(default %(default)s; the PSP restates the state every ~100 ms)"))
+    p.add_argument("--stats-interval", type=float, default=2.0, help=tr("seconds between statistics lines"))
     p.add_argument("--bench", metavar="Q1,Q2,...", nargs="?", const="30,50,70,90",
-                   help="benchmark: quando o PSP conectar, roda cada qualidade por --bench-seconds e salva "
-                        "uma tabela em bench_*.md (padrão 30,50,70,90)")
+                   help=tr("benchmark: when the PSP connects, runs each quality for --bench-seconds and saves a "
+                           "table to bench_*.md (default 30,50,70,90)"))
     p.add_argument("--bench-seconds", type=float, default=10)
-    p.add_argument("--web", default=os.environ.get("PSPSTREAM_WEB") or WEB_DEFAULT, metavar="HOST:PORTA",
-                   help="interface web das configurações (padrão %(default)s, só neste PC; 0.0.0.0:5124 abre "
-                        "para a rede local). A senha vem da variável PSPSTREAM_WEB_PASSWORD (sem ela, quem "
-                        "alcança a porta muda as configurações). Padrão também em PSPSTREAM_WEB")
-    p.add_argument("--web-allow-host", action="append", metavar="NOME",
+    p.add_argument("--web", default=os.environ.get("PSPSTREAM_WEB") or WEB_DEFAULT, metavar=tr("HOST:PORT"),
+                   help=tr("settings web interface (default %(default)s, this PC only; 0.0.0.0:5124 opens it to the "
+                           "local network). The password comes from the PSPSTREAM_WEB_PASSWORD variable (without it, "
+                           "anyone who reaches the port changes the settings). Default also in PSPSTREAM_WEB"))
+    p.add_argument("--web-allow-host", action="append", metavar=tr("NAME"),
                    default=[h for h in os.environ.get("PSPSTREAM_WEB_HOSTS", "").replace(",", " ").split() if h],
-                   help="nome aceito no endereço da interface web, além de localhost, do nome do PC e de IPs "
-                        "(ex.: um do DNS do roteador); pode repetir. Padrão: PSPSTREAM_WEB_HOSTS, separados "
-                        "por vírgula")
-    p.add_argument("--no-web", action="store_true", help="sem a interface web")
-    p.add_argument("--config", default=str(settings.default_path()), metavar="ARQUIVO",
-                   help="configurações gravadas pela interface web (padrão %(default)s). As opções da linha de "
-                        "comando valem mais que o arquivo")
+                   help=tr("name accepted in the web interface address, besides localhost, the PC's name and IPs "
+                           "(e.g. one from the router's DNS); can repeat. Default: PSPSTREAM_WEB_HOSTS, comma "
+                           "separated"))
+    p.add_argument("--no-web", action="store_true", help=tr("no web interface"))
+    p.add_argument("--config", default=str(settings.default_path()), metavar=tr("FILE"),
+                   help=tr("settings saved by the web interface (default %(default)s). Command-line options win over "
+                           "the file"))
     p.add_argument("--check", action="store_true",
-                   help="conferir as dependências desta máquina e mostrar o comando para instalar o que falta "
-                        "(apt, dnf, pacman ou zypper), sem iniciar o servidor")
+                   help=tr("check this machine's dependencies and show the command to install what is missing (apt, "
+                           "dnf, pacman or zypper), without starting the server"))
     p.add_argument("--setup", action="store_true",
-                   help="preparar esta máquina: instala o que o --check aponta (pacotes, uinput, firewall, "
-                        "captura KMS), mostrando cada comando e pedindo confirmação antes")
+                   help=tr("prepare this machine: installs what --check points out (packages, uinput, firewall, KMS "
+                           "capture), showing each command and asking before"))
     p.add_argument("-v", "--verbose", action="store_true")
     return p
 
@@ -650,9 +665,9 @@ def load_config(parser, args, argv):
     if "codec" in from_file:
         args.codec = args.codec_choice
     if from_file:
-        log.info("configuração: %s (%s)", store.path, ", ".join(f"{k} = {store.values[k]}" for k in from_file))
+        log.info(tr("settings: %s (%s)"), store.path, ", ".join(f"{k} = {store.values[k]}" for k in from_file))
     if overridden:
-        log.info("configuração: a linha de comando vale mais que o arquivo para %s", ", ".join(overridden))
+        log.info(tr("settings: the command line wins over the file for %s"), ", ".join(overridden))
     return store, explicit, from_file
 
 
@@ -661,9 +676,11 @@ def _terminate(signum, frame):
 
 
 def main(argv=None) -> int:
-    parser = build_parser()
     argv = sys.argv[1:] if argv is None else list(argv)
+    i18n.set_language(i18n.from_argv(argv))  # o --help já sai no idioma pedido
+    parser = build_parser()
     args = parser.parse_args(argv)
+    i18n.set_language(args.lang)
     if args.check or args.setup:
         import doctor
         return (doctor.setup if args.setup else doctor.main)(args.port, VERSION)
@@ -677,18 +694,21 @@ def main(argv=None) -> int:
     logging.getLogger().addHandler(ring)
     args.codec_choice = args.codec
     store, explicit, from_file = load_config(parser, args, argv)
+    i18n.set_language(args.lang)  # o server.json pode ter outro
+    from inject import canonical_profile
+    args.profile = canonical_profile(args.profile)  # nomes antigos (jogo, setas, xbox-ombros)
 
     capture_keys = [k for k in from_file if settings.BY_KEY[k].apply == "capture"]
     err = resolve_codec(args)
     if err and "codec" in from_file:
-        log.warning("%s; o codec do arquivo de configuração foi ignorado (mude na interface web)", err)
+        log.warning(tr("%s; the codec from the settings file was ignored (change it in the web interface)"), err)
         args.codec = args.codec_choice = parser.get_default("codec")
         err = resolve_codec(args)
     if err:
         log.error("%s", err)
         return 1
     if args.dmabuf and args.source != "portal":
-        log.warning("--dmabuf só vale para --source portal; ignorado")
+        log.warning(tr("--dmabuf only works with --source portal; ignored"))
         args.dmabuf = False
     try:
         source = start_source(args)
@@ -696,12 +716,12 @@ def main(argv=None) -> int:
         if args.verbose and not capture_keys:
             raise
         if not capture_keys:
-            log.error("não foi possível iniciar a captura: %s", exc)
+            log.error(tr("could not start the capture: %s"), exc)
             return 1
         # A captura escolhida na interface web não subiu (ex.: KMS sem o
         # auxiliar): volta para a da linha de comando, e a interface continua
         # acessível para trocar de novo.
-        log.warning("a captura do arquivo de configuração não subiu (%s); usando a padrão", exc)
+        log.warning(tr("the capture from the settings file did not start (%s); using the default one"), exc)
         for key in capture_keys:
             setting = settings.BY_KEY[key]
             if key != "codec":  # o codec já foi conferido acima
@@ -709,22 +729,22 @@ def main(argv=None) -> int:
         try:
             source = start_source(args)
         except Exception as exc2:
-            log.error("não foi possível iniciar a captura: %s", exc2)
+            log.error(tr("could not start the capture: %s"), exc2)
             return 1
 
-    injector, input_note = None, "desligados (--no-input)"
+    injector, input_note = None, N_("off (--no-input)")  # o status traduz na hora
     if not args.no_input:
         try:
             injector, input_note = open_injector(args)
         except RuntimeError as exc:
-            input_note = f"desativados: {exc}"
-            log.warning("controles desativados: %s", exc)
+            input_note = tr("disabled: {error}").format(error=exc)
+            log.warning(tr("controls disabled: %s"), exc)
 
-    audio, audio_note = None, "desligado (--no-audio)"
+    audio, audio_note = None, N_("off (--no-audio)")
     if not args.no_audio:
         audio = start_audio(args)
         if audio is None:
-            audio_note = "a captura não abriu (veja o log)"
+            audio_note = N_("the capture did not open (see the log)")
 
     srv = socket.create_server((args.bind, args.port))
     udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -733,8 +753,8 @@ def main(argv=None) -> int:
     udp.bind((args.bind, args.port))
     server = Server(source, args, injector, audio)
     threading.Thread(target=server.serve_udp, args=(udp,), name="udp", daemon=True).start()
-    log.info("PSPStream %s: aguardando o PSP em %s:%d, TCP e UDP (no PSP: 'Procurar o PC na rede', ou este IP "
-             "no server.txt)", VERSION, local_ip(), args.port)
+    log.info(tr("PSPStream %s: waiting for the PSP at %s:%d, TCP and UDP (on the PSP: 'Find the PC on the network', "
+                "or this IP in server.txt)"), VERSION, local_ip(), args.port)
 
     from control import Controller
     ctl = Controller(args, store, server, udp, explicit, VERSION, local_ip, input_note, audio_note)
@@ -747,13 +767,14 @@ def main(argv=None) -> int:
                             args.web_allow_host)
             web.start()
             ctl.web_url = web.url
-            access = "com senha" if web.password else "sem senha"
-            log.info("configurações: %s%s", web.url,
-                     f" (aberto para a rede local, {access})" if web.public else
-                     (f" ({access}; nomes liberados: {', '.join(args.web_allow_host)})"
+            access = tr("with a password") if web.password else tr("without a password")
+            log.info(tr("settings: %s%s"), web.url,
+                     tr(" (open to the local network, {access})").format(access=access) if web.public else
+                     (tr(" ({access}; allowed names: {names})").format(access=access,
+                                                                      names=", ".join(args.web_allow_host))
                       if args.web_allow_host else ""))
         except (OSError, ValueError) as exc:
-            log.warning("interface web desativada (%s): %s", args.web, exc)
+            log.warning(tr("web interface disabled (%s): %s"), args.web, exc)
             web = None
 
     from netcheck import check_pc_wifi
@@ -767,7 +788,7 @@ def main(argv=None) -> int:
         while True:
             failed = getattr(server.source, "failed", None)  # a interface web pode trocar a captura
             if failed:
-                log.error("captura parou: %s", failed)
+                log.error(tr("capture stopped: %s"), failed)
                 return 1
             try:
                 conn, addr = srv.accept()
@@ -777,7 +798,7 @@ def main(argv=None) -> int:
             set_dscp(conn, args.dscp)
             server.replace(TcpTransport(conn, addr))
     except KeyboardInterrupt:
-        log.info("encerrando")
+        log.info(tr("shutting down"))
     finally:
         if web is not None:
             web.close()

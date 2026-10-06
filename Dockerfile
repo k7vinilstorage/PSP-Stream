@@ -11,7 +11,7 @@
 FROM ubuntu:24.04
 
 LABEL org.opencontainers.image.title="PSPStream" \
-      org.opencontainers.image.description="A tela, o som e os controles de um lobby do Wolf (Games on Whales) no PSP" \
+      org.opencontainers.image.description="The screen, audio and controls of a Wolf (Games on Whales) lobby on the PSP" \
       org.opencontainers.image.source="https://github.com/k7vinilstorage/PSP-Stream" \
       org.opencontainers.image.licenses="MIT"
 

@@ -2,7 +2,7 @@
 <!-- sudo firewall-cmd --permanent --add-service=pspstream && sudo firewall-cmd --reload -->
 <service>
   <short>PSPStream</short>
-  <description>Tela e som do PC no PSP: o PSP pede os frames e manda os botões (TCP e UDP 5123).</description>
+  <description>PC screen and audio on the PSP: the PSP asks for frames and sends its buttons (TCP and UDP 5123).</description>
   <port protocol="tcp" port="5123"/>
   <port protocol="udp" port="5123"/>
 </service>

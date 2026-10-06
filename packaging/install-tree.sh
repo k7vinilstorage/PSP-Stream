@@ -9,7 +9,7 @@
 #   /usr/lib/udev/rules.d, modules-load.d    /dev/uinput para quem está sentado no PC (controles)
 #   /usr/lib/systemd/user/pspstream.service  serviço de usuário (desligado)
 #   /usr/share/applications/pspstream.desktop
-#   /usr/share/doc/pspstream                 README, CHANGELOG, LICENSE (o resto: a wiki)
+#   /usr/share/doc/pspstream                 READMEs (en, pt-BR), CHANGELOG, LICENSE (o resto: a wiki)
 #
 #   packaging/install-tree.sh DESTDIR
 #
@@ -19,7 +19,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 dest=${1:?uso: install-tree.sh DESTDIR}
 share=$dest/usr/share/pspstream
 
-[ -x "$root/tools/kms/pspstream-kms" ] || { echo "compile antes: make -C tools/kms" >&2; exit 1; }
+[ -x "$root/tools/kms/pspstream-kms" ] || { echo "build it first: make -C tools/kms" >&2; exit 1; }
 
 install -d "$share/server/web" "$share/assets"
 install -m 644 "$root"/server/*.py "$root/server/keymap.json" "$share/server/"
@@ -32,4 +32,4 @@ install -D -m 644 "$root/packaging/files/pspstream-uinput.conf" "$dest/usr/lib/m
 install -D -m 644 "$root/packaging/files/pspstream.service" "$dest/usr/lib/systemd/user/pspstream.service"
 install -D -m 644 "$root/packaging/files/pspstream.desktop" "$dest/usr/share/applications/pspstream.desktop"
 install -d "$dest/usr/share/doc/pspstream"
-install -m 644 "$root/README.md" "$root/CHANGELOG.md" "$root/LICENSE" "$dest/usr/share/doc/pspstream/"
+install -m 644 "$root/README.md" "$root/README.pt-BR.md" "$root/CHANGELOG.md" "$root/LICENSE" "$dest/usr/share/doc/pspstream/"

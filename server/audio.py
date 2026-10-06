@@ -28,6 +28,7 @@ import gi
 
 gi.require_version("Gst", "1.0")
 from gi.repository import Gst  # noqa: E402
+from i18n import tr  # noqa: E402
 
 log = logging.getLogger("pspstream.audio")
 
@@ -138,7 +139,7 @@ class AudioCapture:
         self.samples = block_samples(rate, packet_ms)
         self.align = block_align(self.samples, channels)
         if self.align > MAX_BLOCK:
-            raise ValueError(f"bloco de {self.align} bytes não cabe num pacote: diminua --audio-ms")
+            raise ValueError(tr("a {size}-byte block does not fit in a packet: lower --audio-ms").format(size=self.align))
         self.pipeline = Gst.parse_launch(build_pipeline(self.device, rate, channels, self.align, src))
         self.pipeline.get_by_name("sink").connect("new-sample", self._on_sample)
         self.listeners = []
@@ -205,17 +206,17 @@ class AudioCapture:
                 err, dbg = msg.parse_error()
                 self._ended(f"{err.message} ({dbg})")
             else:
-                self._ended("fim do stream (EOS)")
+                self._ended(tr("end of stream (EOS)"))
             return
 
     def _ended(self, reason: str) -> None:
         """A captura parou (erro ou EOS). A do Wolf trata o fim esperado sem o aviso."""
         self.failed = reason
-        log.warning("som parou: %s (o vídeo continua)", reason)
+        log.warning(tr("audio stopped: %s (video goes on)"), reason)
 
     def start(self) -> None:
         if self.pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
-            raise RuntimeError(f"não foi possível capturar o som de '{self.device}'")
+            raise RuntimeError(tr("could not capture the audio from '{device}'").format(device=self.device))
         threading.Thread(target=self._watch_bus, name="audio-bus", daemon=True).start()
 
     def stop(self) -> None:

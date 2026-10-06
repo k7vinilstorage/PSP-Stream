@@ -39,9 +39,9 @@ import sys
 
 psp = json.loads(open(sys.argv[1]).read().strip().splitlines()[-1])
 wolf = json.loads(open(sys.argv[2]).read())
-print("PSP de teste:", {k: psp.get(k) for k in ("frames", "broken", "audio_packets", "audio_lost")})
-print("Wolf falso:", {"chamadas": sorted(set(wolf["calls"])), "pipelines": wolf["started"],
-                      "entradas": wolf["inputs"]})
+print("test PSP:", {k: psp.get(k) for k in ("frames", "broken", "audio_packets", "audio_lost")})
+print("fake Wolf:", {"calls": sorted(set(wolf["calls"])), "pipelines": wolf["started"],
+                     "inputs": wolf["inputs"]})
 assert psp["frames"] > 20 and psp["broken"] == 0, psp
 assert psp.get("audio_packets", 0) > 50, psp
 assert all(ok for _, ok, _ in wolf["started"]) and len(wolf["started"]) == 2, wolf
