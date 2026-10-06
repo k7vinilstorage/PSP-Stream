@@ -4,7 +4,7 @@ The EBOOT and server versions move together. The protocol has its own
 version (`PSC5` = v5) and only changes when the message format changes; an
 EBOOT with another protocol version is refused with a warning in the log.
 
-## 1.1 (in development)
+## 1.1
 
 - **Windows server (experimental).** `PSPStream-Windows-x64.zip`
   (Windows 10/11, 64-bit), built by CI with PyInstaller and the GStreamer
