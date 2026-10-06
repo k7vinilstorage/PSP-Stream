@@ -128,8 +128,7 @@ ele conecta sozinho. As configurações do PC ficam em
 
 Baixe o `PSPStream-Setup-x64.exe` das
 [Releases](https://github.com/k7vinilstorage/PSP-Stream/releases) e rode: o
-assistente (em inglês; a primeira janela oferece o português) instala o
-PSPStream, libera o firewall e, se você
+assistente (em português) instala o PSPStream, libera o firewall e, se você
 quiser o controle de Xbox, instala o driver ViGEmBus. Depois abra o
 **PSPStream** pelo menu Iniciar e escolha **Language** na interface web.
 Também há um zip portátil. Detalhes na página

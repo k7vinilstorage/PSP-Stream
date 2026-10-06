@@ -14,7 +14,7 @@ are welcome.
 1. Download **`PSPStream-Setup-x64.exe`** from
    [Releases](https://github.com/k7vinilstorage/PSP-Stream/releases)
    (the `nightly` pre-release has the latest build) and run it. The
-   wizard is in English; its first window also offers Portuguese.
+   wizard is in English or Portuguese, following Windows.
 2. Leave the boxes on the "Prepare this PC" page checked:
    - **allow the PSP through the firewall**: port 5123, UDP and TCP, on
      private networks;
