@@ -17,20 +17,23 @@ import logging
 import threading
 import time
 
-import gi
+from i18n import tr
 
-gi.require_version("Gst", "1.0")
-gi.require_version("GstVideo", "1.0")
-from gi.repository import Gst, GstVideo  # noqa: E402
-from i18n import tr  # noqa: E402
-
-Gst.init(None)
+try:  # sem o PyGObject (servidor de Windows): só a libopenh264 direto
+    import gi
+    gi.require_version("Gst", "1.0")
+    gi.require_version("GstVideo", "1.0")
+    from gi.repository import Gst, GstVideo
+    Gst.init(None)
+except (ImportError, ValueError):
+    Gst = GstVideo = None
 
 ENCODER = "openh264enc"
 
 
 def available() -> bool:
-    return Gst.ElementFactory.find(ENCODER) is not None
+    """O openh264enc do GStreamer (em processo). A libopenh264 direto: openh264.available()."""
+    return Gst is not None and Gst.ElementFactory.find(ENCODER) is not None
 
 
 def qp_for_quality(quality: int) -> int:
@@ -56,6 +59,8 @@ class _GstPipe:
     live_qp = False
 
     def __init__(self, width: int, height: int, qp: int, idr_every_frame: bool):
+        if Gst is None:
+            raise RuntimeError(tr("libopenh264 is missing (and there is no GStreamer in the process to fall back to)"))
         gop = 1 if idr_every_frame else 100000
         desc = (
             "appsrc name=src is-live=true format=time "
@@ -108,8 +113,8 @@ def _open(width: int, height: int, qp: int, idr_every_frame: bool, backend: str)
                 log.info(tr("H.264: libopenh264 %s called directly"), ".".join(map(str, enc.version)))
             return enc
         except openh264.OpenH264Error as exc:
-            if backend == "openh264":
-                raise RuntimeError(f"--h264-encoder openh264: {exc}") from exc
+            if backend == "openh264" or Gst is None:
+                raise RuntimeError(f"--h264-encoder openh264: {exc}" if backend == "openh264" else str(exc)) from exc
             if "fallback" not in _warned:
                 _warned.add("fallback")
                 log.warning(tr("H.264: %s; using GStreamer's openh264enc"), exc)
@@ -123,7 +128,7 @@ def _encode_safe(owner, i420: bytes) -> bytes:
     try:
         return owner._enc.encode(i420)
     except openh264.OpenH264Error as exc:
-        if owner.backend == "openh264":
+        if owner.backend == "openh264" or Gst is None:
             raise
         log.warning(tr("H.264: %s; switching to GStreamer's openh264enc"), exc)
         owner._enc.close()
@@ -319,6 +324,9 @@ def set_sps_level(data: bytes, level_idc: int) -> bytes:
 
 def image_to_i420(path: str, width: int, height: int, keep_aspect: bool = True, scale: str = "bilinear") -> bytes:
     """Qualquer imagem -> I420 width x height (para o modo static)."""
+    if Gst is None:
+        import imaging
+        return imaging.image_to_i420(path, width, height, keep_aspect, scale)
     desc = (
         f'filesrc location="{path}" ! decodebin ! imagefreeze num-buffers=1 ! videoconvert '
         f"! videoscale method={scale} add-borders={'true' if keep_aspect else 'false'} "

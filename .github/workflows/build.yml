@@ -1,5 +1,6 @@
 # Compila o EBOOT do PSP, roda os testes e gera os pacotes .deb (Ubuntu 22.04+,
-# Debian 12+) e .rpm (Fedora) a cada push e pull request. A imagem Docker
+# Debian 12+) e .rpm (Fedora) e o servidor de Windows (zip com o pspstream.exe
+# e o GStreamer reduzido) a cada push e pull request. A imagem Docker
 # (Dockerfile, para usar ao lado do Wolf) é compilada e testada contra o Wolf
 # falso; num push na main ela vai para ghcr.io/<dono>/pspstream:nightly, e
 # numa tag v1.2, para :1.2 e :latest.
@@ -54,8 +55,8 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
-            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-gl \
-            gstreamer1.0-pipewire libopenh264-dev python3-evdev gcc make pkg-config libdrm-dev
+            gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-gl \
+            gstreamer1.0-pipewire libopenh264-dev python3-evdev python3-pil gcc make pkg-config libdrm-dev
       - name: tests
         run: /usr/bin/python3 -m unittest discover -v tests
       - name: ruff
@@ -140,10 +141,54 @@ jobs:
           path: dist/*.rpm
           if-no-files-found: error
 
+  windows:
+    name: Windows server
+    runs-on: windows-2022
+    env:
+      # o runtime oficial do GStreamer (MSVC 64 bits); daqui vão só os plugins que o servidor usa
+      GST_VERSION: "1.24.12"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: GStreamer runtime
+        shell: pwsh
+        run: |
+          $url = "https://gstreamer.freedesktop.org/data/pkg/windows/$env:GST_VERSION/msvc/gstreamer-1.0-msvc-x86_64-$env:GST_VERSION.msi"
+          Invoke-WebRequest $url -OutFile gst.msi
+          # instalação administrativa: só extrai os arquivos, sem mexer no sistema
+          Start-Process msiexec -ArgumentList "/a", "gst.msi", "/qn", "TARGETDIR=$env:RUNNER_TEMP\gst" -Wait
+          $launch = Get-ChildItem "$env:RUNNER_TEMP\gst" -Recurse -Filter gst-launch-1.0.exe | Select-Object -First 1
+          $root = $launch.Directory.Parent.FullName
+          "GST_ROOT=$root" >> $env:GITHUB_ENV
+          & $launch.FullName --version
+          Get-ChildItem "$root\bin" -Filter *openh264*
+      - name: dependencies
+        run: python -m pip install pyinstaller pillow pefile
+      - name: tests
+        env:
+          PSPSTREAM_GSTREAMER: ${{ env.GST_ROOT }}
+        run: python -m unittest -v tests.test_windows tests.test_docs
+      - name: build
+        run: python packaging/windows/build.py --gstreamer "${{ env.GST_ROOT }}" --out dist
+      - name: test the build
+        run: python packaging/windows/smoke.py dist/PSPStream
+      - name: screen capture on the runner (informational)
+        continue-on-error: true
+        run: python packaging/windows/smoke.py dist/PSPStream --screen
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pspstream-windows
+          path: dist/PSPStream-Windows-x64.zip
+          if-no-files-found: error
+
   release:
     name: publish
     if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
-    needs: [eboot, tests, deb, rpm]
+    needs: [eboot, tests, deb, rpm, windows]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -158,7 +203,7 @@ jobs:
         run: |
           mkdir -p out
           (cd artifacts/PSPStream-EBOOT && zip -qr ../../out/PSPStream-EBOOT.zip PSP)
-          cp artifacts/pspstream-deb/*.deb artifacts/pspstream-rpm/*.rpm out/
+          cp artifacts/pspstream-deb/*.deb artifacts/pspstream-rpm/*.rpm artifacts/pspstream-windows/*.zip out/
           ls -l out
       - name: stable release (tag)
         if: startsWith(github.ref, 'refs/tags/v')
@@ -186,6 +231,7 @@ jobs:
           - **PSPStream-EBOOT.zip**: copy the PSP folder to the root of the memory stick.
           - **.deb** (Ubuntu 22.04+, Debian 12+): \`sudo apt install ./pspstream_*.deb\`
           - **.rpm** (Fedora): \`sudo dnf install ./pspstream-*.rpm\`
+          - **PSPStream-Windows-x64.zip** (Windows 10/11, experimental): unzip and run \`pspstream.exe\`
           NOTES
           gh release create nightly out/* --prerelease --target "$GITHUB_SHA" \
             --title "Development (main, ${GITHUB_SHA::7})" --notes-file notes.md

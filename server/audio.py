@@ -24,15 +24,17 @@ import shutil
 import subprocess
 import threading
 
-import gi
+from i18n import tr
 
-gi.require_version("Gst", "1.0")
-from gi.repository import Gst  # noqa: E402
-from i18n import tr  # noqa: E402
+try:  # sem o PyGObject (servidor de Windows): os blocos e a referência do IMA servem; a captura é a do gst_pipe
+    import gi
+    gi.require_version("Gst", "1.0")
+    from gi.repository import Gst
+    Gst.init(None)
+except (ImportError, ValueError):
+    Gst = None
 
 log = logging.getLogger("pspstream.audio")
-
-Gst.init(None)
 
 RATES = (22050, 32000, 44100, 48000)  # o sceAudioSRC do PSP aceita estas (e outras menores)
 # 44,1 kHz é a taxa do hardware do PSP: o sceAudioSRC não reamostra (a
@@ -109,6 +111,8 @@ def default_monitor() -> str:
 
 def available(pulse: bool = True) -> bool:
     """pulse=False: o som do Wolf, que chega por TCP (sem o pulsesrc)."""
+    if Gst is None:
+        return False
     need = ("pulsesrc", "adpcmenc", "audioresample") if pulse else ("adpcmenc", "audioresample", "tcpserversrc")
     return all(Gst.ElementFactory.find(e) for e in need)
 

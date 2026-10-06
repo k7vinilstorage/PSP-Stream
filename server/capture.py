@@ -5,6 +5,8 @@ com o servidor rodando (control.Controller). Nada aqui depende da sessão
 com o PSP.
 """
 import logging
+import os
+import sys
 import time
 from pathlib import Path
 
@@ -12,6 +14,16 @@ import distro
 from i18n import tr
 
 log = logging.getLogger("pspstream.capture")
+
+WINDOWS = sys.platform == "win32"
+# Fontes que o gst-launch captura num processo à parte (gst_pipe.py): no Windows, sempre.
+PIPE_SOURCES = ("screen", "test", "gst")
+
+
+def use_pipe() -> bool:
+    """Captura pelo gst-launch (gst_pipe) em vez do PyGObject: o servidor de Windows. No Linux,
+    PSPSTREAM_CAPTURE=pipe faz o mesmo (testes do caminho de Windows)."""
+    return WINDOWS or os.environ.get("PSPSTREAM_CAPTURE") == "pipe"
 
 
 def resolve_codec(args):
@@ -24,9 +36,9 @@ def resolve_codec(args):
             import h264
             h264.BACKEND = args.h264_encoder
             ok = h264.available()  # o openh264enc do GStreamer: o --codec h264 codifica dentro da captura
-            if want != "h264" and args.h264_encoder != "gstreamer":
+            if args.h264_encoder != "gstreamer":
                 import openh264
-                ok = ok or openh264.available()  # frames P: a libopenh264 direto basta
+                ok = ok or openh264.available()  # a libopenh264 direto basta (h264.H264Encoder e H264PEncoder)
         except (ImportError, ValueError):
             ok = False
     if want == "auto":
@@ -57,6 +69,9 @@ def open_injector(args):
         raise RuntimeError(str(exc)) from None
     if args.source == "wolf":
         return open_wolf_injector(args, profile)
+    if profile.get("type") == "gamepad" and WINDOWS:
+        raise RuntimeError(tr("the virtual Xbox controller is not available on Windows yet: use a keyboard and mouse "
+                              "profile (game, desktop, arrows)"))
     if profile.get("type") == "gamepad":
         from gamepad import GamepadInjector
         injector = GamepadInjector(profile, args.input_dry_run, args.input_timeout)
@@ -101,9 +116,12 @@ def build_source(args, portal=None):
         try:
             from gst_source import transcode_image
         except (ImportError, ValueError):
-            # Sem GStreamer: envia o arquivo como está (precisa ser JPEG 4:2:0
-            # de até 480x272) e a qualidade não muda.
-            return StaticSource(Path(args.image).read_bytes())
+            import imaging
+            if not imaging.available():
+                # Sem GStreamer nem Pillow: envia o arquivo como está (precisa ser
+                # JPEG 4:2:0 de até 480x272) e a qualidade não muda.
+                return StaticSource(Path(args.image).read_bytes())
+            transcode_image = imaging.transcode_image
 
         if args.codec == "h264p":
             from h264 import image_to_i420
@@ -130,6 +148,19 @@ def build_source(args, portal=None):
         return WolfSource(WolfApi(args.wolf_socket), args.wolf_target, args.wolf_video_convert, w, h, args.fps,
                           args.quality, args.scale, not args.stretch, args.codec, args.wolf_rtp_port,
                           args.wolf_audio_rtp_port, audio=audio, pin=args.wolf_pin)
+
+    if use_pipe() and args.source in PIPE_SOURCES:
+        import gst_pipe
+        keep = not args.stretch
+        if args.source == "screen":
+            candidates = gst_pipe.screen_candidates(args.monitor, not args.no_cursor, args.fps, w, h, args.scale, keep)
+        elif args.source == "test":
+            candidates = gst_pipe.test_candidates(args.fps, w, h, args.scale, keep)
+        else:
+            if not args.gst_src:
+                raise SystemExit(tr("--source gst needs --gst-src \"<GStreamer elements>\""))
+            candidates = gst_pipe.custom_candidates(args.gst_src, w, h, args.scale, keep)
+        return gst_pipe.PipeSource(candidates, w, h, args.fps, args.quality, args.codec, label=args.source)
 
     if args.source == "kms":
         from kms import KmsSource
@@ -177,6 +208,8 @@ def open_audio(args, seq0: int = 0):
         raise RuntimeError(tr("--audio-device wolf only works with --source wolf"))
     if wolf_audio(args):
         return open_wolf_audio(args, seq0)
+    if use_pipe():
+        return open_pipe_audio(args, seq0)
     if not audio.available():
         raise RuntimeError(tr("GStreamer's pulsesrc and adpcmenc are missing ({hint})").format(hint=distro.hint("good", "bad")))
     try:
@@ -188,6 +221,21 @@ def open_audio(args, seq0: int = 0):
     log.info(tr("audio: %s, %d Hz %s, IMA ADPCM in %.0f ms packets (~%.0f KB/s when the PSP asks)"),
              capture.device, capture.rate, tr("stereo") if capture.channels == 2 else "mono", capture.packet_ms,
              capture.kbps)
+    return capture
+
+
+def open_pipe_audio(args, seq0: int = 0):
+    """O som pelo gst-launch (servidor de Windows: o WASAPI em loopback, o que sai nas caixas)."""
+    import gst_pipe
+    try:
+        capture = gst_pipe.PipeAudioCapture(args.audio_device, args.audio_rate, 1 if args.audio_mono else 2)
+        capture.seq = seq0
+        capture.start()
+    except (RuntimeError, ValueError) as exc:
+        raise RuntimeError(str(exc)) from None
+    device = tr("what plays on the speakers") if args.audio_device == "monitor" else args.audio_device
+    log.info(tr("audio: %s, %d Hz %s, IMA ADPCM in %.0f ms packets (~%.0f KB/s when the PSP asks)"),
+             device, capture.rate, tr("stereo") if capture.channels == 2 else "mono", capture.packet_ms, capture.kbps)
     return capture
 
 
