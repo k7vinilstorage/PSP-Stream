@@ -847,6 +847,34 @@ class HitchStatsTest(unittest.TestCase):
         self.assertIn("hitches 4 (worst 63 ms: 1 loss, 1 IDR, 1 late request, 1 capture)", line)
         self.assertIn("1 IDR", line)
 
+    def test_samples_bounded(self):
+        # A fase (benchmark) só recomeça no --bench: num stream longo, as amostras dela têm teto.
+        s = stats.SessionStats(60, transport=self.Transport())
+        req = protocol.Request(flags=protocol.REQ_FRAME, net_t=100, decode_t=50, ping_live=30)
+        n = stats.MAX_SAMPLES + 100
+        for i in range(1, n + 1):
+            s.on_send(i, i * 17, 0, 1500, 1)
+            req.ack_frame, req.echo_ts = i, i * 17
+            s.on_ack(req, i * 17 + 20)
+        for w in (s.window, s.phase):
+            self.assertEqual(len(w.latency), stats.MAX_SAMPLES)
+            self.assertEqual(len(w.ping), stats.MAX_SAMPLES)
+            self.assertEqual(w.frames, n)
+        self.assertGreater(s.phase.summary()["latency_ms"], 0)
+
+
+class H264IdrRequestTest(unittest.TestCase):
+    def test_force_skips_the_in_flight_guard(self):
+        # Um pacote P grande demais é descartado depois de codificado: o próximo tem de ser IDR,
+        # mesmo que o descartado fosse o IDR que acabou de sair.
+        import h264
+        enc = h264.H264PEncoder(480, 272, 70)
+        enc._last_idr = time.monotonic()
+        self.assertFalse(enc.request_idr())
+        self.assertFalse(enc._idr)
+        self.assertTrue(enc.request_idr(force=True))
+        self.assertTrue(enc._idr)
+
 
 class H264QualityTest(unittest.TestCase):
     def test_qp_mapping(self):

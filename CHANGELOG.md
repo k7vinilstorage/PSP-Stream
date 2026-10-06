@@ -23,6 +23,16 @@ EBOOT with another protocol version is refused with a warning in the log.
 - The receiver of the pipe capture ACKs every TCP segment: without it,
   Nagle and the delayed ACK held frames for up to 150 ms (measured on
   localhost).
+- Server: the session's statistics kept every sample of the stream in
+  memory (the benchmark phase is only reset by `--bench`): ~60 floats/s
+  in each of 17 lists, ~100 MB per hour. Each window now keeps at most
+  8192 samples. The objects created at startup are frozen out of Python's
+  cycle collector (`gc.freeze()`), so a full collection, which stops the
+  send thread too, only walks what the stream creates. A P packet over
+  the 256 KB limit, dropped after being encoded, now makes the next one
+  an IDR (the PSP would have decoded the next P without its reference).
+  The pipe capture (Windows) no longer sorts the interval history on
+  every frame.
 - `h264.py`, `audio.py` and the FPS limiter import without PyGObject;
   JPEG and still images also work through Pillow.
 - [PC Client Plan](https://github.com/k7vinilstorage/PSP-Stream/wiki/PC-Client-Plan):

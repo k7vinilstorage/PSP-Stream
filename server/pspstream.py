@@ -8,6 +8,7 @@ TCP ou UDP (o PSP escolhe no server.txt); o servidor atende os dois na mesma
 porta.
 """
 import argparse
+import gc
 import logging
 import os
 import signal
@@ -269,6 +270,10 @@ class Session:
                 log.warning(tr("a %d KB frame exceeds the %d KB limit; dropped"),
                             len(jpeg) // 1024, protocol.MAX_JPEG // 1024)
                 last_seq = seq
+                if source.raw_i420 and self.encoder_p:
+                    # frames P: o encoder já usou este como referência do próximo, que chegaria ao PSP
+                    # sem ela (imagem errada até um IDR). O próximo vira IDR, mesmo se este era um.
+                    self.encoder.request_idr(force=True)
                 continue
             with self.cond:
                 self.frame_no += 1  # usa o pedido; um pedido simples a partir daqui é do seguinte
@@ -847,6 +852,11 @@ def main(argv=None) -> int:
 
     from netcheck import check_pc_wifi
     check_pc_wifi(local_ip())
+    # Os módulos e objetos criados até aqui vivem até o fim, e a coleta completa do coletor de ciclos
+    # percorre todos com o GIL preso: as threads de envio e de pedidos param junto (só os módulos do
+    # servidor, sem o PyGObject: ~19 mil objetos, 4-5 ms por coleta). Congelados, ela percorre só o
+    # que nasce durante o stream.
+    gc.freeze()
     srv.settimeout(0.5)
     if threading.current_thread() is threading.main_thread():
         # docker stop e systemctl stop (SIGTERM) encerram como o Ctrl+C: a captura para direito

@@ -456,6 +456,8 @@ class PipeSource(FrameSource):
     def _maybe_report(self) -> None:
         """Log da taxa da captura: 5 s depois do primeiro frame e depois a cada 60 s (como a GstSource)."""
         now = time.monotonic()
+        if self._report_at is not None and now < self._report_at:
+            return  # roda a cada frame: a cópia ordenada dos intervalos (snapshot) só na hora do log
         arrived, kept, iv = self.meter.snapshot()
         if self._report_at is None:
             self._report_at = now + 5
