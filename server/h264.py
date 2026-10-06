@@ -1,7 +1,7 @@
 """H.264 para o decoder de hardware do PSP: todo frame IDR (H264Encoder) ou
 frames P codificados na hora de enviar (H264PEncoder).
 
-Medido no PSP-3000 (psp/probe, wiki/Medições.md): todo frame IDR +
+Medido no PSP-3000 (psp/probe, wiki/Measurements.md): todo frame IDR +
 sceMpegAvcDecodeStop sai na hora, em ~3,7 ms direto na VRAM; frame P + 2
 cópias, sem Stop, em ~10,6 ms.
 

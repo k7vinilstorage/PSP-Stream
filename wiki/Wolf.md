@@ -1,117 +1,121 @@
-O PSPStream mostra no PSP o que roda num lobby do
-[Wolf](https://github.com/games-on-whales/wolf): a imagem, o som e os
-controles, ao lado do Moonlight e sem mudar nada no Wolf. Ele roda num
-container ao lado do Wolf e fala com a API dele. Como isso funciona por
-dentro está em [Wolf por dentro](Wolf-por-dentro).
+PSPStream shows on the PSP what runs in a
+[Wolf](https://github.com/games-on-whales/wolf) lobby: the image, the audio
+and the controls, next to Moonlight and without changing anything in Wolf.
+It runs in a container next to Wolf and talks to its API. How it works on
+the inside is in [Wolf Internals](Wolf-Internals).
 
-**Estado:** funciona num Wolf `stable` com NVIDIA, gerenciado pelo
-Portainer. A instalação do zero (`install.sh`, os compose completos) e as
-GPUs Intel/AMD foram testadas contra um Wolf falso, que imita a API e os
-pipelines do Wolf, mas não num Wolf de verdade.
+**Status:** it works on a `stable` Wolf with NVIDIA, managed by Portainer.
+The fresh install (`install.sh`, the full compose files) and the Intel/AMD
+GPUs were tested against a fake Wolf, which mimics Wolf's API and
+pipelines, but not on a real Wolf.
 
-Conteúdo:
+Contents:
 
-1. [O que é preciso](#1-o-que-é-preciso)
-2. [Instalação do zero com o instalador](#2-instalação-do-zero-com-o-instalador)
-3. [Instalação do zero à mão (compose)](#3-instalação-do-zero-à-mão-compose)
-4. [Pelo Portainer](#4-pelo-portainer)
-5. [Já tenho o Wolf](#5-já-tenho-o-wolf)
-6. [Primeiro uso: Moonlight, lobby e PSP](#6-primeiro-uso-moonlight-lobby-e-psp)
-7. [Interface web: no servidor ou na rede](#7-interface-web-no-servidor-ou-na-rede)
-8. [Configurações (`.env`)](#8-configurações-env)
-9. [Atualizar e desfazer](#9-atualizar-e-desfazer)
-10. [Problemas](#10-problemas)
+1. [What you need](#1-what-you-need)
+2. [Fresh install with the installer](#2-fresh-install-with-the-installer)
+3. [Fresh install by hand (compose)](#3-fresh-install-by-hand-compose)
+4. [Through Portainer](#4-through-portainer)
+5. [I already have Wolf](#5-i-already-have-wolf)
+6. [First use: Moonlight, lobby and PSP](#6-first-use-moonlight-lobby-and-psp)
+7. [Web interface: on the server or on the network](#7-web-interface-on-the-server-or-on-the-network)
+8. [Settings (`.env`)](#8-settings-env)
+9. [Updating and undoing](#9-updating-and-undoing)
+10. [Troubleshooting](#10-troubleshooting)
 
 ---
 
-## 1. O que é preciso
+## 1. What you need
 
-- Um servidor Linux com **Docker** e o plugin **compose**
+- A Linux server with **Docker** and the **compose** plugin
   (`docker compose version`).
-- Uma GPU para o Wolf codificar o vídeo do Moonlight:
-  - **NVIDIA**: driver 530.30.02 ou mais novo, o
+- A GPU for Wolf to encode the Moonlight video:
+  - **NVIDIA**: driver 530.30.02 or newer, the
     [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
-    1.16 ou mais novo (`sudo nvidia-ctk runtime configure --runtime=docker
-    && sudo systemctl restart docker`) e `nvidia-drm.modeset=1` (`cat
-    /sys/module/nvidia_drm/parameters/modeset` deve dizer `Y`);
-  - **Intel ou AMD**: nada além do driver do kernel (`/dev/dri`).
-- **O PSP e o servidor na mesma rede local.** O PSP só fala 802.11b
-  (2,4 GHz). No PSP, use o IP da LAN do servidor (`hostname -I`, algo como
-  `192.168.0.10`), e não o do Tailscale (`100.x.y.z`) nem os do Docker
-  (`172.x.y.z`).
-- O PSPStream no PSP (o mesmo EBOOT de sempre, das
+    1.16 or newer (`sudo nvidia-ctk runtime configure --runtime=docker
+    && sudo systemctl restart docker`) and `nvidia-drm.modeset=1` (`cat
+    /sys/module/nvidia_drm/parameters/modeset` must say `Y`);
+  - **Intel or AMD**: nothing besides the kernel driver (`/dev/dri`).
+- **The PSP and the server on the same local network.** The PSP only speaks
+  802.11b (2.4 GHz). On the PSP, use the server's LAN IP (`hostname -I`,
+  something like `192.168.0.10`), not the Tailscale one (`100.x.y.z`) nor
+  the Docker ones (`172.x.y.z`).
+- PSPStream on the PSP (the same EBOOT as always, from
   [Releases](https://github.com/k7vinilstorage/PSP-Stream/releases)).
 
-Portas no firewall do servidor (o instalador libera, se o ufw ou o
-firewalld estiverem ativos):
+Ports in the server firewall (the installer opens them, if ufw or firewalld
+is active):
 
-| quem | portas |
+| who | ports |
 |---|---|
-| PSPStream (o PSP) | 5123 UDP e TCP |
-| interface web na rede (opcional) | 5124 TCP |
-| Wolf (o Moonlight) | 47984, 47989, 48010 TCP; 47999, 48100, 48200 UDP |
+| PSPStream (the PSP) | 5123 UDP and TCP |
+| web interface on the network (optional) | 5124 TCP |
+| Wolf (Moonlight) | 47984, 47989, 48010 TCP; 47999, 48100, 48200 UDP |
 
 ---
 
-## 2. Instalação do zero com o instalador
+## 2. Fresh install with the installer
 
-Num servidor sem o Wolf. O instalador mostra cada comando e pergunta antes
-de mexer no sistema:
+On a server without Wolf. The installer shows each command and asks before
+changing the system:
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/k7vinilstorage/PSP-Stream/main/docker/install.sh
 sudo bash install.sh
 ```
 
-(De um clone do repositório: `sudo docker/install.sh`. Para ver tudo sem
-mudar nada: `--dry-run`.)
+(From a clone of the repository: `sudo docker/install.sh`. To see
+everything without changing anything: `--dry-run`. In Portuguese:
+`--lang pt`.)
 
-O que ele faz, em ordem:
+What it does, in order:
 
-1. **Confere o Docker** e se já existe um Wolf no servidor. Com um Wolf de
-   outra instalação, ele para e manda para a [seção 5](#5-já-tenho-o-wolf)
-   (dois Wolf na rede do host brigariam pelas portas).
-2. **Detecta a GPU**: NVIDIA (`nvidia-smi`), Intel/AMD (`/dev/dri`) ou
-   nenhuma. Com NVIDIA, confere o Container Toolkit, o runtime no Docker e o
-   `modeset`.
-3. **Prepara o sistema como a documentação do Wolf pede**: carrega os
-   módulos `uinput` e `uhid` (e em cada boot, em
-   `/etc/modules-load.d/wolf.conf`), e instala as regras udev do Wolf em
-   `/etc/udev/rules.d/85-wolf.rules`, baixadas do repositório do Wolf (elas
-   dão ao Wolf o acesso aos controles virtuais e os tiram do desktop do
-   servidor).
-4. **Libera as portas** no ufw ou no firewalld, se estiverem ativos.
-5. **Escreve a configuração** em `/opt/wolf-pspstream`: os compose e um
-   `.env` (permissão 600) com a GPU detectada e, se você quiser, a interface
-   web aberta para a rede com uma senha gerada na hora.
-6. **Baixa as imagens e sobe** o Wolf e o PSPStream. Se a imagem pronta do
-   PSPStream não estiver disponível, compila a partir do GitHub.
-7. **Mostra os próximos passos**: o pareamento do Moonlight, o IP para o
-   PSP e a senha da interface web.
+1. **Checks Docker** and whether there is already a Wolf on the server.
+   With a Wolf from another install, it stops and points to
+   [section 5](#5-i-already-have-wolf) (two Wolfs on the host network would
+   fight over the ports).
+2. **Detects the GPU**: NVIDIA (`nvidia-smi`), Intel/AMD (`/dev/dri`) or
+   none. With NVIDIA, it checks the Container Toolkit, the runtime in
+   Docker and `modeset`.
+3. **Prepares the system as the Wolf documentation asks**: loads the
+   `uinput` and `uhid` modules (and on every boot, in
+   `/etc/modules-load.d/wolf.conf`), and installs the Wolf udev rules in
+   `/etc/udev/rules.d/85-wolf.rules`, downloaded from the Wolf repository
+   (they give Wolf access to the virtual controllers and keep them away
+   from the server desktop).
+4. **Opens the ports** in ufw or firewalld, if active.
+5. **Writes the configuration** to `/opt/wolf-pspstream`: the compose files
+   and a `.env` (permission 600) with the detected GPU and, if you want, the
+   web interface open to the network with a password generated on the spot.
+6. **Pulls the images and starts** Wolf and PSPStream. If the ready
+   PSPStream image is not available, it builds it from GitHub.
+7. **Shows the next steps**: the Moonlight pairing, the IP for the PSP and
+   the web interface password.
 
-Opções úteis:
+Useful options:
 
-| opção | para quê |
+| option | what for |
 |---|---|
-| `--gpu nvidia\|intel\|amd\|cpu` | pula a detecção |
-| `--dir PASTA` | outra pasta em vez de `/opt/wolf-pspstream` |
-| `--ref BRANCH` | os arquivos de outro branch ou tag do repositório |
-| `--yes` | sem perguntas (sim para tudo) |
-| `--no-host` | não mexe no sistema (módulos, udev, firewall) |
-| `--no-start` | só prepara os arquivos |
-| `--only-pspstream` | o Wolf já roda em outro lugar: só o PSPStream ([seção 5](#5-já-tenho-o-wolf)) |
+| `--gpu nvidia\|intel\|amd\|cpu` | skips detection |
+| `--dir DIR` | another folder instead of `/opt/wolf-pspstream` |
+| `--ref BRANCH` | the files from another branch or tag of the repository |
+| `--lang pt` | installer in Portuguese, and `PSPSTREAM_LANG=pt` in the `.env` (server and web interface in Portuguese) |
+| `--yes` | no questions (yes to everything) |
+| `--no-host` | does not touch the system (modules, udev, firewall) |
+| `--no-start` | only prepares the files |
+| `--only-pspstream` | Wolf already runs elsewhere: PSPStream only ([section 5](#5-i-already-have-wolf)) |
 
-Rodar de novo atualiza os compose e as imagens e mantém o `.env`.
+Running it again updates the compose files and the images and keeps the
+`.env`.
 
-Depois: [seção 6](#6-primeiro-uso-moonlight-lobby-e-psp).
+Next: [section 6](#6-first-use-moonlight-lobby-and-psp).
 
 ---
 
-## 3. Instalação do zero à mão (compose)
+## 3. Fresh install by hand (compose)
 
-O mesmo que o instalador faz, passo a passo.
+The same the installer does, step by step.
 
-1. **Sistema** (como pede a documentação do Wolf):
+1. **System** (as the Wolf documentation asks):
 
    ```sh
    sudo modprobe uinput uhid
@@ -121,15 +125,15 @@ O mesmo que o instalador faz, passo a passo.
    sudo udevadm control --reload-rules && sudo udevadm trigger
    ```
 
-2. **Arquivos**: a pasta [`docker/`](https://github.com/k7vinilstorage/PSP-Stream/tree/main/docker) do repositório tem:
+2. **Files**: the [`docker/`](https://github.com/k7vinilstorage/PSP-Stream/tree/main/docker) folder of the repository has:
 
-   | arquivo | o quê |
+   | file | what |
    |---|---|
    | `compose.yml` | Wolf (Intel/AMD) + PSPStream |
    | `compose.nvidia.yml` | Wolf (NVIDIA) + PSPStream |
-   | `pspstream.yml` | só o PSPStream (o Wolf já roda) |
-   | `build.yml` | compila o PSPStream em vez de baixar a imagem |
-   | `.env.example` | as configurações ([seção 8](#8-configurações-env)) |
+   | `pspstream.yml` | PSPStream only (Wolf already runs) |
+   | `build.yml` | builds PSPStream instead of pulling the image |
+   | `.env.example` | the settings ([section 8](#8-settings-env)) |
 
    ```sh
    sudo mkdir -p /opt/wolf-pspstream && cd /opt/wolf-pspstream
@@ -139,10 +143,11 @@ O mesmo que o instalador faz, passo a passo.
    sudo cp .env.example .env && sudo chmod 600 .env
    ```
 
-3. **Configuração**: no `.env`, `COMPOSE_FILE=compose.nvidia.yml` (NVIDIA) ou
-   `compose.yml` (Intel/AMD), e o resto da [seção 8](#8-configurações-env).
+3. **Configuration**: in `.env`, `COMPOSE_FILE=compose.nvidia.yml` (NVIDIA)
+   or `compose.yml` (Intel/AMD), and the rest of
+   [section 8](#8-settings-env).
 
-4. **Subir**:
+4. **Start**:
 
    ```sh
    sudo docker compose up -d
@@ -151,257 +156,269 @@ O mesmo que o instalador faz, passo a passo.
 
 ---
 
-## 4. Pelo Portainer
+## 4. Through Portainer
 
-**Com o repositório Git (recomendado; atualiza com um clique):** *Stacks* →
-*Add stack* → **Repository**:
+**With the Git repository (recommended; updates with one click):**
+*Stacks* → *Add stack* → **Repository**:
 
-| campo | valor |
+| field | value |
 |---|---|
 | Repository URL | `https://github.com/k7vinilstorage/PSP-Stream` |
-| Repository reference | `refs/heads/main` (antes do merge: `refs/heads/claude/psp-pc-screen-stream-lou5q7`) |
-| Compose path | `docker/compose.nvidia.yml` (NVIDIA), `docker/compose.yml` (Intel/AMD) ou `docker/pspstream.yml` (o Wolf já roda) |
-| Environment variables | as da [seção 8](#8-configurações-env) que você quiser mudar (ex.: `PSPSTREAM_WEB=0.0.0.0:5124` e `PSPSTREAM_WEB_PASSWORD=...`) |
+| Repository reference | `refs/heads/main` (before the merge: `refs/heads/claude/psp-pc-screen-stream-lou5q7`) |
+| Compose path | `docker/compose.nvidia.yml` (NVIDIA), `docker/compose.yml` (Intel/AMD) or `docker/pspstream.yml` (Wolf already runs) |
+| Environment variables | the ones from [section 8](#8-settings-env) you want to change (e.g. `PSPSTREAM_WEB=0.0.0.0:5124` and `PSPSTREAM_WEB_PASSWORD=...`) |
 
-Para atualizar: *Pull and redeploy* na stack (marcando "re-pull image").
+To update: *Pull and redeploy* on the stack (checking "re-pull image").
 
-**Com o editor web:** cole o conteúdo de um dos compose em *Web editor* e as
-variáveis em *Environment variables*.
+**With the web editor:** paste the content of one of the compose files in
+*Web editor* and the variables in *Environment variables*.
 
-O sistema (módulos e regras udev do passo 1 da [seção 3](#3-instalação-do-zero-à-mão-compose))
-continua sendo feito no servidor, uma vez.
+The system part (modules and udev rules from step 1 of
+[section 3](#3-fresh-install-by-hand-compose)) is still done on the
+server, once.
 
 ---
 
-## 5. Já tenho o Wolf
+## 5. I already have Wolf
 
-Foi o caso testado: o Wolf já roda (por exemplo na stack `steam` do
-Portainer, container `steam-wolf-1`).
+This was the tested case: Wolf already runs (for example in Portainer's
+`steam` stack, container `steam-wolf-1`).
 
-1. **No serviço do Wolf, duas linhas**: o socket da API passa a aparecer no
-   host, em `/var/run/wolf`. A configuração padrão do Wolf UI já o procura
-   lá, então ele continua funcionando.
+1. **In the Wolf service, two lines**: the API socket starts showing up on
+   the host, in `/var/run/wolf`. Wolf UI's default configuration already
+   looks for it there, so it keeps working.
 
    ```yaml
    services:
      wolf:
-       # ... o que você já tem ...
+       # ... what you already have ...
        environment:
          - WOLF_SOCKET_PATH=/var/run/wolf/wolf.sock
        volumes:
          - /var/run/wolf:/var/run/wolf
    ```
 
-   Atualize a stack (o Wolf reinicia; o Moonlight cai e conecta de novo) e
-   confira:
+   Update the stack (Wolf restarts; Moonlight drops and reconnects) and
+   check:
 
    ```sh
    ls -l /var/run/wolf/       # srwxr-xr-x root root ... wolf.sock
    sudo curl -s --unix-socket /var/run/wolf/wolf.sock http://localhost/api/v1/lobbies; echo
    ```
 
-2. **O PSPStream, numa stack separada** com o
-   [`docker/pspstream.yml`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/docker/pspstream.yml), pelo Portainer (seção 4,
-   compose path `docker/pspstream.yml`) ou na linha de comando:
+   The API socket gives full control of Wolf (pairing clients, starting
+   apps): mount it only in the PSPStream container (read-only, as the
+   compose files do) and never expose it over TCP.
+
+2. **PSPStream, in a separate stack** with
+   [`docker/pspstream.yml`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/docker/pspstream.yml),
+   through Portainer (section 4, compose path `docker/pspstream.yml`) or on
+   the command line:
 
    ```sh
    sudo bash install.sh --only-pspstream
    ```
 
-   Se o seu Wolf mudou as portas de ping (`WOLF_VIDEO_PING_PORT`,
-   `WOLF_AUDIO_PING_PORT`), repita os valores no `.env` do PSPStream. Para
-   saber: `docker inspect steam-wolf-1 --format '{{range .Config.Env}}{{println .}}{{end}}' | grep WOLF_`.
+   If your Wolf changed the ping ports (`WOLF_VIDEO_PING_PORT`,
+   `WOLF_AUDIO_PING_PORT`), repeat the values in PSPStream's `.env`. To find
+   out: `docker inspect steam-wolf-1 --format '{{range .Config.Env}}{{println .}}{{end}}' | grep WOLF_`.
 
-3. **Firewall**: 5123 UDP e TCP (e 5124 TCP para a interface web na rede).
+3. **Firewall**: 5123 UDP and TCP (and 5124 TCP for the web interface on
+   the network).
 
 ---
 
-## 6. Primeiro uso: Moonlight, lobby e PSP
+## 6. First use: Moonlight, lobby and PSP
 
-1. **Moonlight**: adicione o servidor pelo IP. Na primeira vez, o Moonlight
-   mostra um PIN, e o Wolf escreve no log um link para digitá-lo:
+1. **Moonlight**: add the server by IP. The first time, Moonlight shows a
+   PIN, and Wolf writes a link to type it in the log:
 
    ```sh
    cd /opt/wolf-pspstream && sudo docker compose logs wolf | grep -i pin
    ```
 
-   (troque `localhost` no link pelo IP do servidor). Instalação de uma vez:
-   na primeira vez que abre um app, o Wolf baixa a imagem dele, o que pode
-   levar alguns minutos com a tela preta.
+   (replace `localhost` in the link with the server IP). A one-time setup:
+   the first time an app opens, Wolf pulls its image, which can take a few
+   minutes with a black screen.
 
-2. **Abra um jogo pelo Wolf UI**. O Wolf UI cria um **lobby**, de um de dois
-   jeitos:
+2. **Open a game through Wolf UI**. Wolf UI creates a **lobby**, in one of
+   two ways:
 
-   | botão | lobby | o PSP |
+   | button | lobby | the PSP |
    |---|---|---|
-   | **Start** | de um jogador só | **assiste** enquanto o Moonlight estiver nele. Saindo do Moonlight (fechando o stream), o lobby continua rodando, e o PSP entra sozinho e passa a ser **o único controle** (o jogador 1) |
-   | **Coop** | de vários jogadores | entra junto e joga como **mais um controle** (o do Moonlight, se houver, é o primeiro) |
+   | **Start** | single player | **watches** while Moonlight is in it. Leaving Moonlight (closing the stream), the lobby keeps running, and the PSP joins by itself and becomes **the only controller** (player 1) |
+   | **Coop** | multiplayer | joins and plays as **one more controller** (Moonlight's, if any, is the first) |
 
-   O Wolf UI cria os dois tipos sem "fechar quando todos saírem", então o
-   lobby continua aberto até alguém pará-lo pelo Wolf UI.
+   Wolf UI creates both kinds without "stop when everyone leaves", so the
+   lobby stays open until someone stops it through Wolf UI.
 
-3. **No PSP**: PSPStream → **Procurar o PC na rede** (ou o IP da LAN do
-   servidor, porta 5123). O log do PSPStream mostra:
+3. **On the PSP**: PSPStream → **Find the PC on the network** (or the
+   server's LAN IP, port 5123). The PSPStream log shows:
 
    ```
-   Wolf: sessão ... espelhando lobby <jogo> (...), conversão nvidia
-   controles: a sessão do PSP entrou no lobby <jogo> (...); o controle virtual vai para o jogo
-   PSP conectado via UDP: 192.168.0.50:...
+   Wolf: session ... mirroring lobby <game> (...), conversion nvidia
+   controls: the PSP session joined lobby <game> (...); the virtual controller goes to the game
+   PSP connected over UDP: 192.168.0.50:...
    ```
 
-### Os controles no jogo
+### Controls in the game
 
-O PSP chega ao jogo como **um controle de Xbox**. Num lobby Coop com o
-Moonlight usando um controle, o do PSP é o segundo: o jogo (ou o Steam Big
-Picture) pode pedir para escolher qual controle é de qual jogador. Para o
-PSP ser o primeiro, use Start e saia do Moonlight, ou deixe o Moonlight sem
-controle (sem um gamepad ligado nele, sem os controles na tela e sem a opção
-de manter o controle 1 sempre ligado, se o seu Moonlight tiver).
+The PSP reaches the game as **an Xbox controller**. In a Coop lobby with
+Moonlight using a controller, the PSP's is the second one: the game (or
+Steam Big Picture) may ask which controller belongs to which player. For
+the PSP to be the first, use Start and leave Moonlight, or leave Moonlight
+without a controller (no gamepad plugged into it, no on-screen controls and
+without the option to always keep controller 1 connected, if your Moonlight
+has it).
 
-| PSP | perfil `xbox` | segurando SELECT |
+| PSP | `xbox` profile | holding SELECT |
 |---|---|---|
-| X / círculo / quadrado / triângulo | A / B / X / Y | L3 / R3 / BACK / Guide |
-| direcional | direcional | analógico direito |
-| L / R | LT / RT (gatilho inteiro) | LB / RB |
-| START | Start | (SELECT + START é o menu do PSP) |
-| analógico | analógico esquerdo | analógico esquerdo |
+| cross / circle / square / triangle | A / B / X / Y | L3 / R3 / BACK / Guide |
+| D-pad | D-pad | right stick |
+| L / R | LT / RT (full trigger) | LB / RB |
+| START | Start | (SELECT + START is the PSP menu) |
+| analog stick | left stick | left stick |
 
-Um toque rápido no SELECT sozinho vale BACK. Outros perfis
+A quick tap on SELECT alone is BACK. Other profiles
 (`PSPSTREAM_PROFILE`):
-- `xbox-camera`: X/círculo/quadrado/triângulo viram o analógico direito
-  (câmera) e o direcional vira A/B/X/Y.
-- `xbox-ombros`: L/R = LB/RB, e SELECT + L/R = LT/RT.
+- `xbox-camera`: cross/circle/square/triangle become the right stick
+  (camera) and the D-pad becomes A/B/X/Y.
+- `xbox-shoulders`: L/R = LB/RB, and SELECT + L/R = LT/RT.
 
-START + cima + RB juntos é o atalho do Wolf UI e tira a sessão do lobby. No
-perfil `xbox-ombros`, isso é START + cima + R no PSP. Se acontecer, o
-PSPStream entra no lobby de novo em até 2 s.
+START + up + RB together is the Wolf UI shortcut and takes the session out
+of the lobby. In the `xbox-shoulders` profile, that is START + up + R on the
+PSP. If it happens, PSPStream joins the lobby again within 2 s.
 
 ---
 
-## 7. Interface web: no servidor ou na rede
+## 7. Web interface: on the server or on the network
 
-A interface web mostra o estado (o que está sendo espelhado, FPS, latência,
-som, controles) e muda as configurações com o PSP conectado. As mudanças
-ficam no volume `pspstream-config`.
+The web interface shows the state (what is being mirrored, FPS, latency,
+audio, controls) and changes the settings with the PSP connected. The
+changes stay in the `pspstream-config` volume.
 
-**Só no servidor (o padrão):** `PSPSTREAM_WEB=127.0.0.1:5124`. De outro PC,
-por um túnel SSH: `ssh -L 5124:127.0.0.1:5124 usuário@servidor` e
-http://localhost:5124.
+**On the server only (the default):** `PSPSTREAM_WEB=127.0.0.1:5124`. From
+another PC, through an SSH tunnel: `ssh -L 5124:127.0.0.1:5124 user@server`
+and http://localhost:5124.
 
-**Na rede local:** no `.env`,
+**On the local network:** in `.env`,
 
 ```sh
 PSPSTREAM_WEB=0.0.0.0:5124
-PSPSTREAM_WEB_PASSWORD=uma-senha-longa
+PSPSTREAM_WEB_PASSWORD=a-long-password
 ```
 
-e libere a porta 5124/tcp no firewall. Acesse **http://IP-do-servidor:5124**;
-o navegador pede usuário (qualquer um) e senha. Na rede local a senha vai
-sem criptografia (HTTP): serve para a casa, não para uma rede em que você
-não confia. Sem senha, quem alcança a porta muda as configurações.
+and open port 5124/tcp in the firewall. Go to **http://server-IP:5124**;
+the browser asks for a user (any) and password. On the local network the
+password goes unencrypted (HTTP): it is meant for home, not for a network
+you do not trust. Without a password, anyone who reaches the port can
+change the settings.
 
-A interface web só aceita endereços que conhece: `localhost`, o nome do
-servidor (e `nome.local`) e qualquer IP. Outro nome, como um do DNS do
-roteador, vai em `PSPSTREAM_WEB_HOSTS` (separados por vírgula); sem isso, a
-página responde `endereço não permitido`. É uma proteção contra ataques de
-DNS rebinding.
+The web interface only accepts addresses it knows: `localhost`, the server
+name (and `name.local`) and any IP. Another name, like one from the
+router's DNS, goes in `PSPSTREAM_WEB_HOSTS` (comma separated); without it,
+the page answers `address not allowed`. It is a protection against DNS
+rebinding attacks.
 
 ---
 
-## 8. Configurações (`.env`)
+## 8. Settings (`.env`)
 
-Ficam no `.env` da pasta dos compose (ou nas variáveis da stack do
-Portainer). Depois de mudar: `docker compose up -d`. O que a interface web
-muda vale mais que o `.env` e fica gravado no volume.
+They live in the `.env` of the compose folder (or in the Portainer stack
+variables). After changing: `docker compose up -d`. What the web interface
+changes wins over `.env` and is saved in the volume.
 
-| variável | padrão | o quê |
+| variable | default | what |
 |---|---|---|
-| `COMPOSE_FILE` | `compose.yml` | qual compose: `compose.yml`, `compose.nvidia.yml` ou `pspstream.yml` |
-| `PSPSTREAM_IMAGE` | `ghcr.io/k7vinilstorage/pspstream:nightly` | `nightly` (a `main`), `latest` (a última versão), `1.2` (uma versão) ou `pspstream:local` (compilada) |
-| `PSPSTREAM_VIDEO_CONVERT` | `auto` (`nvidia` no compose da NVIDIA) | como o Wolf desce a imagem da GPU: `nvidia`, `va` (Intel/AMD), `cpu` (Wolf com `WOLF_USE_ZERO_COPY=FALSE`) ou `auto` (tenta nessa ordem, ~10 s por tentativa que falha) |
-| `PSPSTREAM_WOLF_TARGET` | vazio = o único lobby aberto | o nome (ou id) do lobby a espelhar; com vários abertos, o log lista os nomes |
-| `PSPSTREAM_WOLF_PIN` | vazio | o PIN do lobby, se ele pede |
-| `PSPSTREAM_PROFILE` | `xbox` | `xbox`, `xbox-camera` ou `xbox-ombros` |
-| `PSPSTREAM_WEB` | `127.0.0.1:5124` | `0.0.0.0:5124` abre para a rede ([seção 7](#7-interface-web-no-servidor-ou-na-rede)) |
-| `PSPSTREAM_WEB_PASSWORD` | vazio | senha da interface web |
-| `PSPSTREAM_WEB_HOSTS` | vazio | nomes aceitos além do IP e do nome do servidor (ex.: um do DNS do roteador), separados por vírgula |
-| `WOLF_IMAGE` | `ghcr.io/games-on-whales/wolf:stable` | a imagem do Wolf |
-| `WOLF_VIDEO_PING_PORT`, `WOLF_AUDIO_PING_PORT` | 48100, 48200 | só se você mudou as do Wolf |
+| `COMPOSE_FILE` | `compose.yml` | which compose: `compose.yml`, `compose.nvidia.yml` or `pspstream.yml` |
+| `PSPSTREAM_IMAGE` | `ghcr.io/k7vinilstorage/pspstream:nightly` | `nightly` (`main`), `latest` (the latest version), `1.2` (one version) or `pspstream:local` (built) |
+| `PSPSTREAM_VIDEO_CONVERT` | `auto` (`nvidia` in the NVIDIA compose) | how Wolf brings the image down from the GPU: `nvidia`, `va` (Intel/AMD), `cpu` (Wolf with `WOLF_USE_ZERO_COPY=FALSE`) or `auto` (tries in that order, ~10 s per failed attempt) |
+| `PSPSTREAM_WOLF_TARGET` | empty = the only open lobby | the name (or id) of the lobby to mirror; with several open, the log lists the names |
+| `PSPSTREAM_WOLF_PIN` | empty | the lobby PIN, if it asks for one |
+| `PSPSTREAM_PROFILE` | `xbox` | `xbox`, `xbox-camera` or `xbox-shoulders` (the old name `xbox-ombros` still works) |
+| `PSPSTREAM_LANG` | `en` | language of the server messages and the web interface: `en` or `pt` |
+| `PSPSTREAM_WEB` | `127.0.0.1:5124` | `0.0.0.0:5124` opens it to the network ([section 7](#7-web-interface-on-the-server-or-on-the-network)) |
+| `PSPSTREAM_WEB_PASSWORD` | empty | web interface password |
+| `PSPSTREAM_WEB_HOSTS` | empty | names accepted besides the server IP and name (e.g. one from the router's DNS), comma separated |
+| `WOLF_IMAGE` | `ghcr.io/games-on-whales/wolf:stable` | the Wolf image |
+| `WOLF_VIDEO_PING_PORT`, `WOLF_AUDIO_PING_PORT` | 48100, 48200 | only if you changed Wolf's |
 
-Para outras opções do servidor (`--fps`, `--codec`, `-v`...), acrescente ao
-`command` do serviço `pspstream` no compose, por exemplo
+For other server options (`--fps`, `--codec`, `-v`...), add them to the
+`command` of the `pspstream` service in the compose file, for example
 `command: ["--source", "wolf", "--fps", "30", "-v"]`.
 
-### A imagem do PSPStream
+### The PSPStream image
 
-O CI publica a imagem em `ghcr.io/k7vinilstorage/pspstream` a cada push na
-`main` (`nightly` e `sha-<commit>`) e a cada versão (`latest` e `1.2`). Antes
-de o código ir para a `main`, ou se a imagem não baixar, compile:
+CI publishes the image at `ghcr.io/k7vinilstorage/pspstream` on every push
+to `main` (`nightly` and `sha-<commit>`) and on every version (`latest` and
+`1.2`). Before the code reaches `main`, or if the image does not pull,
+build it:
 
 ```sh
 cd /opt/wolf-pspstream
 sudo docker build -t pspstream:local "https://github.com/k7vinilstorage/PSP-Stream.git#main"
-# no .env: PSPSTREAM_IMAGE=pspstream:local
+# in .env: PSPSTREAM_IMAGE=pspstream:local
 ```
 
-(ou, de um clone: `docker compose -f compose.yml -f build.yml up -d --build`).
+(or, from a clone: `docker compose -f compose.yml -f build.yml up -d --build`).
 
 ---
 
-## 9. Atualizar e desfazer
+## 9. Updating and undoing
 
-**Atualizar:** rode o instalador de novo, ou:
+**Updating:** run the installer again, or:
 
 ```sh
 cd /opt/wolf-pspstream && sudo docker compose pull && sudo docker compose up -d
 ```
 
-No Portainer com Git: *Pull and redeploy*. O EBOOT do PSP só muda se a nota
-da versão disser.
+In Portainer with Git: *Pull and redeploy*. The PSP EBOOT only changes if
+the release notes say so.
 
-**Desfazer:**
+**Undoing:**
 
 ```sh
 cd /opt/wolf-pspstream && sudo docker compose down -v
 ```
 
-Isso apaga também o volume das configurações da interface web. O Wolf guarda
-o estado dele (pareamentos, apps) em `/etc/wolf`, que continua lá.
-Num Wolf que já existia, tire também as duas linhas do serviço dele.
+This also deletes the volume with the web interface settings. Wolf keeps
+its state (pairings, apps) in `/etc/wolf`, which stays there. On a Wolf
+that already existed, also remove the two lines from its service.
 
 ---
 
-## 10. Problemas
+## 10. Troubleshooting
 
-| no log do PSPStream | o que fazer |
+| in the PSPStream log | what to do |
 |---|---|
-| `o socket da API do Wolf não existe: /var/run/wolf/wolf.sock` | o Wolf não tem as duas linhas (`WOLF_SOCKET_PATH` e o volume `/var/run/wolf`) ou ainda está subindo: `ls -l /var/run/wolf/` |
-| `sem permissão para abrir /var/run/wolf/wolf.sock` | o serviço `pspstream` precisa de `user: "0:0"` (já vem nos compose); `ls -ld /var/run/wolf` deve ser `drwxr-xr-x root root` |
-| `ninguém atende em /var/run/wolf/wolf.sock` | o Wolf está parado ou reiniciando: `docker compose logs wolf` |
-| `nenhum lobby aberto no Wolf; esperando um` | abra um jogo pelo Wolf UI |
-| `há vários lobbies abertos no Wolf` | `PSPSTREAM_WOLF_TARGET=<nome>`; a mensagem lista os nomes |
-| `nenhum frame com a conversão ...` | a conversão não bate com a GPU do Wolf: `PSPSTREAM_VIDEO_CONVERT` (`nvidia`, `va`, `cpu`) e o erro em `docker compose logs wolf` |
-| `... entrar no lobby: ... Lobby is full` | lobby de um jogador (Start) com o Moonlight dentro: o PSP assiste até o Moonlight sair. Para jogar junto, use Coop |
+| `the Wolf API socket does not exist: /var/run/wolf/wolf.sock` | Wolf does not have the two lines (`WOLF_SOCKET_PATH` and the `/var/run/wolf` volume) or is still starting: `ls -l /var/run/wolf/` |
+| `no permission to open /var/run/wolf/wolf.sock` | the `pspstream` service needs `user: "0:0"` (already in the compose files); `ls -ld /var/run/wolf` must be `drwxr-xr-x root root` |
+| `nobody answers at /var/run/wolf/wolf.sock` | Wolf is stopped or restarting: `docker compose logs wolf` |
+| `no lobby open in Wolf; waiting for one` | open a game through Wolf UI |
+| `there are several lobbies open in Wolf` | `PSPSTREAM_WOLF_TARGET=<name>`; the message lists the names |
+| `no frame with the ... conversion` | the conversion does not match Wolf's GPU: `PSPSTREAM_VIDEO_CONVERT` (`nvidia`, `va`, `cpu`) and the error in `docker compose logs wolf` |
+| `... join the lobby: ... Lobby is full` | single-player lobby (Start) with Moonlight in it: the PSP watches until Moonlight leaves. To play along, use Coop |
 | `... Invalid PIN` | `PSPSTREAM_WOLF_PIN` |
-| `o alvo é uma sessão Moonlight avulsa` | o alvo aponta para uma sessão fora de um lobby: só dá para assistir |
+| `the target is a standalone Moonlight session` | the target points to a session outside a lobby: it can only be watched |
 
-| sintoma | o que fazer |
+| symptom | what to do |
 |---|---|
-| o PSP não acha o servidor | firewall (5123 UDP e TCP), IP da LAN, "isolamento de clientes" no roteador |
-| tela preta no PSP | o log diz `espelhando lobby`? Se diz `nenhum frame`, veja a conversão acima |
-| imagem ok, os botões não fazem nada | o log diz `entrou no lobby`? Num lobby Start com o Moonlight dentro, o PSP só assiste. No jogo, o PSP pode ser o segundo controle ([seção 6](#os-controles-no-jogo)) |
-| a interface web pede senha e não aceita | a senha está em `PSPSTREAM_WEB_PASSWORD` no `.env` (o usuário pode ser qualquer um) |
-| `endereço não permitido` na interface web | um nome que ela não conhece: use o IP ou ponha o nome em `PSPSTREAM_WEB_HOSTS` |
-| o Wolf UI parou de abrir | em `/etc/wolf/cfg/config.toml`, o app Wolf UI deve montar `/var/run/wolf/wolf.sock:/var/run/wolf/wolf.sock` e ter `WOLF_SOCKET_PATH=/var/run/wolf/wolf.sock` (é o padrão do Wolf) |
+| the PSP does not find the server | firewall (5123 UDP and TCP), LAN IP, "client isolation" on the router |
+| black screen on the PSP | does the log say `mirroring lobby`? If it says `no frame`, see the conversion above |
+| image ok, the buttons do nothing | does the log say `joined lobby`? In a Start lobby with Moonlight in it, the PSP only watches. In the game, the PSP may be the second controller ([section 6](#controls-in-the-game)) |
+| the web interface asks for a password and does not accept it | the password is in `PSPSTREAM_WEB_PASSWORD` in `.env` (the user can be anything) |
+| `address not allowed` in the web interface | a name it does not know: use the IP or put the name in `PSPSTREAM_WEB_HOSTS` |
+| Wolf UI stopped opening | in `/etc/wolf/cfg/config.toml`, the Wolf UI app must mount `/var/run/wolf/wolf.sock:/var/run/wolf/wolf.sock` and have `WOLF_SOCKET_PATH=/var/run/wolf/wolf.sock` (it is Wolf's default) |
+| messages in Portuguese (or English) | `PSPSTREAM_LANG` in `.env`, or Language in the web interface (it wins over `.env`) |
 
-**O que mandar se não funcionar:**
+**What to send if it does not work:**
 
 ```sh
-cd /opt/wolf-pspstream    # ou a pasta/stack de vocês
+cd /opt/wolf-pspstream    # or your folder/stack
 sudo docker compose logs --tail 80 pspstream
 sudo docker compose logs --since 10m wolf 2>&1 | grep -iE "pspstream|gstreamer|pipeline|error|warn|lobby|api" | tail -80
 ls -l /var/run/wolf/
 ```
 
-Com `-v` no `command` do `pspstream`, o log mostra os pipelines que o
-PSPStream pede ao Wolf.
+With `-v` in the `command` of `pspstream`, the log shows the pipelines
+PSPStream asks Wolf for.

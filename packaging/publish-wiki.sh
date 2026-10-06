@@ -45,6 +45,6 @@ git -c core.quotepath=false diff --cached --stat
 rev=${GITHUB_SHA:-$(git -C "$root" rev-parse HEAD)}
 git -c user.name="github-actions[bot]" \
     -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-    commit -q -m "Wiki da pasta wiki/ em $(printf %.7s "$rev")"
+    commit -q -m "Wiki from the wiki/ folder at $(printf %.7s "$rev")"
 gitw push -q origin HEAD
 echo "wiki published"

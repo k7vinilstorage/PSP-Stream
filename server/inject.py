@@ -2,7 +2,7 @@
 
 uinput cria um teclado + mouse virtuais no kernel, então funciona no Wayland
 (o pynput não injeta entrada no Wayland) e em jogos. Requer acesso de
-escrita a /dev/uinput (wiki/Instalação.md).
+escrita a /dev/uinput (wiki/Installation.md).
 
 Os botões viram teclas assim que o pedido chega. O analógico vira movimento
 de mouse numa thread a 125 Hz: o PSP só manda a posição quando ela muda, e o

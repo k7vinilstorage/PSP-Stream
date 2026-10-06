@@ -2,164 +2,183 @@
 
 [![build](https://github.com/k7vinilstorage/PSP-Stream/actions/workflows/build.yml/badge.svg)](https://github.com/k7vinilstorage/PSP-Stream/actions/workflows/build.yml)
 
-Transmite a tela e o som do PC para um PSP pelo Wi-Fi e manda os botões do
-PSP de volta ao PC, como teclado e mouse ou como um controle de Xbox. O vídeo
-vai em H.264 com frames P, decodificado pelo hardware do PSP, e o som em IMA
-ADPCM. Inspirado no
-[RNDS-Stream](https://github.com/gavff64/RNDS-Stream), que faz o mesmo para o
-Nintendo DSi.
+**English** · [Português](README.pt-BR.md)
+
+Streams the PC screen and audio to a PSP over Wi-Fi and sends the PSP
+buttons back to the PC, as keyboard and mouse or as an Xbox controller. The
+video goes as H.264 with P frames, decoded by the PSP hardware, and the
+audio as IMA ADPCM. Inspired by
+[RNDS-Stream](https://github.com/gavff64/RNDS-Stream), which does the same
+for the Nintendo DSi.
 
 ```
  PC (Linux, Wayland)                                     PSP (homebrew)
  ┌───────────────────────────────────────┐   Wi-Fi     ┌──────────────────────────────┐
- │ captura KMS (60 fps) ou portal        │   802.11b   │ thread de rede: pedaços UDP, │
- │ GPU: reduz para 480x272               │ ──H.264──>  │   NACK, fila em ordem        │
- │ openh264: frame P na hora do pedido   │             │ Media Engine: decode H.264   │
- │ qualidade adaptativa à banda          │ <─pedido──  │   direto na VRAM             │
- │ uinput: teclado/mouse ou Xbox virtual │  + botões   │ tela de configuração         │
+ │ KMS capture (60 fps) or portal        │   802.11b   │ network thread: UDP chunks,  │
+ │ GPU: downscale to 480x272             │ ──H.264──>  │   NACK, in-order queue       │
+ │ openh264: P frame when asked          │             │ Media Engine: H.264 decode   │
+ │ quality adapted to the bandwidth      │ <─request─  │   straight into VRAM         │
+ │ uinput: keyboard/mouse or virtual Xbox│  + buttons  │ settings screen              │
  └───────────────────────────────────────┘             └──────────────────────────────┘
 ```
 
-A documentação completa está na **[wiki](https://github.com/k7vinilstorage/PSP-Stream/wiki)**.
+The full documentation is in the **[wiki](https://github.com/k7vinilstorage/PSP-Stream/wiki)**.
 
-## Recursos
+## Features
 
-- **Perto de 60 fps lisos no PSP-3000** com H.264 com frames P,
-  decodificado pelo Media Engine do PSP. Com a tela parada, cada frame tem
-  ~100 bytes.
-- **Captura a 60 fps** pela KMS (direto da placa de vídeo) ou pelo portal do
-  Wayland (GNOME, KDE).
-- **Som do PC** no PSP: IMA ADPCM a 44,1 kHz estéreo, ~46 KB/s.
-- **Controles**: um controle de Xbox 360 virtual, como no Sunshine, ou
-  teclado e mouse.
-- **UDP com recuperação de perdas** e qualidade adaptativa à vazão do Wi-Fi.
-- **Tela de configuração no PSP**, com "Procurar o PC na rede".
-- **Interface web** no PC para mudar as configurações com o PSP conectado.
-- **Wolf (Games on Whales)**: o lobby do Wolf no PSP, com som e controles,
-  num container ao lado dele.
+- **Close to 60 smooth fps on the PSP-3000** with H.264 with P frames,
+  decoded by the PSP Media Engine. With a still screen, each frame is ~100
+  bytes.
+- **60 fps capture** through KMS (straight from the graphics card) or the
+  Wayland portal (GNOME, KDE).
+- **PC audio** on the PSP: IMA ADPCM at 44.1 kHz stereo, ~46 KB/s.
+- **Controls**: a virtual Xbox 360 controller, as in Sunshine, or keyboard
+  and mouse.
+- **UDP with loss recovery** and quality adapted to the Wi-Fi throughput.
+- **Settings screen on the PSP**, with "Find the PC on the network".
+- **Web interface** on the PC to change the settings with the PSP connected.
+- **Wolf (Games on Whales)**: the Wolf lobby on the PSP, with audio and
+  controls, in a container next to it.
+- **English by default, Portuguese as an option**: server, web interface,
+  installer and the PSP screens.
 
-## Como funciona
+## How it works
 
-O PSP **pede** cada frame, e o servidor responde com o mais recente,
-codificado na hora (o modelo "pull" do RNDS-Stream). Assim nunca se forma
-fila na rede, e a latência fica perto de um frame.
+The PSP **asks** for each frame, and the server answers with the most
+recent one, encoded on the spot (RNDS-Stream's "pull" model). That way no
+queue ever builds up on the network, and latency stays close to one frame.
 
-1. O servidor captura a tela, reduz para 480x272 na GPU e codifica em H.264
-   (ou JPEG, para EBOOTs antigos) quando o pedido chega.
-2. O frame vai em pedaços UDP. Um pedaço perdido é pedido de novo (NACK), e
-   a qualidade se ajusta à vazão do Wi-Fi.
-3. O PSP decodifica no Media Engine, direto na memória de vídeo, e já pede o
-   próximo enquanto decodifica o atual.
-4. Os botões vão junto com cada pedido e viram teclado, mouse ou controle de
-   Xbox no PC (uinput).
-5. O som vai à parte, em pacotes de 20 ms, e não depende do vídeo.
+1. The server captures the screen, downscales it to 480x272 on the GPU and
+   encodes it as H.264 (or JPEG, for old EBOOTs) when the request arrives.
+2. The frame goes in UDP chunks. A lost chunk is asked for again (NACK),
+   and the quality adjusts to the Wi-Fi throughput.
+3. The PSP decodes on the Media Engine, straight into video memory, and
+   already asks for the next one while it decodes the current one.
+4. The buttons go along with each request and become keyboard, mouse or an
+   Xbox controller on the PC (uinput).
+5. The audio goes separately, in 20 ms packets, and does not depend on the
+   video.
 
-Os detalhes estão nas páginas
-[Protocolo](https://github.com/k7vinilstorage/PSP-Stream/wiki/Protocolo) e
-[Decisões técnicas](https://github.com/k7vinilstorage/PSP-Stream/wiki/Decisões-técnicas).
+The details are on the
+[Protocol](https://github.com/k7vinilstorage/PSP-Stream/wiki/Protocol) and
+[Design Decisions](https://github.com/k7vinilstorage/PSP-Stream/wiki/Design-Decisions)
+pages.
 
-## Início rápido
+## Quick start
 
-É preciso:
-- um PSP com firmware customizado;
-- um PC com Linux (Fedora, Ubuntu, Debian, Arch, openSUSE);
-- um roteador com Wi-Fi 2,4 GHz em modo misto b/g/n, porque o PSP só fala
-  802.11b.
+You need:
+- a PSP with custom firmware;
+- a Linux PC (Fedora, Ubuntu, Debian, Arch, openSUSE);
+- a router with 2.4 GHz Wi-Fi in b/g/n mixed mode, because the PSP only
+  speaks 802.11b.
 
-### 1. No PSP
+### 1. On the PSP
 
-1. Baixe o
+1. Download
    [`PSPStream-EBOOT.zip`](https://github.com/k7vinilstorage/PSP-Stream/releases/latest/download/PSPStream-EBOOT.zip)
-   e copie a pasta `PSP` para a raiz do memory stick.
-2. No XMB, crie a conexão com o roteador e, em **Ajustes de economia de
-   energia**, deixe a **Economia de energia WLAN** desligada.
+   and copy the `PSP` folder to the root of the memory stick.
+2. In the XMB, create the connection to the router and, in **Power Save
+   Settings**, leave **WLAN Power Save** off.
 
-### 2. No PC
+### 2. On the PC
 
-Com os pacotes das
+With the packages from
 [Releases](https://github.com/k7vinilstorage/PSP-Stream/releases)
-(`sudo apt install ./pspstream_*.deb` ou `sudo dnf install ./pspstream-*.rpm`),
-ou pelo código, em qualquer distribuição:
+(`sudo apt install ./pspstream_*.deb` or `sudo dnf install ./pspstream-*.rpm`),
+or from source, on any distribution:
 
 ```sh
 git clone https://github.com/k7vinilstorage/PSP-Stream && cd PSP-Stream
-python3 server/pspstream.py --setup      # instala o que falta, perguntando antes
+python3 server/pspstream.py --setup      # installs what is missing, asking first
 python3 server/pspstream.py --source kms --profile xbox
 ```
 
-Com o pacote, o comando é `pspstream`. O `--setup` cuida dos pacotes, da
-permissão dos controles, do firewall (porta 5123 UDP e TCP) e da captura
-KMS. Para só conferir, use `--check`.
+With the package, the command is `pspstream`. `--setup` takes care of the
+packages, the controls permission, the firewall (port 5123 UDP and TCP) and
+the KMS capture. To only check, use `--check`.
 
-### 3. Conectar
+### 3. Connect
 
-Abra o PSPStream no PSP, escolha **Procurar o PC na rede** (X) e aperte
-**START**. Das próximas vezes, ele conecta sozinho. As configurações do PC
-ficam em **http://localhost:5124**.
+Open PSPStream on the PSP, pick **Find the PC on the network** (X) and
+press **START**. The next times, it connects by itself. The PC settings
+are at **http://localhost:5124**.
 
-### Com o Wolf (Games on Whales)
+### With Wolf (Games on Whales)
 
-Num servidor com Docker, o instalador sobe o Wolf e o PSPStream:
+On a server with Docker, the installer starts Wolf and PSPStream:
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/k7vinilstorage/PSP-Stream/main/docker/install.sh
 sudo bash install.sh
 ```
 
-Para pôr o PSPStream ao lado de um Wolf que já existe, ou subir pelo
-Portainer, veja a página
-[Wolf](https://github.com/k7vinilstorage/PSP-Stream/wiki/Wolf).
+To put PSPStream next to an existing Wolf, or to deploy through Portainer,
+see the [Wolf](https://github.com/k7vinilstorage/PSP-Stream/wiki/Wolf)
+page.
 
-## Atalhos no PSP
+## Language
 
-Segure **SELECT + START** e aperte:
+Everything is in English by default. For Portuguese:
 
-| botão | faz |
+| where | how |
 |---|---|
-| triângulo | liga/desliga o overlay (FPS, KB por frame, tempos) |
-| cima | liga/desliga o som |
-| R | abre a tela de configuração |
-| L | troca o transporte TCP/UDP |
+| server and web interface | `--lang pt`, `PSPSTREAM_LANG=pt` or **Language** in the web interface |
+| PSP | `lang=pt` in `server.txt` or **Language / Idioma** on the settings screen |
+| Docker installer | `sudo bash install.sh --lang pt` |
 
-Os outros atalhos e o overlay estão em
-[Uso no PSP](https://github.com/k7vinilstorage/PSP-Stream/wiki/Uso-no-PSP).
-Os botões do controle de Xbox estão em
-[Controles](https://github.com/k7vinilstorage/PSP-Stream/wiki/Controles).
+More in [Server Options](https://github.com/k7vinilstorage/PSP-Stream/wiki/Server-Options#language).
 
-## Documentação
+## PSP shortcuts
 
-| página | o que tem |
+Hold **SELECT + START** and press:
+
+| button | does |
 |---|---|
-| [Instalação](https://github.com/k7vinilstorage/PSP-Stream/wiki/Instalação) | requisitos, pacotes por distribuição, firewall, uinput, captura KMS, compilar o EBOOT |
-| [Uso no PSP](https://github.com/k7vinilstorage/PSP-Stream/wiki/Uso-no-PSP) | tela de configuração, atalhos, overlay, `server.txt` |
-| [Controles](https://github.com/k7vinilstorage/PSP-Stream/wiki/Controles) | controle de Xbox, teclado e mouse, perfis próprios |
-| [Interface web](https://github.com/k7vinilstorage/PSP-Stream/wiki/Interface-web) | as configurações pelo navegador, na rede com senha |
-| [Wolf](https://github.com/k7vinilstorage/PSP-Stream/wiki/Wolf) | Docker, instalador, Portainer, lobbies Start e Coop |
-| [Opções do servidor](https://github.com/k7vinilstorage/PSP-Stream/wiki/Opções-do-servidor) | a linha de comando e a linha de estatística |
-| [Solução de problemas](https://github.com/k7vinilstorage/PSP-Stream/wiki/Solução-de-problemas) | sintoma e o que fazer |
-| [Desempenho](https://github.com/k7vinilstorage/PSP-Stream/wiki/Desempenho) | FPS, latência e banda medidos no PSP-3000 |
-| [Desenvolvimento](https://github.com/k7vinilstorage/PSP-Stream/wiki/Desenvolvimento) | builds, releases, testes, estrutura do código |
+| triangle | overlay on/off (FPS, KB per frame, timings) |
+| up | audio on/off |
+| R | opens the settings screen |
+| L | switches the transport TCP/UDP |
 
-Todas as páginas, inclusive o protocolo, as medições e as limitações, estão
-na [wiki](https://github.com/k7vinilstorage/PSP-Stream/wiki). Elas são
-geradas da pasta [`wiki/`](wiki) deste repositório. O histórico de versões
-está no [CHANGELOG.md](CHANGELOG.md).
+The other shortcuts and the overlay are in
+[Using the PSP](https://github.com/k7vinilstorage/PSP-Stream/wiki/Using-the-PSP).
+The Xbox controller buttons are in
+[Controls](https://github.com/k7vinilstorage/PSP-Stream/wiki/Controls).
 
-## Créditos
+## Documentation
 
-- [RNDS-Stream](https://github.com/gavff64/RNDS-Stream): a ideia do modelo
-  pull e do servidor + homebrew.
-- [pspdev](https://github.com/pspdev): toolchain e PSPSDK.
+| page | what it has |
+|---|---|
+| [Installation](https://github.com/k7vinilstorage/PSP-Stream/wiki/Installation) | requirements, packages per distribution, firewall, uinput, KMS capture, building the EBOOT |
+| [Using the PSP](https://github.com/k7vinilstorage/PSP-Stream/wiki/Using-the-PSP) | settings screen, shortcuts, overlay, `server.txt` |
+| [Controls](https://github.com/k7vinilstorage/PSP-Stream/wiki/Controls) | Xbox controller, keyboard and mouse, your own profiles |
+| [Web Interface](https://github.com/k7vinilstorage/PSP-Stream/wiki/Web-Interface) | the settings in the browser, on the network with a password |
+| [Wolf](https://github.com/k7vinilstorage/PSP-Stream/wiki/Wolf) | Docker, installer, Portainer, Start and Coop lobbies |
+| [Server Options](https://github.com/k7vinilstorage/PSP-Stream/wiki/Server-Options) | the command line, the language and the stats line |
+| [Troubleshooting](https://github.com/k7vinilstorage/PSP-Stream/wiki/Troubleshooting) | symptom and what to do |
+| [Performance](https://github.com/k7vinilstorage/PSP-Stream/wiki/Performance) | FPS, latency and bandwidth measured on the PSP-3000 |
+| [Development](https://github.com/k7vinilstorage/PSP-Stream/wiki/Development) | builds, releases, tests, translations, code layout |
+
+All the pages, including the protocol, the measurements and the
+limitations, are in the [wiki](https://github.com/k7vinilstorage/PSP-Stream/wiki).
+They are generated from the [`wiki/`](wiki) folder of this repository. The
+version history is in [CHANGELOG.md](CHANGELOG.md).
+
+## Credits
+
+- [RNDS-Stream](https://github.com/gavff64/RNDS-Stream): the idea of the
+  pull model and of the server + homebrew.
+- [pspdev](https://github.com/pspdev): toolchain and PSPSDK.
 - [openh264](https://www.openh264.org/) (Cisco), libjpeg-turbo, GStreamer,
-  PPSSPP (testes no emulador).
-- PMP Mod/PMPlayer: o caminho de decode H.264 cru no PSP (`sceMpegBasePESpacketCopy`).
-- [Sunshine](https://github.com/LizardByte/Sunshine): referência para a
-  captura KMS e o controle virtual.
-- [Wolf](https://github.com/games-on-whales/wolf) (Games on Whales): a API e
-  os lobbies que o `--source wolf` usa.
-- [Moonlight](https://moonlight-stream.org/): o formato dos pacotes de
-  controle que o Wolf recebe.
+  PPSSPP (emulator tests).
+- PMP Mod/PMPlayer: the raw H.264 decode path on the PSP
+  (`sceMpegBasePESpacketCopy`).
+- [Sunshine](https://github.com/LizardByte/Sunshine): reference for the KMS
+  capture and the virtual controller.
+- [Wolf](https://github.com/games-on-whales/wolf) (Games on Whales): the API
+  and the lobbies `--source wolf` uses.
+- [Moonlight](https://moonlight-stream.org/): the controller packet format
+  Wolf receives.
 
-## Licença
+## License
 
 [MIT](LICENSE), © 2026 João Torezan.

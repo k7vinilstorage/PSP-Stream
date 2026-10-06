@@ -15,7 +15,7 @@ Cada configuração diz quando a mudança vale (`apply`):
   restart  ao reiniciar o servidor
 
 Sem dependências fora da biblioteca padrão: serve também para o servidor de
-Windows (wiki/Servidor-para-Windows.md).
+Windows (wiki/Windows-Server-Plan.md).
 """
 import argparse
 import json
