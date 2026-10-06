@@ -1,6 +1,7 @@
 What you need, the ready-made downloads and installing from source. On
 Ubuntu there is a [step-by-step guide](Ubuntu-Guide). To use it with Wolf
-(Games on Whales), on a server with Docker, see the [Wolf](Wolf) page.
+(Games on Whales), on a server with Docker, see the [Wolf](Wolf) page. For
+the server on Windows, see [Windows](Windows).
 
 ## Requirements
 
@@ -19,6 +20,7 @@ In [Releases](https://github.com/k7vinilstorage/PSP-Stream/releases), with nothi
 | `PSPStream-EBOOT.zip` | the PSP app: copy the `PSP` folder to the root of the memory stick |
 | `pspstream_*.deb` | server for Ubuntu 22.04+ and Debian 12+: `sudo apt install ./pspstream_*.deb` |
 | `pspstream-*.rpm` | server for Fedora: `sudo dnf install ./pspstream-*.rpm` |
+| `PSPStream-Windows-x64.zip` | server for Windows 10/11, experimental: unzip and run `pspstream.exe` ([Windows](Windows)) |
 
 The most recent release is the stable version
 ([EBOOT directly](https://github.com/k7vinilstorage/PSP-Stream/releases/latest/download/PSPStream-EBOOT.zip)).

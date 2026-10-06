@@ -31,6 +31,34 @@ git tag v1.2 && git push origin v1.2
 
 The release uses the version's section of `CHANGELOG.md` as its notes.
 
+The **Windows** job (`windows-2022`) downloads the official GStreamer
+runtime (MSVC 64-bit) as the project's wheels on PyPI, pinned with their
+hashes in `packaging/windows/gstreamer-wheels.txt`, and merges them into one
+folder with `packaging/windows/gstreamer.py` (nothing installed). It runs
+`tests/test_windows.py` against it, builds the zip with
+`packaging/windows/build.py` and tests the packaged `pspstream.exe` with
+`packaging/windows/smoke.py` (`--version`, `--check`, the Portuguese help
+and a stream to the fake PSP with audio and the web interface, in H.264 with
+P frames and in JPEG). A last, informational step tries the real screen
+capture on the runner. The zip goes to the run's artifacts, the `nightly`
+pre-release and the releases.
+
+`build.py` runs PyInstaller (`packaging/windows/pspstream.spec`, a folder,
+not a single exe) and copies only the GStreamer plugins the server uses
+(`PLUGINS` in the script) plus the DLLs they import, found by reading each
+file's import table with `pefile`. By hand, on Windows:
+
+```bat
+pip install pyinstaller pillow pefile
+python packaging\windows\gstreamer.py C:\gst
+python packaging\windows\build.py --gstreamer C:\gst
+```
+
+`--gstreamer` also takes an installed runtime
+(`C:\Program Files\gstreamer\1.0\msvc_x86_64`). To move to a new GStreamer,
+change the version and the hashes in `gstreamer-wheels.txt` (`pip hash`, or
+the files' page on PyPI).
+
 To build the packages by hand: `packaging/build-deb.sh` (needs `dpkg-deb`,
 `gcc`, `make`, `pkg-config` and `libdrm-dev`) and `packaging/build-rpm.sh`
 (`rpm-build`, `gcc`, `make`, `libdrm-devel`). The installed layout is the
@@ -87,7 +115,7 @@ comments and docstrings are in Portuguese.
 ## Tests
 
 ```sh
-python3 -m unittest discover tests                 # server: protocol, encoders, controls, capture, translations, documentation links
+python3 -m unittest discover tests                 # server: protocol, encoders, controls, capture, Windows path, translations, documentation links
 python3 server/pspstream.py --source test &
 python3 tools/fake_client.py --transport udp --h264p --seconds 10 --kbps 450 --decode-ms 11
 ```
@@ -155,6 +183,10 @@ server/                server (Python 3)
   capture.py           builds capture, audio and controls (at startup and from the web interface)
   distro.py, doctor.py distribution and packages; --check and --setup
   i18n.py, lang_pt.py  language: tr()/N_() and the Portuguese catalog
+  gst_pipe.py          capture through gst-launch-1.0 in a child process (the Windows server; PSPSTREAM_CAPTURE=pipe on Linux)
+  imaging.py           JPEG and still images through Pillow (no GStreamer in the process)
+  win_input.py, win_doctor.py   Windows: SendInput keyboard and mouse; --check and --setup
+  framerate.py         FPS limiter and capture rate meter (no GStreamer needed)
   paths.py             files in the repository or installed by the package
   settings.py          general settings: schema, server.json, validation
   control.py           applies the settings with the server running
@@ -172,7 +204,9 @@ server/                server (Python 3)
   stats.py, sources.py, jpeginfo.py, protocol.py, netcheck.py
 Dockerfile, docker/    server image; compose (Wolf + PSPStream, NVIDIA, PSPStream only), .env, install.sh
 packaging/             .deb and .rpm (install-tree.sh, build-deb.sh, pspstream.spec, build-rpm.sh);
-                       docker-test.sh (the image against the fake Wolf), compose-check.sh, publish-wiki.sh
+                       docker-test.sh (the image against the fake Wolf), compose-check.sh, publish-wiki.sh;
+                       windows/ (PyInstaller spec, gstreamer.py + gstreamer-wheels.txt, build.py with
+                       the GStreamer subset, smoke.py)
 .github/workflows/     build.yml (EBOOT, tests, packages, image, releases); wiki.yml (publishes the wiki)
 tools/                 fake_client.py, emu_*.py/sh, h264_probe_clips.py, kms/ (KMS helper)
 wiki/                  the pages of this wiki

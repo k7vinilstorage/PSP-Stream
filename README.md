@@ -39,6 +39,8 @@ The full documentation is in the **[wiki](https://github.com/k7vinilstorage/PSP-
 - **Web interface** on the PC to change the settings with the PSP connected.
 - **Wolf (Games on Whales)**: the Wolf lobby on the PSP, with audio and
   controls, in a container next to it.
+- **Windows server (experimental)**: a zip with `pspstream.exe`, screen
+  capture through Desktop Duplication, audio and keyboard/mouse.
 - **English by default, Portuguese as an option**: server, web interface,
   installer and the PSP screens.
 
@@ -68,7 +70,8 @@ pages.
 
 You need:
 - a PSP with custom firmware;
-- a Linux PC (Fedora, Ubuntu, Debian, Arch, openSUSE);
+- a Linux PC (Fedora, Ubuntu, Debian, Arch, openSUSE), or Windows 10/11
+  (experimental, [Windows](https://github.com/k7vinilstorage/PSP-Stream/wiki/Windows));
 - a router with 2.4 GHz Wi-Fi in b/g/n mixed mode, because the PSP only
   speaks 802.11b.
 
@@ -102,6 +105,14 @@ the KMS capture. To only check, use `--check`.
 Open PSPStream on the PSP, pick **Find the PC on the network** (X) and
 press **START**. The next times, it connects by itself. The PC settings
 are at **http://localhost:5124**.
+
+### On Windows (experimental)
+
+Download `PSPStream-Windows-x64.zip` from
+[Releases](https://github.com/k7vinilstorage/PSP-Stream/releases), unzip it,
+run `pspstream --setup` once (firewall rule and openh264) and then
+`pspstream`. Details on the
+[Windows](https://github.com/k7vinilstorage/PSP-Stream/wiki/Windows) page.
 
 ### With Wolf (Games on Whales)
 
@@ -156,6 +167,7 @@ The Xbox controller buttons are in
 | [Server Options](https://github.com/k7vinilstorage/PSP-Stream/wiki/Server-Options) | the command line, the language and the stats line |
 | [Troubleshooting](https://github.com/k7vinilstorage/PSP-Stream/wiki/Troubleshooting) | symptom and what to do |
 | [Performance](https://github.com/k7vinilstorage/PSP-Stream/wiki/Performance) | FPS, latency and bandwidth measured on the PSP-3000 |
+| [Windows](https://github.com/k7vinilstorage/PSP-Stream/wiki/Windows) | the server on Windows (experimental) |
 | [Development](https://github.com/k7vinilstorage/PSP-Stream/wiki/Development) | builds, releases, tests, translations, code layout |
 
 All the pages, including the protocol, the measurements and the

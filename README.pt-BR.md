@@ -55,6 +55,8 @@ continuam valendo.
 - **Interface web** no PC para mudar as configurações com o PSP conectado.
 - **Wolf (Games on Whales)**: o lobby do Wolf no PSP, com som e controles,
   num container ao lado dele.
+- **Servidor para Windows (experimental)**: um zip com o `pspstream.exe`,
+  captura da tela pelo Desktop Duplication, som e teclado/mouse.
 
 ## Como funciona
 
@@ -81,7 +83,8 @@ da wiki.
 
 É preciso:
 - um PSP com firmware customizado;
-- um PC com Linux (Fedora, Ubuntu, Debian, Arch, openSUSE);
+- um PC com Linux (Fedora, Ubuntu, Debian, Arch, openSUSE), ou Windows
+  10/11 (experimental, [Windows](https://github.com/k7vinilstorage/PSP-Stream/wiki/Windows));
 - um roteador com Wi-Fi 2,4 GHz em modo misto b/g/n, porque o PSP só fala
   802.11b.
 
@@ -119,6 +122,14 @@ Abra o PSPStream no PSP, escolha **Find the PC on the network** ("Procurar
 o PC na rede", em português) com X e aperte **START**. Das próximas vezes,
 ele conecta sozinho. As configurações do PC ficam em
 **http://localhost:5124**.
+
+### No Windows (experimental)
+
+Baixe o `PSPStream-Windows-x64.zip` das
+[Releases](https://github.com/k7vinilstorage/PSP-Stream/releases), descompacte,
+rode `pspstream --setup` uma vez (regra do firewall e openh264) e depois
+`pspstream --lang pt`. Detalhes na página
+[Windows](https://github.com/k7vinilstorage/PSP-Stream/wiki/Windows) da wiki.
 
 ### Com o Wolf (Games on Whales)
 
@@ -163,6 +174,7 @@ As páginas da wiki, em inglês:
 | [Server Options](https://github.com/k7vinilstorage/PSP-Stream/wiki/Server-Options) | a linha de comando, o idioma e a linha de estatística |
 | [Troubleshooting](https://github.com/k7vinilstorage/PSP-Stream/wiki/Troubleshooting) | sintoma e o que fazer |
 | [Performance](https://github.com/k7vinilstorage/PSP-Stream/wiki/Performance) | FPS, latência e banda medidos no PSP-3000 |
+| [Windows](https://github.com/k7vinilstorage/PSP-Stream/wiki/Windows) | o servidor no Windows (experimental) |
 | [Development](https://github.com/k7vinilstorage/PSP-Stream/wiki/Development) | builds, releases, testes, traduções, estrutura do código |
 
 Todas as páginas, inclusive o protocolo, as medições e as limitações, estão

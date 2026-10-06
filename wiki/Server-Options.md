@@ -11,6 +11,7 @@ be changed in the [Web Interface](Web-Interface), with the PSP connected.
 | `--source test` / `static --image file.png` | animated pattern / still image (tests) |
 | `--source x11` / `gst --gst-src "..."` | X11 session / your own GStreamer pipeline |
 | `--source wolf` | what runs in a Wolf lobby, through its API; `--wolf-target`, `--wolf-pin`, `--wolf-video-convert` (see [Wolf](Wolf#8-settings-env)) |
+| `--source screen`, `--monitor 1` | Windows: the monitor through Desktop Duplication (default there); `--monitor` picks which ([Windows](Windows)) |
 | `--profile xbox` | controls: `game` (default), `desktop`, `arrows`, `xbox`, `xbox-camera`, `xbox-shoulders` ([Controls](Controls)) |
 | `--codec auto` | `h264p` (default, if openh264 is there), `h264` (full frames only) or `jpeg` |
 | `--h264-encoder auto` | libopenh264 directly, with GStreamer as a fallback (default); `gstreamer` forces the old path |

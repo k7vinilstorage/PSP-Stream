@@ -6,6 +6,27 @@ EBOOT with another protocol version is refused with a warning in the log.
 
 ## 1.1 (in development)
 
+- **Windows server (experimental).** `PSPStream-Windows-x64.zip`
+  (Windows 10/11, 64-bit), built by CI with PyInstaller and the GStreamer
+  plugins it needs (GStreamer 1.28, from the project's official wheels on
+  PyPI, pinned by hash): unzip and run `pspstream.exe`. The capture runs in
+  GStreamer's `gst-launch-1.0` as a child process (no PyGObject on
+  Windows) and reaches the server over local TCP: the screen through
+  Desktop Duplication (`--source screen`, `--monitor`), scaled on the GPU
+  with a CPU fallback, and the audio through WASAPI loopback. Keyboard and
+  mouse through SendInput; the virtual Xbox controller is not there yet.
+  `--check` and `--setup` for Windows (GStreamer, openh264, the firewall
+  rule, the network profile, Cisco's openh264 DLL). The protocol, P
+  frames, adaptive quality, web interface and translations are the same
+  as on Linux. CI tests the packaged exe against the fake PSP; it was not
+  tested on a real PC with a PSP yet.
+- The receiver of the pipe capture ACKs every TCP segment: without it,
+  Nagle and the delayed ACK held frames for up to 150 ms (measured on
+  localhost).
+- `h264.py`, `audio.py` and the FPS limiter import without PyGObject;
+  JPEG and still images also work through Pillow.
+- [PC Client Plan](https://github.com/k7vinilstorage/PSP-Stream/wiki/PC-Client-Plan):
+  a receiver for Linux and Windows PCs (a plan).
 - **English by default, Portuguese as an option.** The server (log,
   `--help`, `--check`, errors), the web interface, the PSP screens
   (settings, overlay, messages), the KMS helper, the Docker installer and
