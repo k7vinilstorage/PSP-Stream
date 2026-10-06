@@ -16,7 +16,8 @@ EBOOT with another protocol version is refused with a warning in the log.
   with a CPU fallback, and the audio through WASAPI loopback. Keyboard and
   mouse through SendInput, and the virtual Xbox 360 controller (the `xbox`
   profiles) through the ViGEmBus driver, which the user installs once
-  (`--setup` opens its page); `vigem\ViGEmClient.dll` is built by CI from
+  (`--setup` downloads the official installer, version and SHA-256
+  pinned, and runs it as administrator); `vigem\ViGEmClient.dll` is built by CI from
   ViGEmClient's source.
   `--check` and `--setup` for Windows (GStreamer, openh264, the firewall
   rule, the network profile, Cisco's openh264 DLL, ViGEmBus). The protocol, P

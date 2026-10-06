@@ -6,8 +6,8 @@ libopenh264 (a do runtime do GStreamer, ou a do Cisco que o --setup baixa),
 o Pillow (JPEG), o SendInput (teclado e mouse) e, para os perfis xbox, o
 driver ViGEmBus. O --setup faz três coisas, perguntando antes: a regra do
 firewall (como administrador, pelo UAC), o download da DLL do openh264 do
-Cisco e, se o ViGEmBus faltar, abrir a página de download dele (um driver:
-instala quem baixa, como administrador).
+Cisco e, se o ViGEmBus faltar, baixar o instalador oficial dele (versão e
+hash fixos) e rodá-lo como administrador.
 """
 import bz2
 import hashlib
@@ -29,6 +29,12 @@ OPENH264_VERSION = "2.4.1"
 OPENH264_URL = ("https://github.com/cisco/openh264/releases/download/v{v}/openh264-{v}-win64.dll.bz2"
                 .format(v=OPENH264_VERSION))
 OPENH264_SHA256 = ""  # do .bz2; vazio = confere só que a DLL carrega e diz a versão certa
+# O instalador oficial do driver ViGEmBus (controle de Xbox virtual), numa versão fixa e com o hash
+# conferido; assinado por Nefarius Software Solutions e.U. É um driver: instala como administrador.
+VIGEMBUS_VERSION = "1.22.0"
+VIGEMBUS_FILE = f"ViGEmBus_{VIGEMBUS_VERSION}_x64_x86_arm64.exe"
+VIGEMBUS_URL = f"https://github.com/nefarius/ViGEmBus/releases/download/v{VIGEMBUS_VERSION}/{VIGEMBUS_FILE}"
+VIGEMBUS_SHA256 = "89220a7865076b342892f98865f3499fb7c4cfd673159e89d352c360fd014c6a"
 
 
 def _run(cmd, timeout=20) -> str:
@@ -103,8 +109,8 @@ def check_input(items):
     elif state == "no-bus":
         # opcional: o perfil padrão (game) é de teclado e mouse
         items.append(Item("Controls", "info", tr("ViGEmBus driver not installed: no virtual Xbox controller (the "
-                                                 "xbox profiles; pspstream --setup opens its download page). "
-                                                 "Keyboard and mouse work")))
+                                                 "xbox profiles; pspstream --setup installs it). Keyboard and "
+                                                 "mouse work")))
     else:
         items.append(Item("Controls", "warn", tr("virtual Xbox controller: {reason}").format(reason=detail)))
 
@@ -189,6 +195,35 @@ def add_firewall_rule(port: int) -> bool:
     return firewall_rule_exists()
 
 
+def download_vigembus(dest_dir: Path = None) -> Path:
+    """Baixa o instalador do ViGEmBus e confere o SHA-256. RuntimeError se não bater."""
+    import openh264
+    dest_dir = dest_dir or openh264.user_lib_dir().parent
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    with urllib.request.urlopen(VIGEMBUS_URL, timeout=120) as resp:  # noqa: S310 - endereço fixo, https
+        data = resp.read()
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != VIGEMBUS_SHA256:
+        raise RuntimeError(tr("the downloaded file does not match the expected checksum ({digest})").format(
+            digest=digest))
+    dest = dest_dir / VIGEMBUS_FILE
+    dest.write_bytes(data)
+    return dest
+
+
+def install_vigembus(setup_exe: Path, quiet: bool = False, log: Path = None) -> int:
+    """Roda o instalador como administrador (o UAC aparece) e espera. Devolve o código de saída."""
+    args = (["/quiet", "/norestart"] if quiet else []) + (["/log", str(log)] if log else [])
+    arg_list = ", ".join("'{}'".format(a.replace("'", "''")) for a in args)
+    script = "$p = Start-Process -FilePath '{}' -Verb RunAs -Wait -PassThru{}; exit $p.ExitCode".format(
+        str(setup_exe).replace("'", "''"), f" -ArgumentList {arg_list}" if args else "")
+    try:
+        return subprocess.run(["powershell", "-NoProfile", "-Command", script], timeout=900,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).returncode
+    except (OSError, subprocess.SubprocessError):
+        return -1
+
+
 def download_openh264(dest_dir: Path = None) -> Path:
     """Baixa a DLL do Cisco para %LOCALAPPDATA%\\PSPStream\\lib e confere que ela carrega."""
     import openh264
@@ -245,13 +280,19 @@ def setup(port: int = 5123, version: str = "", ask=input) -> int:
             print("  " + tr("skipped") + "\n")
     import win_gamepad
     if win_gamepad.bus_status()[0] == "no-bus":
-        print(tr("The virtual Xbox controller (the xbox profiles) needs the ViGEmBus driver. Open its download "
-                 "page? Install it as administrator, then run pspstream --check") + ":")
-        print(f"  {win_gamepad.DOWNLOAD_URL}")
-        if yes(tr("Open it? [y/N] ")):
-            import webbrowser
-            print("  " + (tr("done") if webbrowser.open(win_gamepad.DOWNLOAD_URL) else
-                          tr("failed: {command}").format(command="webbrowser")) + "\n")
+        print(tr("Install the ViGEmBus driver {version} (the virtual Xbox controller, the xbox profiles; "
+                 "the official installer, checksum checked, as administrator)").format(version=VIGEMBUS_VERSION)
+              + ":")
+        print(f"  {VIGEMBUS_URL}")
+        if yes(tr("Run it? [y/N] ")):
+            try:
+                code = install_vigembus(download_vigembus())
+                ok = win_gamepad.bus_status()[0] == "ok"
+                print("  " + (tr("done") if ok else tr("failed: {command}").format(
+                    command=tr("installer exit code {code}; install it by hand from {url}").format(
+                        code=code, url=win_gamepad.DOWNLOAD_URL))) + "\n")
+            except Exception as exc:  # noqa: BLE001 - rede, hash, disco
+                print("  " + tr("failed: {command}").format(command=exc) + "\n")
         else:
             print("  " + tr("skipped") + "\n")
     print(tr("Checking again:") + "\n")

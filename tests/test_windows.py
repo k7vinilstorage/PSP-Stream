@@ -387,6 +387,48 @@ class ViGEmReportTest(unittest.TestCase):
         self.assertEqual(lib.calls, ["alloc", "connect", "target_alloc", "add", "target_free", "disconnect", "free"])
 
 
+class ViGEmBusSetupTest(unittest.TestCase):
+    """O --setup baixa o instalador do ViGEmBus (hash fixo) e o roda como administrador."""
+
+    def test_download_checks_the_hash(self):
+        import hashlib
+        import tempfile
+        from unittest import mock
+        import win_doctor
+
+        class Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        good = b"installer"
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(win_doctor, "VIGEMBUS_SHA256", hashlib.sha256(good).hexdigest()):
+            with mock.patch("urllib.request.urlopen", return_value=Resp(good)) as urlopen:
+                path = win_doctor.download_vigembus(Path(tmp))
+            self.assertEqual(urlopen.call_args[0][0], win_doctor.VIGEMBUS_URL)
+            self.assertEqual(path.read_bytes(), good)
+            self.assertEqual(path.name, win_doctor.VIGEMBUS_FILE)
+            with mock.patch("urllib.request.urlopen", return_value=Resp(b"tampered")):
+                with self.assertRaisesRegex(RuntimeError, "checksum"):
+                    win_doctor.download_vigembus(Path(tmp) / "other")
+            self.assertFalse((Path(tmp) / "other" / win_doctor.VIGEMBUS_FILE).exists())
+
+    def test_install_runs_elevated(self):
+        from unittest import mock
+        import win_doctor
+        exe, log = Path("C:/x/it's.exe"), Path("C:/x/i.log")
+        with mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0)) as run:
+            self.assertEqual(win_doctor.install_vigembus(exe, quiet=True, log=log), 0)
+        script = run.call_args[0][0][-1]
+        self.assertIn("-Verb RunAs -Wait -PassThru", script)
+        self.assertIn("-FilePath '{}'".format(str(exe).replace("'", "''")), script)  # aspas simples dobradas
+        self.assertIn(f"-ArgumentList '/quiet', '/norestart', '/log', '{log}'", script)
+        self.assertTrue(script.endswith("exit $p.ExitCode"))
+
+
 @unittest.skipUnless(WINDOWS, "só no Windows")
 class ViGEmBusTest(unittest.TestCase):
     """O controle virtual de verdade, lido de volta pelo XInput. Precisa da ViGEmClient.dll e do driver

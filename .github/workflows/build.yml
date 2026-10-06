@@ -177,24 +177,23 @@ jobs:
         continue-on-error: true
         run: python packaging/windows/smoke.py dist/PSPStream --screen
       - name: virtual Xbox controller with the ViGEmBus driver (informational)
-        # instala o driver (versão fixa, assinatura conferida) e lê pelo XInput o que o PSP aperta
+        # instala o driver como o --setup (versão e hash fixos, assinatura conferida) e lê pelo XInput
+        # o que o PSP aperta
         continue-on-error: true
         timeout-minutes: 10
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
-          VIGEMBUS_VERSION: v1.22.0
           PSPSTREAM_VIGEMCLIENT: ${{ runner.temp }}\vigem\ViGEmClient.dll
           PSPSTREAM_REQUIRE_VIGEM: "1"
         run: |
-          gh release download $env:VIGEMBUS_VERSION --repo nefarius/ViGEmBus --pattern "*.exe" --dir "$env:RUNNER_TEMP\vigembus"
-          $setup = Get-ChildItem "$env:RUNNER_TEMP\vigembus" -Filter *.exe | Select-Object -First 1
-          "$($setup.Name) sha256 $((Get-FileHash $setup.FullName -Algorithm SHA256).Hash)"
-          $sig = Get-AuthenticodeSignature $setup.FullName
+          $dir = "$env:RUNNER_TEMP\vigembus"
+          $setup = python -c "import sys; sys.path.insert(0, 'server'); import win_doctor; from pathlib import Path; print(win_doctor.download_vigembus(Path(sys.argv[1])))" $dir
+          $sig = Get-AuthenticodeSignature $setup
           "signature: $($sig.Status), $($sig.SignerCertificate.Subject)"
           if ($sig.Status -ne "Valid" -or $sig.SignerCertificate.Subject -notmatch "Nefarius") { throw "unexpected signature" }
-          $p = Start-Process $setup.FullName -ArgumentList "/quiet", "/norestart" -Wait -PassThru
-          "installer exit code: $($p.ExitCode)"
+          python -c "import sys; sys.path.insert(0, 'server'); import win_doctor; from pathlib import Path; print('installer exit code', win_doctor.install_vigembus(Path(sys.argv[1]), quiet=True, log=Path(sys.argv[2])))" $setup "$dir\install.log"
+          Get-ChildItem $dir -Filter *.log | ForEach-Object { "==== $($_.Name)"; Get-Content $_.FullName -Tail 120 }
+          Get-PnpDevice -FriendlyName "*ViGEm*" -ErrorAction SilentlyContinue | Format-Table -AutoSize Status, Class, FriendlyName, InstanceId
           & dist\PSPStream\pspstream.exe --check
           python -m unittest -v tests.test_windows.ViGEmBusTest
       - uses: actions/upload-artifact@v4

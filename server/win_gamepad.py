@@ -5,7 +5,8 @@ xbox-shoulders e a camada do SELECT); aqui esse estado vira o XUSB_REPORT do ViG
 entrega aos jogos pelo XInput como um controle de Xbox 360 com fio.
 
 Precisa:
-- do driver ViGEmBus, instalado uma vez como administrador (pspstream --setup abre a página dele);
+- do driver ViGEmBus, instalado uma vez como administrador (pspstream --setup baixa o instalador oficial,
+  numa versão e com um hash fixos, e o roda);
 - da ViGEmClient.dll (MIT), que vai junto do pspstream.exe, compilada do código-fonte oficial no CI
   (packaging/windows/vigem.py). PSPSTREAM_VIGEMCLIENT aponta para outra.
 
@@ -118,8 +119,7 @@ def load_client():
 
 def error_text(code: int) -> str:
     if code == BUS_NOT_FOUND:
-        return tr("the ViGEmBus driver is not installed: pspstream --setup opens its download page "
-                  "(install it once, as administrator)")
+        return tr("the ViGEmBus driver is not installed: pspstream --setup installs it (once, as administrator)")
     if code == BUS_VERSION_MISMATCH:
         return tr("the ViGEmBus driver is too old: install the latest version ({url})").format(url=DOWNLOAD_URL)
     if code == NO_FREE_SLOT:

@@ -27,8 +27,7 @@ are welcome.
    `--setup` asks before each step: it creates the firewall rule for port
    5123 (UDP and TCP, the Windows UAC prompt appears), if no openh264
    library was found, downloads Cisco's, and, if the ViGEmBus driver is
-   missing, opens its download page (only for the Xbox controller, see
-   below).
+   missing, installs it (only for the Xbox controller, see below).
 4. Run the server:
 
    ```bat
@@ -71,9 +70,10 @@ XInput, with the same profiles and the same SELECT layer as on Linux
 driver, so this needs **ViGEmBus**, the same driver Sunshine and DS4Windows
 use:
 
-1. Install ViGEmBus once, as administrator, from its
-   [releases page](https://github.com/nefarius/ViGEmBus/releases/latest)
-   (`pspstream --setup` opens it).
+1. Install ViGEmBus once: `pspstream --setup` downloads the official
+   installer (version 1.22.0, its SHA-256 checked) and runs it as
+   administrator. By hand: its
+   [releases page](https://github.com/nefarius/ViGEmBus/releases/latest).
 2. `pspstream --check` shows `ok  ViGEmBus` under Controls.
 3. `pspstream --profile xbox`, or **Profile** in the web interface.
 
@@ -137,6 +137,6 @@ official wheels on PyPI (what the zip is built from).
 | black image in a full-screen game | some older games in exclusive full screen do not show in Desktop Duplication: use borderless window mode |
 | the controls do nothing in one program | Windows does not let a normal program send input to one running as administrator: run `pspstream.exe` as administrator too. Some anti-cheats ignore injected input |
 | no audio | `--check` lists `wasapi2src` and `adpcmenc`; with nothing playing, the loopback sends nothing (the PSP plays silence) |
-| "the ViGEmBus driver is not installed" | install it from its [releases page](https://github.com/nefarius/ViGEmBus/releases/latest) as administrator (`pspstream --setup` opens it), then `pspstream --check` |
+| "the ViGEmBus driver is not installed" | `pspstream --setup` installs it (accept the Windows UAC prompt), or install it from its [releases page](https://github.com/nefarius/ViGEmBus/releases/latest) as administrator; then `pspstream --check` |
 | the game does not see the Xbox controller | the game must read XInput (most PC games do); a game that only reads DirectInput sees it too, but with the triggers on one axis, as with a real Xbox 360 controller. `joy.cpl` (Win+R) shows whether the controller is there and its buttons |
 | antivirus warning | the exe is not signed (PyInstaller builds are sometimes flagged). The zip is built by GitHub Actions from this repository |
