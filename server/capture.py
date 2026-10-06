@@ -73,8 +73,10 @@ def open_wolf_injector(args, profile):
     from wolf_input import WolfInjector
     name = args.profile
     if profile.get("type") != "gamepad":
-        log.warning("controles: o perfil '%s' é de teclado e mouse; pelo Wolf os controles vão como um controle "
-                    "de Xbox: usando o perfil xbox (ou --profile xbox-camera, xbox-ombros)", name)
+        # o perfil padrão (jogo) é de teclado: com o Wolf, o padrão é o xbox, sem aviso
+        level = logging.INFO if name == "jogo" else logging.WARNING
+        log.log(level, "controles: o perfil '%s' é de teclado e mouse; pelo Wolf os controles vão como um "
+                "controle de Xbox: usando o perfil xbox (ou --profile xbox-camera, xbox-ombros)", name)
         name = "xbox"
         try:
             profile = load_profile(args.keymap, name)

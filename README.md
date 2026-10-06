@@ -455,7 +455,9 @@ de verdade.
 
 ### Instalação (Docker ou Portainer)
 
-O exemplo completo está em [`docker/compose.yml`](docker/compose.yml).
+O exemplo completo está em [`docker/compose.yml`](docker/compose.yml), e o
+passo a passo detalhado (Portainer, conferências em cada etapa, problemas)
+em [docs/WOLF.md](docs/WOLF.md).
 
 1. **No serviço `wolf`**, duas linhas: o socket da API passa a ficar em
    `/var/run/wolf` no host (é onde a configuração padrão do Wolf UI já o
@@ -778,7 +780,7 @@ packaging/             .deb e .rpm (install-tree.sh, build-deb.sh, pspstream.spe
                        docker-test.sh (a imagem contra o Wolf falso)
 .github/workflows/     build do EBOOT, testes, pacotes e releases
 tools/                 fake_client.py, emu_*.py/sh, h264_probe_clips.py, kms/ (auxiliar KMS)
-docs/                  PROTOCOL.md, MEASUREMENTS.md, UBUNTU.md (guia), WINDOWS.md (plano do servidor de Windows)
+docs/                  PROTOCOL.md, MEASUREMENTS.md, UBUNTU.md e WOLF.md (guias), WINDOWS.md (plano do servidor de Windows)
 tests/                 testes do servidor e da interface web; fake_wolf.py imita o Wolf
 ```
 

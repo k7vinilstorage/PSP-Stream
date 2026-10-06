@@ -718,11 +718,15 @@ class WolfInputTest(WolfCase):
         import capture
         import pspstream
         args = pspstream.build_parser().parse_args(["--source", "wolf", "--wolf-pin", "1234"])  # perfil jogo
-        with self.assertLogs("pspstream.capture", "WARNING") as logs:
+        with self.assertLogs("pspstream.capture", "INFO") as logs:  # o padrão: só informa
             inj, kind = capture.open_injector(args)
         self.addCleanup(inj.close)
         self.assertIsInstance(inj, wolf_input.WolfInjector)
-        self.assertIn("usando o perfil xbox", "\n".join(logs.output))
+        self.assertIn("INFO:pspstream.capture:controles: o perfil 'jogo' é de teclado", "\n".join(logs.output))
+        desktop = pspstream.build_parser().parse_args(["--source", "wolf", "--profile", "desktop"])
+        with self.assertLogs("pspstream.capture", "WARNING"):  # escolhido de propósito: avisa
+            inj2, _ = capture.open_injector(desktop)
+        self.addCleanup(inj2.close)
         self.assertIn("Wolf", kind)
         self.assertEqual(capture.build_source(args).pin, "1234")
         with self.assertRaises(SystemExit):
