@@ -612,7 +612,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--web-allow-host", action="append", metavar="NOME",
                    default=[h for h in os.environ.get("PSPSTREAM_WEB_HOSTS", "").replace(",", " ").split() if h],
                    help="nome aceito no endereço da interface web, além de localhost, do nome do PC e de IPs "
-                        "(ex.: o de um Cloudflare Tunnel); pode repetir. Padrão: PSPSTREAM_WEB_HOSTS, separados "
+                        "(ex.: um do DNS do roteador); pode repetir. Padrão: PSPSTREAM_WEB_HOSTS, separados "
                         "por vírgula")
     p.add_argument("--no-web", action="store_true", help="sem a interface web")
     p.add_argument("--config", default=str(settings.default_path()), metavar="ARQUIVO",

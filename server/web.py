@@ -8,11 +8,11 @@ no servidor de Windows. A página (web/) lê /api/config uma vez e
 Por padrão escuta só no próprio PC (127.0.0.1). Proteções, porque qualquer
 site aberto no navegador consegue mandar pedidos para o localhost:
   - Host: só "localhost", o nome do PC, um IP ou um nome liberado com
-    --web-allow-host (ex.: o de um Cloudflare Tunnel). Um domínio qualquer
+    --web-allow-host (ex.: um do DNS do roteador). Um domínio qualquer
     que aponte para 127.0.0.1 (DNS rebinding) é recusado.
   - Senha (PSPSTREAM_WEB_PASSWORD): autenticação básica do HTTP em tudo,
-    página e API, com espera de 1 s a cada senha errada. Na rede local ela
-    vai em texto (HTTP); por um túnel HTTPS, cifrada até o túnel.
+    página e API, com espera de 1 s a cada senha errada. Ela vai em texto
+    (HTTP): serve para a rede de casa.
   - POST: só com Content-Type application/json (um site de fora não manda
     isso sem a permissão do CORS, que este servidor nunca dá) e com Origin,
     se houver, igual ao Host.

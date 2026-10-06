@@ -171,8 +171,8 @@ de outra versão do protocolo é recusado com aviso no log.
   versão e `latest` a cada tag), depois de testá-la contra o Wolf falso.
 - **Interface web na rede, com senha:** `PSPSTREAM_WEB_PASSWORD`
   (autenticação básica do HTTP, na página e na API) e `--web-allow-host` /
-  `PSPSTREAM_WEB_HOSTS` para nomes como o de um Cloudflare Tunnel (serviço
-  `cloudflared` opcional nos compose). O padrão continua só no próprio PC.
+  `PSPSTREAM_WEB_HOSTS` para outros nomes do servidor (como um do DNS do
+  roteador). O padrão continua só no próprio PC.
 - Padrões por variável de ambiente para o Docker (a interface web ainda
   muda): `PSPSTREAM_WEB`, `PSPSTREAM_WOLF_TARGET`, `PSPSTREAM_VIDEO_CONVERT`,
   `PSPSTREAM_WOLF_PIN`, `PSPSTREAM_PROFILE`.

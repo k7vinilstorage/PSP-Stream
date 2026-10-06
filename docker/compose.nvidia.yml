@@ -73,17 +73,5 @@ services:
       - PSPSTREAM_WEB_HOSTS=${PSPSTREAM_WEB_HOSTS:-}
     command: ["--source", "wolf"]
 
-  cloudflared:
-    # Opcional: a interface web por um Cloudflare Tunnel (COMPOSE_PROFILES=cloudflare
-    # e CLOUDFLARE_TUNNEL_TOKEN no .env). Só a interface web: o PSP não passa por ele.
-    image: cloudflare/cloudflared:latest
-    profiles:
-      - cloudflare
-    network_mode: host
-    restart: unless-stopped
-    command: ["tunnel", "--no-autoupdate", "run"]
-    environment:
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:-}
-
 volumes:
   pspstream-config:

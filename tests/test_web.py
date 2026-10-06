@@ -121,7 +121,7 @@ class FakeController:
 
 
 class WebPasswordTest(unittest.TestCase):
-    """Senha (PSPSTREAM_WEB_PASSWORD) e nomes liberados (--web-allow-host): a rede local e um Cloudflare Tunnel."""
+    """Senha (PSPSTREAM_WEB_PASSWORD) e nomes liberados (--web-allow-host), para a interface web na rede local."""
 
     def setUp(self):
         self.ctl = FakeController()
@@ -166,8 +166,8 @@ class WebPasswordTest(unittest.TestCase):
         self.assertEqual(self.ctl.applied, [{"fps": 30}])
         self.assertTrue(self.srv.password)
 
-    def test_tunnel_host(self):
-        """Pelo Cloudflare Tunnel: Host com o domínio, Origin em https."""
+    def test_allowed_host(self):
+        """Nomes liberados (sem contar maiúsculas, ponto no fim e porta), e o Origin com o mesmo nome."""
         auth = self.basic("segredo çã")
         for host in ("psp.exemplo.com", "PSP.exemplo.com.", "outro.exemplo.com"):
             self.assertEqual(self.request("GET", "/api/config", {"Host": host, **auth})[0], 200, host)

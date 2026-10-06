@@ -407,8 +407,8 @@ usuário), e sem ela qualquer um na rede muda as configurações. Na rede
 local, a senha vai em HTTP, sem criptografia. `--no-web` desliga.
 
 A página recusa pedidos vindos de outros sites e endereços que não conhece
-(localhost, o nome do PC e IPs; outros nomes, como o de um Cloudflare
-Tunnel, com `--web-allow-host` ou `PSPSTREAM_WEB_HOSTS`; ver
+(localhost, o nome do PC e IPs; outros nomes, como um do DNS do
+roteador, com `--web-allow-host` ou `PSPSTREAM_WEB_HOSTS`; ver
 `server/web.py`), e nada nela recebe caminho de arquivo nem pipeline do
 GStreamer (`--source gst` e `--image` só pela linha de comando).
 
@@ -432,7 +432,7 @@ PSPStream ao lado de um Wolf que já roda), pelo Portainer a partir deste
 repositório, e com a imagem pronta `ghcr.io/k7vinilstorage/pspstream`.
 
 - **Passo a passo** (instalador, compose, Portainer, Wolf existente,
-  primeiro uso, interface web na rede ou por Cloudflare Tunnel,
+  primeiro uso, interface web na rede,
   configurações, problemas): [docs/WOLF.md](docs/WOLF.md).
 - **Como funciona por dentro** (a sessão no Wolf, os pipelines, o som, os
   pacotes de controle, a reconexão, a segurança e o que foi conferido no

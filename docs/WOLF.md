@@ -19,7 +19,7 @@ Conteúdo:
 4. [Pelo Portainer](#4-pelo-portainer)
 5. [Já tenho o Wolf](#5-já-tenho-o-wolf)
 6. [Primeiro uso: Moonlight, lobby e PSP](#6-primeiro-uso-moonlight-lobby-e-psp)
-7. [Interface web: no servidor, na rede ou pela internet](#7-interface-web-no-servidor-na-rede-ou-pela-internet)
+7. [Interface web: no servidor ou na rede](#7-interface-web-no-servidor-ou-na-rede)
 8. [Configurações (`.env`)](#8-configurações-env)
 9. [Atualizar e desfazer](#9-atualizar-e-desfazer)
 10. [Problemas](#10-problemas)
@@ -280,7 +280,7 @@ PSPStream entra no lobby de novo em até 2 s.
 
 ---
 
-## 7. Interface web: no servidor, na rede ou pela internet
+## 7. Interface web: no servidor ou na rede
 
 A interface web mostra o estado (o que está sendo espelhado, FPS, latência,
 som, controles) e muda as configurações com o PSP conectado. As mudanças
@@ -290,7 +290,7 @@ ficam no volume `pspstream-config`.
 por um túnel SSH: `ssh -L 5124:127.0.0.1:5124 usuário@servidor` e
 http://localhost:5124.
 
-**Na rede local, sem túnel:** no `.env`,
+**Na rede local:** no `.env`,
 
 ```sh
 PSPSTREAM_WEB=0.0.0.0:5124
@@ -302,34 +302,11 @@ o navegador pede usuário (qualquer um) e senha. Na rede local a senha vai
 sem criptografia (HTTP): serve para a casa, não para uma rede em que você
 não confia. Sem senha, quem alcança a porta muda as configurações.
 
-**Pela internet, com um Cloudflare Tunnel:** dá para a **interface web**.
-O stream do PSP não passa por ele: o PSP fala UDP e TCP direto com a porta
-5123, sem TLS e sem um cliente do Cloudflare, e precisa estar na mesma rede
-do servidor.
-
-1. No Cloudflare (*Zero Trust* → *Networks* → *Tunnels*), crie um túnel do
-   tipo **cloudflared** e copie o token.
-2. No túnel, um **public hostname**: `psp.seudominio.com` → serviço
-   `HTTP`, URL `localhost:5124`.
-3. No `.env`:
-
-   ```sh
-   COMPOSE_PROFILES=cloudflare
-   CLOUDFLARE_TUNNEL_TOKEN=eyJ...
-   PSPSTREAM_WEB_HOSTS=psp.seudominio.com
-   PSPSTREAM_WEB_PASSWORD=uma-senha-longa
-   ```
-
-   (`PSPSTREAM_WEB` pode continuar `127.0.0.1:5124`: o `cloudflared` roda na
-   rede do host e fala com o `localhost`.)
-4. `docker compose up -d`. O serviço `cloudflared` sobe junto, e a página
-   abre em https://psp.seudominio.com.
-
-Recomendado: uma política do **Cloudflare Access** na frente do hostname
-(por exemplo, um código por e-mail), além da senha. O `PSPSTREAM_WEB_HOSTS`
-é necessário porque a interface web só aceita endereços que conhece
-(localhost, o nome do servidor, IPs e os nomes dessa lista), contra ataques
-de DNS rebinding.
+A interface web só aceita endereços que conhece: `localhost`, o nome do
+servidor (e `nome.local`) e qualquer IP. Outro nome, como um do DNS do
+roteador, vai em `PSPSTREAM_WEB_HOSTS` (separados por vírgula); sem isso, a
+página responde `endereço não permitido`. É uma proteção contra ataques de
+DNS rebinding.
 
 ---
 
@@ -347,10 +324,9 @@ muda vale mais que o `.env` e fica gravado no volume.
 | `PSPSTREAM_WOLF_TARGET` | vazio = o único lobby aberto | o nome (ou id) do lobby a espelhar; com vários abertos, o log lista os nomes |
 | `PSPSTREAM_WOLF_PIN` | vazio | o PIN do lobby, se ele pede |
 | `PSPSTREAM_PROFILE` | `xbox` | `xbox`, `xbox-camera` ou `xbox-ombros` |
-| `PSPSTREAM_WEB` | `127.0.0.1:5124` | `0.0.0.0:5124` abre para a rede ([seção 7](#7-interface-web-no-servidor-na-rede-ou-pela-internet)) |
+| `PSPSTREAM_WEB` | `127.0.0.1:5124` | `0.0.0.0:5124` abre para a rede ([seção 7](#7-interface-web-no-servidor-ou-na-rede)) |
 | `PSPSTREAM_WEB_PASSWORD` | vazio | senha da interface web |
-| `PSPSTREAM_WEB_HOSTS` | vazio | nomes aceitos além do IP (ex.: o do Cloudflare Tunnel), separados por vírgula |
-| `COMPOSE_PROFILES`, `CLOUDFLARE_TUNNEL_TOKEN` | vazios | `cloudflare` e o token para subir o Cloudflare Tunnel |
+| `PSPSTREAM_WEB_HOSTS` | vazio | nomes aceitos além do IP e do nome do servidor (ex.: um do DNS do roteador), separados por vírgula |
 | `WOLF_IMAGE` | `ghcr.io/games-on-whales/wolf:stable` | a imagem do Wolf |
 | `WOLF_VIDEO_PING_PORT`, `WOLF_AUDIO_PING_PORT` | 48100, 48200 | só se você mudou as do Wolf |
 
@@ -417,7 +393,7 @@ Num Wolf que já existia, tire também as duas linhas do serviço dele.
 | tela preta no PSP | o log diz `espelhando lobby`? Se diz `nenhum frame`, veja a conversão acima |
 | imagem ok, os botões não fazem nada | o log diz `entrou no lobby`? Num lobby Start com o Moonlight dentro, o PSP só assiste. No jogo, o PSP pode ser o segundo controle ([seção 6](#os-controles-no-jogo)) |
 | a interface web pede senha e não aceita | a senha está em `PSPSTREAM_WEB_PASSWORD` no `.env` (o usuário pode ser qualquer um) |
-| `endereço não permitido` na interface web | um nome que ela não conhece (o do Cloudflare Tunnel): `PSPSTREAM_WEB_HOSTS` |
+| `endereço não permitido` na interface web | um nome que ela não conhece: use o IP ou ponha o nome em `PSPSTREAM_WEB_HOSTS` |
 | o Wolf UI parou de abrir | em `/etc/wolf/cfg/config.toml`, o app Wolf UI deve montar `/var/run/wolf/wolf.sock:/var/run/wolf/wolf.sock` e ter `WOLF_SOCKET_PATH=/var/run/wolf/wolf.sock` (é o padrão do Wolf) |
 
 **O que mandar se não funcionar:**
