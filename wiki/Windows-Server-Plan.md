@@ -1,5 +1,23 @@
-Status: **a plan, nothing implemented.** The EBOOT, the protocol and
-`server.txt` do not change: the PSP does not know which system the PC runs.
+Status: **phases W0-W2 and the keyboard/mouse half of W3 are implemented**
+(experimental; how to use it: [Windows](Windows)). This page is the plan,
+kept as the record of the decisions. What was done, against the plan:
+
+| plan | implemented |
+|---|---|
+| architecture B: `gst-launch-1.0` in a separate process | yes (`server/gst_pipe.py`), but over **local TCP** and not a pipe: on Windows the child's stdout may be in text mode (`\n` becomes `\r\n`). The receiver ACKs every segment (`SIO_TCP_SET_ACK_FREQUENCY`): without it, Nagle plus delayed ACK stalled frames by up to 150 ms (measured on Linux) |
+| `d3d11screencapturesrc` + `d3d11convert` + `d3d11download` | yes, with a CPU fallback (`videoscale`) if the GPU path does not start |
+| `wasapi2src loopback=true` + `adpcmenc` | yes |
+| JPEG with Pillow | yes (`server/imaging.py`, with the limited/full range conversion) |
+| `SendInput` with scancodes | yes (`server/win_input.py`) |
+| ViGEm (Xbox controller) | not yet |
+| PyInstaller folder + GStreamer subset | yes, as a zip built by CI (`packaging/windows/`); no Inno Setup installer or tray icon yet |
+| openh264: Cisco's DLL downloaded on first use | `pspstream --setup` downloads it; the bundled GStreamer's `openh264-7.dll` is used when there is no other |
+| CI on `windows-latest` | yes: the Windows tests, the build and a stream from the packaged exe to the fake PSP |
+| `timeBeginPeriod(1)` | not needed: Python 3.11+ already sleeps with a high-resolution timer |
+| DSCP through qWAVE, EcoQoS, PC Wi-Fi check with `netsh` | not yet |
+
+The EBOOT, the protocol and `server.txt` do not change: the PSP does not
+know which system the PC runs.
 
 Target: Windows 10 22H2 and Windows 11, x64. Parity with Linux: capture at
 60 fps, H.264 with P frames, audio, keyboard and mouse, Xbox controller, and

@@ -1072,4 +1072,99 @@ PT = {
         'Desfazer',
     'Apply':
         'Aplicar',
+    # server/capture.py, gst_pipe.py, imaging.py, win_input.py: servidor de Windows
+    'what plays on the speakers':
+        'o que sai nas caixas',
+    'the virtual Xbox controller is not available on Windows yet: use a keyboard and mouse profile (game, desktop, arrows)':
+        'o controle de Xbox virtual ainda não existe no Windows: use um perfil de teclado e mouse (game, desktop, arrows)',
+    'bundled':
+        'junto do PSPStream',
+    'GStreamer not found: install the GStreamer runtime (MSVC 64-bit) from gstreamer.freedesktop.org, or use the PSPStream build that bundles it':
+        'GStreamer não encontrado: instale o runtime do GStreamer (MSVC 64 bits) de gstreamer.freedesktop.org, ou use a versão do PSPStream que já o traz',
+    'no pipeline to try':
+        'nenhum pipeline para tentar',
+    'on Windows, the audio source is monitor (what plays on the speakers) or test':
+        'no Windows, a fonte do som é monitor (o que sai nas caixas) ou test',
+    'official installer':
+        'instalador oficial',
+    'capture: %s':
+        'captura: %s',
+    'Pillow is missing (pip install pillow)':
+        'falta o Pillow (pip install pillow)',
+    'gst-launch did not connect':
+        'o gst-launch não conectou',
+    'libopenh264 is missing (and there is no GStreamer in the process to fall back to)':
+        'falta a libopenh264 (e não há GStreamer no processo para usar no lugar)',
+    'SendInput only exists on Windows':
+        'o SendInput só existe no Windows',
+    'controls: Windows refused the input (a window running as administrator, or the lock screen?)':
+        'controles: o Windows recusou a entrada (uma janela rodando como administrador, ou a tela de bloqueio?)',
+    'keys the Windows server does not know: {codes}':
+        'teclas que o servidor de Windows não conhece: {codes}',
+    # server/pspstream.py e settings.py: opções do Windows
+    'screen = the monitor through Desktop Duplication (default); test = animated pattern; gst = your own GStreamer elements (--gst-src); static = an image':
+        'screen = o monitor pelo Desktop Duplication (padrão); test = padrão animado; gst = elementos do GStreamer próprios (--gst-src); static = uma imagem',
+    'screen: which monitor (0 = the main one)':
+        'screen: qual monitor (0 = o principal)',
+    'screen: do not draw the cursor':
+        'screen: não desenhar o cursor',
+    'audio: monitor (default) = what plays on the speakers (WASAPI loopback); test = 440 Hz tone':
+        'som: monitor (padrão) = o que sai nas caixas (loopback do WASAPI); test = tom de 440 Hz',
+    'check this machine (GStreamer, openh264, firewall) without starting the server':
+        'confere esta máquina (GStreamer, openh264, firewall) sem iniciar o servidor',
+    'prepare this machine: firewall rule and the openh264 library, asking before each step':
+        'prepara esta máquina: regra do firewall e a biblioteca openh264, perguntando antes de cada passo',
+    'screen: the monitor through Desktop Duplication (DXGI), with the scaling on the GPU when it can. test: animated pattern. static: still image.':
+        'screen: o monitor pelo Desktop Duplication (DXGI), com a redução na GPU quando dá. test: padrão animado. static: imagem fixa.',
+    'Monitor':
+        'Monitor',
+    '0 = the main monitor, 1 = the second one, and so on.':
+        '0 = o monitor principal, 1 = o segundo, e assim por diante.',
+    'monitor = what plays on the speakers (WASAPI loopback); test = 440 Hz tone.':
+        'monitor = o que sai nas caixas (loopback do WASAPI); test = tom de 440 Hz.',
+    'Keyboard and mouse through SendInput. The virtual Xbox controller is not available on Windows yet.':
+        'Teclado e mouse pelo SendInput. O controle de Xbox virtual ainda não existe no Windows.',
+    # server/win_doctor.py
+    'GStreamer {version} ({where}: {path})':
+        'GStreamer {version} ({where}: {path})',
+    'basic elements':
+        'elementos básicos',
+    'screen capture (Desktop Duplication)':
+        'captura da tela (Desktop Duplication)',
+    'scaling on the GPU (without it, on the CPU)':
+        'redução na GPU (sem ela, na CPU)',
+    'audio (WASAPI loopback, IMA ADPCM)':
+        'som (loopback do WASAPI, IMA ADPCM)',
+    'test pattern (--source test)':
+        'padrão de teste (--source test)',
+    'SendInput: keyboard and mouse':
+        'SendInput: teclado e mouse',
+    'virtual Xbox controller: not available on Windows yet':
+        'controle de Xbox virtual: ainda não existe no Windows',
+    'All set: pspstream':
+        'Tudo pronto: pspstream',
+    'GStreamer not found: the capture does not start without it. Use the PSPStream build that bundles it, or install the GStreamer runtime (MSVC 64-bit) from gstreamer.freedesktop.org':
+        'GStreamer não encontrado: a captura não abre sem ele. Use a versão do PSPStream que já o traz, ou instale o runtime do GStreamer (MSVC 64 bits) de gstreamer.freedesktop.org',
+    'Pillow: JPEG (old EBOOT or --codec jpeg) and still images':
+        'Pillow: JPEG (EBOOT antigo ou --codec jpeg) e imagens fixas',
+    'Pillow is missing (pip install pillow): no JPEG':
+        'falta o Pillow (pip install pillow): sem JPEG',
+    'no firewall rule for the port: Windows blocks the PSP (pspstream --setup creates it, as administrator)':
+        'nenhuma regra do firewall para a porta: o Windows bloqueia o PSP (o pspstream --setup cria, como administrador)',
+    "the network is Public: Windows blocks the PSP and the 'Find the PC' broadcast. In Settings > Network, make it Private":
+        "a rede está como Pública: o Windows bloqueia o PSP e o broadcast do 'Procurar o PC'. Em Configurações > Rede, deixe-a como Privada",
+    "Download Cisco's openh264 library (H.264 with P frames)":
+        'Baixar a biblioteca openh264 do Cisco (H.264 com frames P)',
+    ' (bundled)':
+        ' (junto do PSPStream)',
+    ': tested from 1.22 on':
+        ': testado a partir do 1.22',
+    "libopenh264 not found: without it the server sends JPEG (~10x more bytes per frame). pspstream --setup downloads Cisco's":
+        'libopenh264 não encontrada: sem ela o servidor manda JPEG (~10x mais bytes por frame). O pspstream --setup baixa a do Cisco',
+    'the downloaded file does not match the expected checksum ({digest})':
+        'o arquivo baixado não bate com o checksum esperado ({digest})',
+    'firewall rule {rule}':
+        'regra do firewall {rule}',
+    'network profile: {category}':
+        'perfil da rede: {category}',
 }

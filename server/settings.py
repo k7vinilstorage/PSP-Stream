@@ -29,6 +29,20 @@ from i18n import N_, tr
 
 log = logging.getLogger("pspstream.settings")
 
+WINDOWS = sys.platform == "win32"
+# Fontes de cada sistema (o servidor de Windows captura pelo gst-launch: gst_pipe.py).
+SOURCES = ("screen", "test", "static") if WINDOWS else ("portal", "kms", "x11", "test", "static", "wolf")
+SOURCE_HELP = (
+    N_("screen: the monitor through Desktop Duplication (DXGI), with the scaling on the GPU when it can. test: "
+       "animated pattern. static: still image.") if WINDOWS else
+    N_("portal: the screen through the Wayland portal (asks for permission the first time). kms: straight "
+       "from the graphics card, 60 fps on GNOME 50 (the helper needs permission to read the screen: "
+       "--setup gives it). x11: X11 session. test: animated pattern. static: still image. wolf: what runs "
+       "in Wolf (Games on Whales); shows up when the Wolf API socket exists."))
+# Configurações que só existem num dos sistemas.
+LINUX_ONLY = ("kms_monitor", "window", "wolf_target", "wolf_video_convert")
+WINDOWS_ONLY = ("monitor",)
+
 APPLY_TEXT = {
     "live": N_("applies right away"),
     "capture": N_("restarts the capture (the PSP stays connected)"),
@@ -69,12 +83,11 @@ SETTINGS = (
             N_("Language of this page and of the server messages (log, --check). English is the default."),
             "live", ("en", "pt"), flag="--lang"),
     # Captura
-    Setting("source", "source", "choice", N_("Capture"), N_("Source"),
-            N_("portal: the screen through the Wayland portal (asks for permission the first time). kms: straight "
-               "from the graphics card, 60 fps on GNOME 50 (the helper needs permission to read the screen: "
-               "--setup gives it). x11: X11 session. test: animated pattern. static: still image. wolf: what runs "
-               "in Wolf (Games on Whales); shows up when the Wolf API socket exists."),
-            "capture", ("portal", "kms", "x11", "test", "static", "wolf"), flag="--source"),
+    Setting("source", "source", "choice", N_("Capture"), N_("Source"), SOURCE_HELP, "capture", SOURCES,
+            flag="--source"),
+    Setting("monitor", "monitor", "int", N_("Capture"), N_("Monitor"),
+            N_("0 = the main monitor, 1 = the second one, and so on."), "capture", min=0, max=15,
+            flag="--monitor", show_if=("source", ("screen",))),
     Setting("kms_monitor", "kms_monitor", "int", N_("Capture"), N_("Monitor (KMS)"),
             N_("0 = the first connected monitor; the log says how many there are."), "capture", min=0, max=15,
             flag="--kms-monitor", show_if=("source", ("kms",))),
@@ -82,7 +95,7 @@ SETTINGS = (
             N_("The portal asks for a window instead of a monitor."), "capture", flag="--window",
             show_if=("source", ("portal",))),
     Setting("no_cursor", "no_cursor", "bool", N_("Capture"), N_("Hide the cursor"), "", "capture",
-            flag="--no-cursor", show_if=("source", ("portal",))),
+            flag="--no-cursor", show_if=("source", ("screen",) if WINDOWS else ("portal",))),
     Setting("wolf_target", "wolf_target", "text", N_("Capture"), N_("Target in Wolf"),
             N_("Lobby id or name, or session id. Empty = the only open lobby (with several, the log lists the "
                "options)."), "capture", flag="--wolf-target", show_if=("source", ("wolf",))),
@@ -121,6 +134,7 @@ SETTINGS = (
             N_("The PSP also turns it on and off (SELECT + START + up). UDP only."), "audio", invert=True,
             flag="--no-audio"),
     Setting("audio_device", "audio_device", "text", N_("Audio"), N_("Audio source"),
+            N_("monitor = what plays on the speakers (WASAPI loopback); test = 440 Hz tone.") if WINDOWS else
             N_("monitor = what plays on the speakers (with the wolf source, Wolf's audio); test = 440 Hz tone; or "
                "a PipeWire source."), "audio",
             flag="--audio-device", show_if=("audio", (True,))),
@@ -131,7 +145,8 @@ SETTINGS = (
             flag="--audio-mono", show_if=("audio", (True,))),
     # Controles
     Setting("input", "no_input", "bool", N_("Controls"), N_("PSP controls on the PC"),
-            N_("Needs access to /dev/uinput (PSPStream wiki, Installation)."), "input", invert=True,
+            N_("Keyboard and mouse through SendInput. The virtual Xbox controller is not available on Windows yet.")
+            if WINDOWS else N_("Needs access to /dev/uinput (PSPStream wiki, Installation)."), "input", invert=True,
             flag="--no-input"),
     Setting("profile", "profile", "choice", N_("Controls"), N_("Profile"),
             N_("game, desktop, arrows: keyboard and mouse. xbox*: virtual Xbox 360 controller."), "input",
@@ -149,6 +164,8 @@ SETTINGS = (
     Setting("port", "port", "int", N_("Network"), N_("Port"), N_("TCP and UDP. On the PSP, the same in server.txt."),
             "restart", min=1024, max=65535, flag="--port"),
 )
+
+SETTINGS = tuple(s for s in SETTINGS if s.key not in (LINUX_ONLY if WINDOWS else WINDOWS_ONLY))
 
 BY_KEY = {s.key: s for s in SETTINGS}
 BY_DEST = {s.dest: s for s in SETTINGS}

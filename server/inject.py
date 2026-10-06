@@ -15,10 +15,13 @@ retransmitindo, PSP congelou), o servidor solta tudo em vez de manter a
 """
 import json
 import logging
+import sys
 import threading
 import time
 from pathlib import Path
 from i18n import tr
+
+WINDOWS = sys.platform == "win32"
 
 log = logging.getLogger("pspstream.input")
 
@@ -98,6 +101,14 @@ class _UInput:
         self.ui.close()
 
 
+def _output(codes):
+    """Teclado e mouse virtuais: uinput no Linux, SendInput no Windows."""
+    if WINDOWS:
+        from win_input import SendInputOutput
+        return SendInputOutput(codes)
+    return _UInput(codes)
+
+
 class Injector:
     def __init__(self, profile: dict, dry_run: bool = False, speed_scale: float = 1.0, timeout: float = 0.5):
         self.buttons = {}  # máscara PSP -> lista de códigos evdev
@@ -114,7 +125,7 @@ class Injector:
 
         codes = {c for combo in self.buttons.values() for c in combo} | set(self.analog_keys.values())
         self._validate(codes)
-        self.out = _DryRun() if dry_run else _UInput(codes)
+        self.out = _DryRun() if dry_run else _output(codes)
 
         self.lock = threading.Lock()
         self.prev = 0
@@ -130,6 +141,12 @@ class Injector:
 
     @staticmethod
     def _validate(codes):
+        if WINDOWS:
+            import win_input
+            bad = [c for c in codes if not win_input.known(c)]
+            if bad:
+                raise SystemExit(tr("unknown codes in the keymap: {codes}").format(codes=", ".join(bad)))
+            return
         try:
             from evdev import ecodes
         except ImportError:

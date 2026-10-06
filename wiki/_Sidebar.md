@@ -7,6 +7,7 @@
 - [Controls](Controls)
 - [Web Interface](Web-Interface)
 - [Wolf](Wolf)
+- [Windows](Windows)
 
 **Reference**
 - [Server Options](Server-Options)
@@ -21,6 +22,7 @@
 - [Wolf Internals](Wolf-Internals)
 - [Development](Development)
 - [Windows Server Plan](Windows-Server-Plan)
+- [PC Client Plan](PC-Client-Plan)
 
 [Repository](https://github.com/k7vinilstorage/PSP-Stream) ·
 [Releases](https://github.com/k7vinilstorage/PSP-Stream/releases)

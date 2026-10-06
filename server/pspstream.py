@@ -31,6 +31,8 @@ from i18n import N_, tr
 
 log = logging.getLogger("pspstream")
 
+WINDOWS = sys.platform == "win32"
+
 # Sem frame novo por este tempo, reenvia o último para a conexão não morrer
 # (no Wayland o compositor só manda frames quando a tela muda).
 VERSION = "1.1"
@@ -441,6 +443,10 @@ class Server:
                 data, addr = sock.recvfrom(2048)
             except socket.timeout:
                 continue
+            except ConnectionResetError:
+                # Windows: um ICMP "porta inalcançável" de um envio anterior (o PSP saiu) chega
+                # aqui como erro do recvfrom; o socket continua bom.
+                continue
             except OSError:
                 return
             try:
@@ -506,6 +512,11 @@ def parse_lang(text: str) -> str:
         raise argparse.ArgumentTypeError(str(exc)) from None
 
 
+def linux_only(text: str) -> str:
+    """Ajuda de uma opção que só faz sentido no Linux: no Windows, some do --help."""
+    return argparse.SUPPRESS if WINDOWS else text
+
+
 def build_parser() -> argparse.ArgumentParser:
     here = Path(__file__).resolve().parent
     p = argparse.ArgumentParser(description=tr("PSPStream: streams the PC screen to the PSP (H.264 or MJPEG)."))
@@ -534,41 +545,56 @@ def build_parser() -> argparse.ArgumentParser:
                    help=tr("marking of the server's packets for the Wi-Fi priority queue (WMM): ef = voice "
                            "(default), cs5/af41 = video, 0 = none"))
     p.add_argument("--bind", default="0.0.0.0", help=tr("local address (default %(default)s)"))
-    p.add_argument("--source", choices=["portal", "kms", "test", "x11", "gst", "static", "wolf"], default="portal",
-                   help=tr("portal = screen on Wayland (default); kms = straight from the graphics card, without "
-                           "GNOME 50's ~40 fps limit (the helper needs permission to read the screen: --setup gives "
-                           "it); test = animated pattern with a clock; x11 = X11 session; gst = your own pipeline "
-                           "(--gst-src); static = an image; wolf = what runs in Wolf (Games on Whales), through its "
-                           "API (PSPStream wiki, Wolf page)"))
+    if WINDOWS:
+        p.add_argument("--source", choices=["screen", "test", "gst", "static"], default="screen",
+                       help=tr("screen = the monitor through Desktop Duplication (default); test = animated "
+                               "pattern; gst = your own GStreamer elements (--gst-src); static = an image"))
+    else:
+        p.add_argument("--source", choices=["portal", "kms", "test", "x11", "gst", "static", "wolf"], default="portal",
+                       help=tr("portal = screen on Wayland (default); kms = straight from the graphics card, without "
+                               "GNOME 50's ~40 fps limit (the helper needs permission to read the screen: --setup "
+                               "gives it); test = animated pattern with a clock; x11 = X11 session; gst = your own "
+                               "pipeline (--gst-src); static = an image; wolf = what runs in Wolf (Games on Whales), "
+                               "through its API (PSPStream wiki, Wolf page)"))
+    p.add_argument("--monitor", type=int, default=0, metavar="N",
+                   help=tr("screen: which monitor (0 = the main one)") if WINDOWS else argparse.SUPPRESS)
     p.add_argument("--kms-monitor", type=int, default=0, metavar="N",
-                   help=tr("kms: which connected monitor (0 = the first; the log shows how many there are)"))
+                   help=linux_only(tr("kms: which connected monitor (0 = the first; the log shows how many there are)")))
     p.add_argument("--kms-card", metavar="/dev/dri/cardN",
-                   help=tr("kms: graphics card (default: searches all of them)"))
-    p.add_argument("--image", default=str(here.parent / "assets" / "testcard.jpg"),
+                   help=linux_only(tr("kms: graphics card (default: searches all of them)")))
+    testcard = here.parent / "assets" / "testcard.jpg"
+    if not testcard.exists():  # pspstream.exe (PyInstaller): os arquivos ficam ao lado dos módulos
+        testcard = here / "assets" / "testcard.jpg"
+    p.add_argument("--image", default=str(testcard),
                    help=tr("image for the static mode (default: assets/testcard.jpg)"))
     p.add_argument("--gst-src", help=tr("GStreamer elements of the source for --source gst"))
     p.add_argument("--wolf-socket", default=wolf_api.default_socket(), metavar=tr("PATH"),
-                   help=tr("wolf: the Wolf API socket (default: WOLF_SOCKET_PATH or %(default)s). It gives full "
-                           "control of Wolf: mount it only in the PSPStream container and never expose it over TCP"))
+                   help=linux_only(tr("wolf: the Wolf API socket (default: WOLF_SOCKET_PATH or %(default)s). It "
+                                      "gives full control of Wolf: mount it only in the PSPStream container and never "
+                                      "expose it over TCP")))
     p.add_argument("--wolf-target", default=os.environ.get("PSPSTREAM_WOLF_TARGET", ""), metavar="ID",
-                   help=tr("wolf: what to mirror: lobby id or name, or session id (default: the only open lobby; "
-                           "with several, the log lists the options). Default also in PSPSTREAM_WOLF_TARGET"))
+                   help=linux_only(tr("wolf: what to mirror: lobby id or name, or session id (default: the only "
+                                      "open lobby; with several, the log lists the options). Default also in "
+                                      "PSPSTREAM_WOLF_TARGET")))
     p.add_argument("--wolf-video-convert", default=os.environ.get("PSPSTREAM_VIDEO_CONVERT") or "auto",
                    metavar=tr("auto|nvidia|va|cpu|ELEMENTS"),
-                   help=tr("wolf: how Wolf brings the image down to regular memory at 480x272. nvidia = CUDA (Wolf's "
-                           "default with NVIDIA); va = Intel/AMD; cpu = Wolf with WOLF_USE_ZERO_COPY=FALSE; auto "
-                           "(default) tries them in that order. Or GStreamer elements that deliver I420 at the sent "
-                           "resolution. Default also in PSPSTREAM_VIDEO_CONVERT"))
+                   help=linux_only(tr("wolf: how Wolf brings the image down to regular memory at 480x272. nvidia = "
+                                      "CUDA (Wolf's default with NVIDIA); va = Intel/AMD; cpu = Wolf with "
+                                      "WOLF_USE_ZERO_COPY=FALSE; auto (default) tries them in that order. Or "
+                                      "GStreamer elements that deliver I420 at the sent resolution. Default also in "
+                                      "PSPSTREAM_VIDEO_CONVERT")))
     p.add_argument("--wolf-pin", type=parse_pin, metavar=tr("DIGITS"),
                    default=os.environ.get("PSPSTREAM_WOLF_PIN") or None,
-                   help=tr("wolf: the lobby's PIN, if it asks for one (for the controls to join the lobby). Default: "
-                           "PSPSTREAM_WOLF_PIN"))
+                   help=linux_only(tr("wolf: the lobby's PIN, if it asks for one (for the controls to join the "
+                                      "lobby). Default: PSPSTREAM_WOLF_PIN")))
     p.add_argument("--wolf-rtp-port", type=int,
                    default=wolf_api.env_port("WOLF_VIDEO_PING_PORT", wolf_api.VIDEO_PING_PORT), metavar=tr("PORT"),
-                   help=tr("wolf: Wolf's UDP port for the video ping (default: WOLF_VIDEO_PING_PORT or %(default)s)"))
+                   help=linux_only(tr("wolf: Wolf's UDP port for the video ping (default: WOLF_VIDEO_PING_PORT or "
+                                      "%(default)s)")))
     p.add_argument("--wolf-audio-rtp-port", type=int,
                    default=wolf_api.env_port("WOLF_AUDIO_PING_PORT", wolf_api.AUDIO_PING_PORT), metavar=tr("PORT"),
-                   help=tr("wolf: Wolf's UDP port for the audio ping (default: WOLF_AUDIO_PING_PORT or %(default)s)"))
+                   help=linux_only(tr("wolf: Wolf's UDP port for the audio ping (default: WOLF_AUDIO_PING_PORT or "
+                                      "%(default)s)")))
     p.add_argument("--size", type=parse_size, default=(480, 272), help=tr("sent resolution (default 480x272)"))
     p.add_argument("--fps", type=int, default=60,
                    help=tr("maximum capture rate (default %(default)s). Capturing above what the PSP shows makes "
@@ -588,18 +614,23 @@ def build_parser() -> argparse.ArgumentParser:
                    help=tr("scaling filter. bilinear2 (default) does not alias and makes frames ~27%% smaller than "
                            "bilinear; lanczos = slightly sharper text, ~2 ms more"))
     p.add_argument("--stretch", action="store_true", help=tr("stretch instead of keeping the aspect ratio"))
-    p.add_argument("--window", action="store_true", help=tr("portal: choose a window instead of a monitor"))
+    p.add_argument("--window", action="store_true",
+                   help=linux_only(tr("portal: choose a window instead of a monitor")))
     p.add_argument("--dmabuf", action="store_true",
-                   help=tr("portal, experimental: receive the screen in GPU memory (DMA-BUF) and scale it to 480x272 "
-                           "in OpenGL; only the small image comes to the CPU. If it does not work, it falls back to "
-                           "the normal mode on its own"))
-    p.add_argument("--no-cursor", action="store_true", help=tr("portal: do not draw the cursor"))
-    p.add_argument("--forget", action="store_true", help=tr("portal: do not reuse/save the screen choice"))
+                   help=linux_only(tr("portal, experimental: receive the screen in GPU memory (DMA-BUF) and scale it "
+                                      "to 480x272 in OpenGL; only the small image comes to the CPU. If it does not "
+                                      "work, it falls back to the normal mode on its own")))
+    p.add_argument("--no-cursor", action="store_true",
+                   help=tr("screen: do not draw the cursor") if WINDOWS else tr("portal: do not draw the cursor"))
+    p.add_argument("--forget", action="store_true",
+                   help=linux_only(tr("portal: do not reuse/save the screen choice")))
     p.add_argument("--no-audio", action="store_true", help=tr("do not capture or send the audio"))
     p.add_argument("--audio-device", default="monitor", metavar=tr("NAME"),
-                   help=tr("audio: PipeWire/PulseAudio source (pactl list short sources); monitor (default) = what "
-                           "plays on the speakers (with --source wolf, the target's audio in Wolf); wolf = Wolf's "
-                           "audio; test = 440 Hz tone"))
+                   help=tr("audio: monitor (default) = what plays on the speakers (WASAPI loopback); test = 440 Hz "
+                           "tone") if WINDOWS else
+                   tr("audio: PipeWire/PulseAudio source (pactl list short sources); monitor (default) = what "
+                      "plays on the speakers (with --source wolf, the target's audio in Wolf); wolf = Wolf's "
+                      "audio; test = 440 Hz tone"))
     p.add_argument("--audio-rate", type=int, default=44100, choices=[22050, 32000, 44100, 48000],
                    help=tr("audio: rate (default %(default)s Hz, the PSP's; stereo IMA ADPCM ~ rate/1000 KB/s)"))
     p.add_argument("--audio-mono", action="store_true", help=tr("audio: mono (half the bytes)"))
@@ -634,11 +665,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help=tr("settings saved by the web interface (default %(default)s). Command-line options win over "
                            "the file"))
     p.add_argument("--check", action="store_true",
-                   help=tr("check this machine's dependencies and show the command to install what is missing (apt, "
-                           "dnf, pacman or zypper), without starting the server"))
+                   help=tr("check this machine (GStreamer, openh264, firewall) without starting the server")
+                   if WINDOWS else
+                   tr("check this machine's dependencies and show the command to install what is missing (apt, "
+                      "dnf, pacman or zypper), without starting the server"))
     p.add_argument("--setup", action="store_true",
-                   help=tr("prepare this machine: installs what --check points out (packages, uinput, firewall, KMS "
-                           "capture), showing each command and asking before"))
+                   help=tr("prepare this machine: firewall rule and the openh264 library, asking before each step")
+                   if WINDOWS else
+                   tr("prepare this machine: installs what --check points out (packages, uinput, firewall, KMS "
+                      "capture), showing each command and asking before"))
     p.add_argument("-v", "--verbose", action="store_true")
     return p
 
@@ -675,14 +710,46 @@ def _terminate(signum, frame):
     raise KeyboardInterrupt
 
 
+def no_udp_connreset(sock: socket.socket) -> None:
+    """Windows: sem isto, o ICMP "porta inalcançável" de um envio anterior vira erro no recvfrom
+    seguinte (SIO_UDP_CONNRESET; o socket.ioctl do Python não tem essa opção)."""
+    if not WINDOWS:
+        return
+    try:
+        import ctypes
+        ws2 = ctypes.WinDLL("ws2_32")
+        ws2.WSAIoctl.argtypes = [ctypes.c_size_t, ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p,
+                                 ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong), ctypes.c_void_p, ctypes.c_void_p]
+        off, ret = ctypes.c_int(0), ctypes.c_ulong(0)
+        ws2.WSAIoctl(sock.fileno(), 0x9800000C, ctypes.byref(off), 4, None, 0, ctypes.byref(ret), None, None)
+    except (OSError, AttributeError):
+        pass
+
+
+def utf8_console() -> None:
+    """Windows: num pipe ou arquivo o Python escreve em cp1252 (no console já é Unicode). A saída vai em
+    UTF-8, como no Linux, e um caractere que não dê para escrever não derruba o servidor."""
+    if not WINDOWS:
+        return
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
+    utf8_console()
     i18n.set_language(i18n.from_argv(argv))  # o --help já sai no idioma pedido
     parser = build_parser()
     args = parser.parse_args(argv)
     i18n.set_language(args.lang)
     if args.check or args.setup:
-        import doctor
+        if WINDOWS:
+            import win_doctor as doctor
+        else:
+            import doctor
         return (doctor.setup if args.setup else doctor.main)(args.port, VERSION)
     # A thread de envio acorda mais rápido quando outra thread Python tem o GIL.
     sys.setswitchinterval(0.001)
@@ -748,6 +815,7 @@ def main(argv=None) -> int:
 
     srv = socket.create_server((args.bind, args.port))
     udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    no_udp_connreset(udp)
     udp.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1 << 20)
     set_dscp(udp, args.dscp)
     udp.bind((args.bind, args.port))

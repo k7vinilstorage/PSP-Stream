@@ -4,8 +4,9 @@
   the PSP must be on the same network as the PC (port 5123 UDP and TCP). The
   web interface can have a password, but it goes over HTTP, unencrypted
   ([Web Interface](Web-Interface#on-the-local-network-with-a-password)).
-- **Linux-only server** for now. The plan for a Windows server is in
-  [Windows Server Plan](Windows-Server-Plan).
+- **The Windows server is experimental** and has no virtual Xbox
+  controller yet ([Windows](Windows)). Wolf, KMS capture and the portal are
+  Linux-only.
 - **No microphone**: audio only goes from the PC to the PSP.
 - **Audio only goes over UDP** (the default).
 - **Fixed 480x272 for H.264**; smaller resolutions (JPEG only) show up

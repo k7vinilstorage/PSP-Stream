@@ -30,19 +30,21 @@ ADAPTIVE_KEYS = ("adaptive", "target_fps", "q_min", "q_max")
 
 
 def keymap_profiles(path) -> dict:
-    """Perfis do keymap.json: nome -> 'gamepad' ou 'keyboard'."""
+    """Perfis do keymap.json: nome -> 'gamepad' ou 'keyboard'. No Windows, só os de teclado e mouse
+    (o controle de Xbox virtual ainda não existe lá)."""
     try:
         data = json.loads(Path(path).read_text())
     except (OSError, ValueError):
         return {}
-    return {name: "gamepad" if p.get("type") == "gamepad" else "keyboard"
-            for name, p in data.items() if not name.startswith("_") and isinstance(p, dict)}
+    kinds = {name: "gamepad" if p.get("type") == "gamepad" else "keyboard"
+             for name, p in data.items() if not name.startswith("_") and isinstance(p, dict)}
+    return {k: v for k, v in kinds.items() if v == "keyboard"} if settings.WINDOWS else kinds
 
 
 def audio_sources() -> list:
     """Fontes de som do PipeWire/PulseAudio (pactl), além de monitor e test."""
     names = ["monitor", "test"]
-    if shutil.which("pactl"):
+    if shutil.which("pactl") and not settings.WINDOWS:
         try:
             out = subprocess.run(["pactl", "list", "short", "sources"], capture_output=True, text=True,
                                  timeout=3).stdout
