@@ -376,6 +376,20 @@ class ViGEmReportTest(unittest.TestCase):
         pad.close()  # de novo: nada
         self.assertEqual(lib.calls.count("remove"), 1)
 
+    def test_self_test(self):
+        lib = FakeViGEm()
+
+        def read(index):  # o XInput de mentira devolve o último relatório do controle 0
+            return win_gamepad.XUSB_REPORT(**lib.reports[-1]) if index == 0 and lib.reports else None
+        self.assertEqual(win_gamepad.self_test(win_gamepad.ViGEmPad(lib), read), (True, 0))
+        self.assertEqual(lib.reports[-1]["wButtons"], 0x1000)
+        self.assertEqual(lib.calls[-4:], ["remove", "target_free", "disconnect", "free"])  # o controle sai
+        lib = FakeViGEm()
+        ok, reason = win_gamepad.self_test(win_gamepad.ViGEmPad(lib), lambda index: None, timeout=0.2)
+        self.assertFalse(ok)
+        self.assertIn("XInput did not see", reason)
+        self.assertEqual(lib.calls[-1], "free")
+
     def test_errors(self):
         lib = FakeViGEm(connect=win_gamepad.BUS_NOT_FOUND)
         with self.assertRaisesRegex(RuntimeError, "ViGEmBus driver is not installed"):
@@ -432,7 +446,8 @@ class ViGEmBusSetupTest(unittest.TestCase):
 @unittest.skipUnless(WINDOWS, "só no Windows")
 class ViGEmBusTest(unittest.TestCase):
     """O controle virtual de verdade, lido de volta pelo XInput. Precisa da ViGEmClient.dll e do driver
-    ViGEmBus; sem eles, pula (PSPSTREAM_REQUIRE_VIGEM=1 faz falhar)."""
+    ViGEmBus; sem eles, pula (PSPSTREAM_REQUIRE_VIGEM=1 faz falhar). Roda num Windows 10/11 com o
+    driver: o instalador do ViGEmBus recusa o Windows Server, que é o sistema dos runners do GitHub."""
 
     def setUp(self):
         self.status, self.detail = win_gamepad.bus_status()
@@ -444,6 +459,12 @@ class ViGEmBusTest(unittest.TestCase):
             self.skipTest(self.status)
         with self.assertRaisesRegex(RuntimeError, "ViGEmBus driver is not installed"):
             win_gamepad.ViGEmPad()
+
+    def test_self_test(self):
+        if self.status != "ok":
+            self.skipTest(self.detail)
+        ok, got = win_gamepad.self_test()
+        self.assertTrue(ok, got)
 
     def test_xinput(self):
         if self.status != "ok":

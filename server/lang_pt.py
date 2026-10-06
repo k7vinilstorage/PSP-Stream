@@ -1164,8 +1164,6 @@ PT = {
     # Windows: controle de Xbox virtual (ViGEmBus)
     'Keyboard and mouse through SendInput; the xbox profiles need the ViGEmBus driver (pspstream --setup).':
         'Teclado e mouse pelo SendInput; os perfis xbox precisam do driver ViGEmBus (pspstream --setup).',
-    'ViGEmBus: virtual Xbox 360 controller (the xbox profiles)':
-        'ViGEmBus: controle de Xbox 360 virtual (os perfis xbox)',
     'virtual Xbox controller: {reason}':
         'controle de Xbox virtual: {reason}',
     'ViGEmClient.dll not found (it comes with pspstream.exe, in the vigem folder; PSPSTREAM_VIGEMCLIENT points to another)':
@@ -1193,4 +1191,15 @@ PT = {
         'o instalador terminou com o código {code}; instale à mão a partir de {url}',
     'the ViGEmBus driver is not installed: pspstream --setup installs it (once, as administrator)':
         'o driver ViGEmBus não está instalado: o pspstream --setup o instala (uma vez, como administrador)',
+    # Windows: teste do controle de Xbox pelo XInput
+    'ViGEmBus: virtual Xbox 360 controller works (the xbox profiles; read back through XInput as controller {n})':
+        'ViGEmBus: o controle de Xbox 360 virtual funciona (os perfis xbox; lido de volta pelo XInput como o controle {n})',
+    'ViGEmBus is installed, but the test controller failed: {reason}':
+        'o ViGEmBus está instalado, mas o controle de teste falhou: {reason}',
+    'XInput not found':
+        'XInput não encontrado',
+    'the controller got no XInput number':
+        'o controle não ganhou um número no XInput',
+    'XInput did not see the button press (controller {index})':
+        'o XInput não viu o botão apertado (controle {index})',
 }

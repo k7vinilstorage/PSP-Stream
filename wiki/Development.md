@@ -41,11 +41,16 @@ folder with `packaging/windows/gstreamer.py` (nothing installed). It runs
 and a stream to the fake PSP with audio and the web interface, in H.264 with
 P frames and in JPEG). `packaging/windows/vigem.py` builds
 `ViGEmClient.dll` (the virtual Xbox controller) from ViGEmClient's source at
-a pinned commit, with the runner's Visual Studio. Two last, informational
-steps try the real screen capture on the runner and install the ViGEmBus
-driver (a pinned release, its signature checked) to read the virtual
-controller back through XInput. The zip goes to the run's artifacts, the `nightly`
-pre-release and the releases.
+a pinned commit, with the runner's Visual Studio, and the Windows tests load
+it. A last, informational step tries the real screen capture on the runner,
+and the job downloads the ViGEmBus installer the way `--setup` does (pinned
+version and SHA-256, the signature checked). The driver itself cannot be
+installed there: its installer refuses Windows Server, which is what
+GitHub's Windows runners run. The controller end to end (the driver, the
+DLL, XInput) is tested on a Windows 10/11 PC by `pspstream --check`, and by
+`tests/test_windows.py` (`ViGEmBusTest`) where the driver is installed. The
+zip goes to the run's artifacts, the `nightly` pre-release and the
+releases.
 
 `build.py` runs PyInstaller (`packaging/windows/pspstream.spec`, a folder,
 not a single exe) and copies only the GStreamer plugins the server uses

@@ -105,7 +105,18 @@ def check_input(items):
     import win_gamepad
     state, detail = win_gamepad.bus_status()
     if state == "ok":
-        items.append(Item("Controls", "ok", tr("ViGEmBus: virtual Xbox 360 controller (the xbox profiles)")))
+        # de ponta a ponta: um controle por um instante, lido de volta pelo XInput como um jogo o leria
+        try:
+            ok, got = win_gamepad.self_test()
+        except Exception as exc:  # noqa: BLE001 - ViGEmClient, XInput
+            ok, got = False, str(exc)
+        if ok:
+            items.append(Item("Controls", "ok", tr("ViGEmBus: virtual Xbox 360 controller works (the xbox "
+                                                   "profiles; read back through XInput as controller {n})").format(
+                n=got + 1)))
+        else:
+            items.append(Item("Controls", "warn", tr("ViGEmBus is installed, but the test controller failed: "
+                                                     "{reason}").format(reason=got)))
     elif state == "no-bus":
         # opcional: o perfil padrão (game) é de teclado e mouse
         items.append(Item("Controls", "info", tr("ViGEmBus driver not installed: no virtual Xbox controller (the "

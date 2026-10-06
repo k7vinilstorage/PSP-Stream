@@ -17,6 +17,7 @@ import ctypes
 import logging
 import os
 import sys
+import time
 from ctypes import POINTER, Structure, c_short, c_ubyte, c_uint32, c_ulong, c_ushort, c_void_p
 from pathlib import Path
 
@@ -187,6 +188,53 @@ class ViGEmPad:
             self.lib.vigem_target_free(self.target)
             self.target = None
         self._disconnect()
+
+
+class XINPUT_STATE(Structure):
+    _fields_ = [("dwPacketNumber", c_uint32), ("Gamepad", XUSB_REPORT)]
+
+
+def xinput_reader():
+    """index -> XUSB_REPORT (o XINPUT_GAMEPAD) ou None se não há controle nesse número: o que um jogo lê."""
+    for name in ("xinput1_4", "xinput9_1_0"):
+        try:
+            dll = ctypes.WinDLL(name)
+            break
+        except OSError:
+            continue
+    else:
+        raise RuntimeError(tr("XInput not found"))
+    get = dll.XInputGetState
+    get.argtypes, get.restype = (c_uint32, POINTER(XINPUT_STATE)), c_uint32
+
+    def read(index):
+        state = XINPUT_STATE()
+        return state.Gamepad if get(index, ctypes.byref(state)) == 0 else None
+    return read
+
+
+def self_test(pad=None, read=None, timeout: float = 3.0):
+    """O controle de ponta a ponta: cria um, aperta A com o analógico para a direita e lê de volta pelo
+    XInput, como um jogo; depois o remove. (True, número do controle no XInput) ou (False, motivo)."""
+    read = read or xinput_reader()
+    pad = pad or ViGEmPad()
+    try:
+        deadline = time.monotonic() + timeout
+        index = pad.user_index()
+        while index is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+            index = pad.user_index()
+        if index is None:
+            return False, tr("the controller got no XInput number")
+        pad.emit([("key", "BTN_A", 1), ("abs", "ABS_X", 32767)])
+        while time.monotonic() < deadline:
+            got = read(index)
+            if got is not None and got.wButtons & XUSB_BUTTONS["BTN_A"] and got.sThumbLX == 32767:
+                return True, index
+            time.sleep(0.02)
+        return False, tr("XInput did not see the button press (controller {index})").format(index=index + 1)
+    finally:
+        pad.close()
 
 
 def bus_status():

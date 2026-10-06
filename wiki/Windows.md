@@ -74,7 +74,10 @@ use:
    installer (version 1.22.0, its SHA-256 checked) and runs it as
    administrator. By hand: its
    [releases page](https://github.com/nefarius/ViGEmBus/releases/latest).
-2. `pspstream --check` shows `ok  ViGEmBus` under Controls.
+2. `pspstream --check` tests it end to end: it plugs in a controller for a
+   moment, presses A on it and reads it back through XInput, as a game
+   would, then unplugs it. It shows `ok  ViGEmBus: virtual Xbox 360
+   controller works` under Controls.
 3. `pspstream --profile xbox`, or **Profile** in the web interface.
 
 The `vigem\ViGEmClient.dll` next to `pspstream.exe` talks to the driver; CI
@@ -82,7 +85,8 @@ builds it from ViGEmClient's source (MIT). Without the driver, the `xbox`
 profiles are refused with a message in the log, and keyboard and mouse
 keep working. The controller disappears when the server stops. ViGEmBus is
 no longer developed by its author (2023), but it works on Windows 10 and
-11 and is what the other streaming programs still use.
+11 and is what the other streaming programs still use. It does not install
+on Windows Server.
 
 ## How it works
 
@@ -138,5 +142,6 @@ official wheels on PyPI (what the zip is built from).
 | the controls do nothing in one program | Windows does not let a normal program send input to one running as administrator: run `pspstream.exe` as administrator too. Some anti-cheats ignore injected input |
 | no audio | `--check` lists `wasapi2src` and `adpcmenc`; with nothing playing, the loopback sends nothing (the PSP plays silence) |
 | "the ViGEmBus driver is not installed" | `pspstream --setup` installs it (accept the Windows UAC prompt), or install it from its [releases page](https://github.com/nefarius/ViGEmBus/releases/latest) as administrator; then `pspstream --check` |
+| "the test controller failed" in `--check` | the driver is there but Windows did not show the controller to XInput: restart the PC (a driver update can wait for a restart) and run `pspstream --check` again; reinstall ViGEmBus with `pspstream --setup` if it persists |
 | the game does not see the Xbox controller | the game must read XInput (most PC games do); a game that only reads DirectInput sees it too, but with the triggers on one axis, as with a real Xbox 360 controller. `joy.cpl` (Win+R) shows whether the controller is there and its buttons |
 | antivirus warning | the exe is not signed (PyInstaller builds are sometimes flagged). The zip is built by GitHub Actions from this repository |
