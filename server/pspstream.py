@@ -9,6 +9,7 @@ porta.
 """
 import argparse
 import logging
+import os
 import signal
 import socket
 import sys
@@ -534,16 +535,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--wolf-socket", default=wolf_api.default_socket(), metavar="CAMINHO",
                    help="wolf: socket da API do Wolf (padrão: WOLF_SOCKET_PATH ou %(default)s). Ele dá controle "
                         "total do Wolf: monte-o só no container do PSPStream e nunca o exponha por TCP")
-    p.add_argument("--wolf-target", default="", metavar="ID",
+    p.add_argument("--wolf-target", default=os.environ.get("PSPSTREAM_WOLF_TARGET", ""), metavar="ID",
                    help="wolf: o que espelhar: id ou nome do lobby, ou id da sessão (padrão: o único lobby "
-                        "aberto; com vários, o log lista as opções)")
-    p.add_argument("--wolf-video-convert", default="auto", metavar="auto|nvidia|va|cpu|ELEMENTOS",
+                        "aberto; com vários, o log lista as opções). Padrão também em PSPSTREAM_WOLF_TARGET")
+    p.add_argument("--wolf-video-convert", default=os.environ.get("PSPSTREAM_VIDEO_CONVERT") or "auto",
+                   metavar="auto|nvidia|va|cpu|ELEMENTOS",
                    help="wolf: como o Wolf desce a imagem para a memória comum em 480x272. nvidia = CUDA (o "
                         "padrão do Wolf com NVIDIA); va = Intel/AMD; cpu = Wolf com WOLF_USE_ZERO_COPY=FALSE; "
                         "auto (padrão) tenta nessa ordem. Ou elementos GStreamer que entreguem I420 na "
-                        "resolução enviada")
+                        "resolução enviada. Padrão também em PSPSTREAM_VIDEO_CONVERT")
     p.add_argument("--wolf-pin", type=parse_pin, metavar="DÍGITOS",
-                   help="wolf: PIN do lobby, se ele pede (para os controles entrarem no lobby)")
+                   default=os.environ.get("PSPSTREAM_WOLF_PIN") or None,
+                   help="wolf: PIN do lobby, se ele pede (para os controles entrarem no lobby). Padrão: "
+                        "PSPSTREAM_WOLF_PIN")
     p.add_argument("--wolf-rtp-port", type=int,
                    default=wolf_api.env_port("WOLF_VIDEO_PING_PORT", wolf_api.VIDEO_PING_PORT), metavar="PORTA",
                    help="wolf: porta UDP do ping de vídeo do Wolf (padrão: WOLF_VIDEO_PING_PORT ou %(default)s)")
@@ -588,7 +592,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--input-dry-run", action="store_true",
                    help="só mostrar no log as teclas/movimentos que seriam injetados")
     p.add_argument("--keymap", default=str(here / "keymap.json"), help="arquivo de mapeamento (padrão keymap.json)")
-    p.add_argument("--profile", default="jogo",
+    p.add_argument("--profile", default=os.environ.get("PSPSTREAM_PROFILE") or "jogo",
                    help="perfil do keymap: jogo, desktop, setas (teclado e mouse); xbox, xbox-camera, "
                         "xbox-ombros (controle de Xbox 360 virtual; com --source wolf, só estes). Padrão "
                         "%(default)s")
@@ -601,9 +605,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="benchmark: quando o PSP conectar, roda cada qualidade por --bench-seconds e salva "
                         "uma tabela em bench_*.md (padrão 30,50,70,90)")
     p.add_argument("--bench-seconds", type=float, default=10)
-    p.add_argument("--web", default=WEB_DEFAULT, metavar="HOST:PORTA",
+    p.add_argument("--web", default=os.environ.get("PSPSTREAM_WEB") or WEB_DEFAULT, metavar="HOST:PORTA",
                    help="interface web das configurações (padrão %(default)s, só neste PC; 0.0.0.0:5124 abre "
-                        "para a rede local, sem senha)")
+                        "para a rede local). A senha vem da variável PSPSTREAM_WEB_PASSWORD (sem ela, quem "
+                        "alcança a porta muda as configurações). Padrão também em PSPSTREAM_WEB")
+    p.add_argument("--web-allow-host", action="append", metavar="NOME",
+                   default=[h for h in os.environ.get("PSPSTREAM_WEB_HOSTS", "").replace(",", " ").split() if h],
+                   help="nome aceito no endereço da interface web, além de localhost, do nome do PC e de IPs "
+                        "(ex.: o de um Cloudflare Tunnel); pode repetir. Padrão: PSPSTREAM_WEB_HOSTS, separados "
+                        "por vírgula")
     p.add_argument("--no-web", action="store_true", help="sem a interface web")
     p.add_argument("--config", default=str(settings.default_path()), metavar="ARQUIVO",
                    help="configurações gravadas pela interface web (padrão %(default)s). As opções da linha de "
@@ -733,11 +743,15 @@ def main(argv=None) -> int:
         from web import WebServer, parse_addr
         try:
             host, port = parse_addr(args.web)
-            web = WebServer(ctl, host, port, ring)
+            web = WebServer(ctl, host, port, ring, os.environ.get("PSPSTREAM_WEB_PASSWORD") or None,
+                            args.web_allow_host)
             web.start()
             ctl.web_url = web.url
+            access = "com senha" if web.password else "sem senha"
             log.info("configurações: %s%s", web.url,
-                     " (aberto para a rede local, sem senha)" if web.public else "")
+                     f" (aberto para a rede local, {access})" if web.public else
+                     (f" ({access}; nomes liberados: {', '.join(args.web_allow_host)})"
+                      if args.web_allow_host else ""))
         except (OSError, ValueError) as exc:
             log.warning("interface web desativada (%s): %s", args.web, exc)
             web = None

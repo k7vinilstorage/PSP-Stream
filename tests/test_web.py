@@ -120,6 +120,76 @@ class FakeController:
         return {"ok": True, "applied": list(values)}
 
 
+class WebPasswordTest(unittest.TestCase):
+    """Senha (PSPSTREAM_WEB_PASSWORD) e nomes liberados (--web-allow-host): a rede local e um Cloudflare Tunnel."""
+
+    def setUp(self):
+        self.ctl = FakeController()
+        self.srv = web.WebServer(self.ctl, "127.0.0.1", 0, web.LogRing(), password="segredo çã",
+                                 allow_hosts=["psp.exemplo.com", "Outro.Exemplo.com:443"])
+        self.srv.start()
+        self.port = self.srv.httpd.server_address[1]
+        self.addCleanup(self.srv.close)
+        patcher = mock.patch.object(web, "AUTH_DELAY_S", 0)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def request(self, method, path, headers=None, body=None):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            conn.request(method, path, body=body, headers=headers or {})
+            res = conn.getresponse()
+            return res.status, dict(res.getheaders()), res.read()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def basic(password, user="psp"):
+        import base64
+        return {"Authorization": "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()}
+
+    def test_password(self):
+        status, headers, _ = self.request("GET", "/")
+        self.assertEqual(status, 401)
+        self.assertIn('Basic realm="PSPStream"', headers["WWW-Authenticate"])
+        self.assertEqual(self.request("GET", "/api/status")[0], 401)  # a API também
+        with self.assertLogs("pspstream.web", "WARNING"):
+            self.assertEqual(self.request("GET", "/", self.basic("errada"))[0], 401)
+        self.assertEqual(self.request("GET", "/", {"Authorization": "Basic !!!"})[0], 401)
+        self.assertEqual(self.request("GET", "/", {"Authorization": "Bearer segredo"})[0], 401)
+        self.assertEqual(self.request("GET", "/", self.basic("segredo çã"))[0], 200)
+        self.assertEqual(self.request("GET", "/", self.basic("segredo çã", user="qualquer"))[0], 200)
+        body = json.dumps({"values": {"fps": 30}})
+        post = {"Content-Type": "application/json", **self.basic("segredo çã")}
+        self.assertEqual(self.request("POST", "/api/config", {"Content-Type": "application/json"}, body)[0], 401)
+        self.assertEqual(self.request("POST", "/api/config", post, body)[0], 200)
+        self.assertEqual(self.ctl.applied, [{"fps": 30}])
+        self.assertTrue(self.srv.password)
+
+    def test_tunnel_host(self):
+        """Pelo Cloudflare Tunnel: Host com o domínio, Origin em https."""
+        auth = self.basic("segredo çã")
+        for host in ("psp.exemplo.com", "PSP.exemplo.com.", "outro.exemplo.com"):
+            self.assertEqual(self.request("GET", "/api/config", {"Host": host, **auth})[0], 200, host)
+        self.assertEqual(self.request("GET", "/api/config", {"Host": "evil.example", **auth})[0], 403)
+        body = json.dumps({"values": {"fps": 30}})
+        ok = {"Host": "psp.exemplo.com", "Origin": "https://psp.exemplo.com", "Content-Type": "application/json",
+              **auth}
+        self.assertEqual(self.request("POST", "/api/config", ok, body)[0], 200)
+        bad = {**ok, "Origin": "https://evil.example"}
+        self.assertEqual(self.request("POST", "/api/config", bad, body)[0], 403)
+
+    def test_cli_and_env(self):
+        with mock.patch.dict("os.environ", {"PSPSTREAM_WEB": "0.0.0.0:5124",
+                                            "PSPSTREAM_WEB_HOSTS": "psp.exemplo.com, outro.exemplo.com"}):
+            args = pspstream.build_parser().parse_args([])
+        self.assertEqual(args.web, "0.0.0.0:5124")
+        self.assertEqual(args.web_allow_host, ["psp.exemplo.com", "outro.exemplo.com"])
+        with mock.patch.dict("os.environ", {}, clear=True):
+            args = pspstream.build_parser().parse_args(["--web-allow-host", "a.b", "--web-allow-host", "c.d"])
+        self.assertEqual((args.web, args.web_allow_host), ("127.0.0.1:5124", ["a.b", "c.d"]))
+
+
 class WebServerTest(unittest.TestCase):
     def setUp(self):
         self.ctl = FakeController()

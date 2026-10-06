@@ -762,6 +762,20 @@ class WolfOptionsTest(unittest.TestCase):
         self.assertIsInstance(src, WolfSource)
         self.assertEqual((src.wanted, src.api.socket_path, src.video_ping_port), ("Steam", "/run/w.sock", 49100))
 
+    def test_env_defaults(self):
+        """Docker: as variáveis viram o padrão (a interface web ainda muda; a linha de comando vale mais)."""
+        import pspstream
+        env = {"PSPSTREAM_WOLF_TARGET": "Steam", "PSPSTREAM_VIDEO_CONVERT": "nvidia", "PSPSTREAM_WOLF_PIN": "4242",
+               "PSPSTREAM_PROFILE": "xbox-camera"}
+        with mock.patch.dict(os.environ, env):
+            parser = pspstream.build_parser()
+            args = parser.parse_args(["--source", "wolf"])
+            cli = parser.parse_args(["--wolf-target", "Outro"])
+        self.assertEqual((args.wolf_target, args.wolf_video_convert, args.wolf_pin, args.profile),
+                         ("Steam", "nvidia", "4242", "xbox-camera"))
+        self.assertEqual(cli.wolf_target, "Outro")
+        self.assertEqual(settings.explicit_dests(parser, ["--source", "wolf"]), {"source"})
+
     def test_web_choices(self):
         import control
         import pspstream
