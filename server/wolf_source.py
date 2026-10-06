@@ -60,6 +60,7 @@ from audio import AudioCapture
 from gst_source import GstSource
 from sources import FrameSource
 from wolf_api import WolfApiError
+from i18n import tr
 
 log = logging.getLogger("pspstream.wolf")
 
@@ -105,7 +106,7 @@ def video_pipeline(producer: str, session_id: str, convert: str, width: int, hei
     sessão entra ou sai de um lobby por causa dos controles."""
     for value in (producer, session_id):
         if not ID_RE.match(value):
-            raise ValueError(f"id inesperado do Wolf: {value!r}")
+            raise ValueError(tr("unexpected id from Wolf: {value}").format(value=repr(value)))
     text = (f"interpipesrc name=pspstream_{session_id}_video listen-to={producer}_video is-live=true "
             "stream-sync=restart-ts max-bytes=0 max-buffers=1 leaky-type=downstream "
             f"! {convert} ! video/x-raw,format=I420,width={width},height={height},pixel-aspect-ratio=1/1 "
@@ -117,7 +118,7 @@ def audio_pipeline(producer: str, session_id: str, rate: int, channels: int, por
     """O pipeline de som que o Wolf roda: o som do alvo em S16LE, na taxa e nos canais do PSP."""
     for value in (producer, session_id):
         if not ID_RE.match(value):
-            raise ValueError(f"id inesperado do Wolf: {value!r}")
+            raise ValueError(tr("unexpected id from Wolf: {value}").format(value=repr(value)))
     text = (f"interpipesrc name=pspstream_{session_id}_audio listen-to={producer}_audio is-live=true "
             "stream-sync=restart-ts max-bytes=0 max-buffers=3 block=false "
             "! queue max-size-buffers=3 leaky=downstream ! audioconvert ! audioresample "
@@ -172,20 +173,23 @@ class TargetError(RuntimeError):
 
 @dataclass(frozen=True)
 class Target:
-    kind: str       # "lobby" ou "sessão"
+    kind: str       # "lobby" ou "session"
     id: str
     name: str
     producer: str   # de quem é o <id>_video que o pipeline escuta
 
     def describe(self) -> str:
-        via = f", que está no lobby {self.producer}" if self.producer != self.id else ""
-        return f"{self.kind} {self.name or self.id} ({self.id}{via})"
+        kind = tr("lobby") if self.kind == "lobby" else tr("session")
+        if self.producer != self.id:
+            return tr("{kind} {name} ({id}, which is in lobby {lobby})").format(
+                kind=kind, name=self.name or self.id, id=self.id, lobby=self.producer)
+        return f"{kind} {self.name or self.id} ({self.id})"
 
 
 def _options(lobbies, sessions) -> str:
-    parts = [f"lobby {lb.get('id')} ({lb.get('name', '')})" for lb in lobbies]
-    parts += [f"sessão {s.get('client_id')} ({s.get('client_ip', '')})" for s in sessions]
-    return "; ".join(parts) if parts else "nenhum lobby nem sessão"
+    parts = [f"{tr('lobby')} {lb.get('id')} ({lb.get('name', '')})" for lb in lobbies]
+    parts += [f"{tr('session')} {s.get('client_id')} ({s.get('client_ip', '')})" for s in sessions]
+    return "; ".join(parts) if parts else tr("no lobby or session")
 
 
 def resolve_target(wanted: str, lobbies: list, sessions: list, own=None):
@@ -197,10 +201,10 @@ def resolve_target(wanted: str, lobbies: list, sessions: list, own=None):
     wanted = (wanted or "").strip()
     if not wanted:
         if not lobbies:
-            return None, "nenhum lobby aberto no Wolf; esperando um (abra um jogo pelo Wolf UI)"
+            return None, tr("no lobby open in Wolf; waiting for one (open a game through Wolf UI)")
         if len(lobbies) > 1:
-            raise TargetError("há vários lobbies abertos no Wolf; escolha um com --wolf-target: "
-                              + _options(lobbies, []))
+            raise TargetError(tr("there are several lobbies open in Wolf; pick one with --wolf-target: {options}")
+                              .format(options=_options(lobbies, [])))
         lb = lobbies[0]
         return Target("lobby", str(lb["id"]), lb.get("name", ""), str(lb["id"])), None
     for lb in lobbies:
@@ -214,10 +218,12 @@ def resolve_target(wanted: str, lobbies: list, sessions: list, own=None):
             lobby = next((lb for lb in lobbies if wanted in [str(x) for x in lb.get("connected_sessions", [])]),
                          None)
             producer = str(lobby["id"]) if lobby else wanted
-            return Target("sessão", wanted, s.get("client_ip", ""), producer), None
+            return Target("session", wanted, s.get("client_ip", ""), producer), None
     if len(named) > 1:
-        return None, f"há {len(named)} lobbies com o nome '{wanted}'; use o id: {_options(named, [])}"
-    return None, f"alvo '{wanted}' não está aberto no Wolf; esperando ({_options(lobbies, others)})"
+        return None, tr("there are {n} lobbies named '{name}'; use the id: {options}").format(
+            n=len(named), name=wanted, options=_options(named, []))
+    return None, tr("target '{name}' is not open in Wolf; waiting ({options})").format(
+        name=wanted, options=_options(lobbies, others))
 
 
 # ---- a fonte ----
@@ -248,9 +254,9 @@ class _Receiver(GstSource):
     def _ended(self, reason: str) -> None:
         self.failed = reason
         if self.closing:
-            log.debug("Wolf: recepção encerrada (%s)", reason)
+            log.debug(tr("Wolf: reception ended (%s)"), reason)
         else:
-            log.warning("Wolf: o vídeo parou de chegar (%s)", reason)
+            log.warning(tr("Wolf: the video stopped arriving (%s)"), reason)
 
     @property
     def port(self) -> int:
@@ -267,9 +273,9 @@ class _AudioReceiver(AudioCapture):
     def _ended(self, reason: str) -> None:
         self.failed = reason
         if self.closing:
-            log.debug("Wolf: recepção do som encerrada (%s)", reason)
+            log.debug(tr("Wolf: audio reception ended (%s)"), reason)
         else:
-            log.warning("Wolf: o som parou de chegar (%s); o vídeo continua", reason)
+            log.warning(tr("Wolf: the audio stopped arriving (%s); the video goes on"), reason)
 
     @property
     def port(self) -> int:
@@ -420,13 +426,14 @@ class WolfSource(FrameSource):
         """Uma linha para a interface web: o que está espelhando, ou por que está esperando."""
         target, sid = self.target, self.session_id
         if target is None or sid is None:
-            return {"text": self._said or "conectando ao Wolf", "warn": True}
+            return {"text": self._said or tr("connecting to Wolf"), "warn": True}
         convert = self.working_convert or self.convert
-        text = f"sessão {sid} espelhando {target.describe()}, conversão {convert}"
+        text = tr("session {sid} mirroring {target}, conversion {convert}").format(
+            sid=sid, target=target.describe(), convert=convert)
         if self.input_target() is not None:
-            text += "; controles no lobby"
+            text += tr("; controls in the lobby")
         elif self.input_wanted:
-            text += "; controles: " + (self._input_said or "entrando no lobby")
+            text += tr("; controls: {state}").format(state=self._input_said or tr("joining the lobby"))
         return {"text": text, "warn": bool(self.input_wanted and self._input_said)}
 
     # ---- som ----
@@ -458,7 +465,7 @@ class WolfSource(FrameSource):
     def _say_input(self, msg: str) -> None:
         if msg != self._input_said:
             self._input_said = msg
-            log.warning("controles: %s", msg)
+            log.warning(tr("controls: %s"), msg)
 
     def _sync_input(self, lobbies: list) -> None:
         """Põe a sessão no lobby (ou tira) conforme os controles estão ligados."""
@@ -471,36 +478,36 @@ class WolfSource(FrameSource):
                 self._joined = None
                 try:
                     self.api.leave_lobby(lobby, sid)
-                    log.info("controles: a sessão do PSP saiu do lobby (controles desligados)")
+                    log.info(tr("controls: the PSP session left the lobby (controls off)"))
                 except WolfApiError as exc:
-                    log.warning("controles: não consegui sair do lobby: %s", exc)
+                    log.warning(tr("controls: could not leave the lobby: %s"), exc)
             return
         if target.kind != "lobby":
-            self._say_input(f"o alvo é uma sessão Moonlight avulsa ({target.id}), não um lobby: os controles do "
-                            "PSP não chegam a ela (só visualização). Use um lobby no --wolf-target")
+            self._say_input(tr("the target is a standalone Moonlight session ({id}), not a lobby: the PSP controls "
+                               "do not reach it (view only). Use a lobby in --wolf-target").format(id=target.id))
             return
         lobby = next((lb for lb in lobbies if str(lb.get("id")) == target.id), None)
         inside = lobby is not None and sid in [str(x) for x in lobby.get("connected_sessions", [])]
         if self._joined == (target.id, self.generation) and inside:
             return
         if self._joined is not None and not inside:
-            log.info("controles: a sessão do PSP saiu do lobby (START + cima + RB é o atalho do Wolf UI); "
-                     "entrando de novo")
+            log.info(tr("controls: the PSP session left the lobby (START + up + RB is the Wolf UI shortcut); "
+                        "joining again"))
         try:
             self.api.join_lobby(target.id, sid, self.pin)
         except WolfApiError as exc:
             self._joined = None
             hint = ""
             if "PIN" in str(exc):
-                hint = " (o lobby pede PIN: --wolf-pin)"
+                hint = tr(" (the lobby asks for a PIN: --wolf-pin)")
             elif "full" in str(exc):
-                hint = " (lobby de um jogador só, já ocupado)"
-            self._say_input(f"o Wolf não deixou a sessão do PSP entrar no lobby: {exc}{hint}. Só visualização; "
-                            f"tentando de novo a cada {self.poll_s:g} s")
+                hint = tr(" (single-player lobby, already taken)")
+            self._say_input(tr("Wolf did not let the PSP session join the lobby: {error}{hint}. View only; trying "
+                               "again every {seconds:g} s").format(error=exc, hint=hint, seconds=self.poll_s))
             return
         self._joined = (target.id, self.generation)
         self._input_said = None
-        log.info("controles: a sessão do PSP entrou no %s; o controle virtual vai para o jogo", target.describe())
+        log.info(tr("controls: the PSP session joined %s; the virtual controller goes to the game"), target.describe())
 
     # ---- a thread ----
 
@@ -521,7 +528,7 @@ class WolfSource(FrameSource):
             except (WolfApiError, TargetError) as exc:
                 self._say(str(exc), logging.WARNING)
             except Exception:  # um erro aqui não pode derrubar o servidor
-                log.exception("Wolf: erro inesperado")
+                log.exception(tr("Wolf: unexpected error"))
             finally:
                 self._teardown()
                 _SESSION_LOCK.release()
@@ -536,7 +543,7 @@ class WolfSource(FrameSource):
                 return True
             if not waited:
                 waited = True
-                log.info("Wolf: esperando a captura anterior encerrar a sessão dela")
+                log.info(tr("Wolf: waiting for the previous capture to end its session"))
         return False
 
     def _cycle(self) -> bool:
@@ -557,12 +564,13 @@ class WolfSource(FrameSource):
         else:
             self.working_convert = None  # a que funcionava falhou: na próxima, testa todas de novo
             tried = ", ".join(choices)
-            self._say(f"nenhum frame chegou do Wolf em {self.first_frame_s:g} s (conversão: {tried}). Veja o log "
-                      "do Wolf (docker logs) e a opção --wolf-video-convert", logging.WARNING)
+            self._say(tr("no frame came from Wolf in {seconds:g} s (conversion: {tried}). See Wolf's log (docker "
+                         "logs) and the --wolf-video-convert option").format(seconds=self.first_frame_s, tried=tried),
+                      logging.WARNING)
             return False
         if self.convert == "auto" and self.working_convert is None:
             self.working_convert = choice
-            log.info("Wolf: a conversão '%s' funcionou (--wolf-video-convert %s pula o teste das outras)",
+            log.info(tr("Wolf: the '%s' conversion worked (--wolf-video-convert %s skips testing the others)"),
                      choice, choice)
         self._said = None
         try:
@@ -587,8 +595,8 @@ class WolfSource(FrameSource):
     def _cleanup_stale(self) -> None:
         for s in self.api.sessions():
             if s.get("rtsp_fake_ip") == MARKER:
-                log.warning("Wolf: encerrando a sessão %s, que sobrou de um PSPStream anterior (um PSPStream por "
-                            "Wolf: todas têm o mesmo id)", s.get("client_id"))
+                log.warning(tr("Wolf: ending session %s, left over from a previous PSPStream (one PSPStream per "
+                               "Wolf: they all have the same id)"), s.get("client_id"))
                 self.api.stop_session(str(s.get("client_id")))
 
     def _open(self, target: Target, choice: str) -> bool:
@@ -599,7 +607,7 @@ class WolfSource(FrameSource):
         receiver.start()
         port = receiver.port
         if not port:
-            raise RuntimeError("o tcpserversrc não abriu uma porta")
+            raise RuntimeError(tr("tcpserversrc did not open a port"))
         audio_pipe, acfg = NO_AUDIO_PIPELINE, self.audio_config
         self._session_audio = acfg
         if acfg:
@@ -615,22 +623,22 @@ class WolfSource(FrameSource):
         self.session_id = sid
         same = [s for s in self.api.sessions() if str(s.get("client_id")) == sid]
         if len(same) > 1:
-            log.warning("Wolf: outra sessão criada pela API sem client_id usa o mesmo id (%s); a imagem pode não "
-                        "chegar (só um programa assim por Wolf)", sid)
+            log.warning(tr("Wolf: another session created through the API without client_id uses the same id (%s); "
+                           "the image may not arrive (only one such program per Wolf)"), sid)
         secret = new_secret()
         convert = convert_chain(choice, self.width, self.height, self.scale, self.keep_aspect)
         pipeline = video_pipeline(target.producer, sid, convert, self.width, self.height, port)
-        log.debug("Wolf: pipeline de vídeo: %s", pipeline)
+        log.debug(tr("Wolf: video pipeline: %s"), pipeline)
         if acfg:
             audio_pipe = audio_pipeline(target.producer, sid, rate, channels, audio_port)
-            log.debug("Wolf: pipeline de som: %s", audio_pipe)
+            log.debug(tr("Wolf: audio pipeline: %s"), audio_pipe)
         self.api.start_session(sid, video_session(sid, pipeline, self.width, self.height, self.fps,
                                                   self.video_ping_port, secret),
                                audio_session(sid, audio_pipe, self.audio_ping_port, secret,
                                              request["aes_key"], request["aes_iv"], acfg[1] if acfg else 2))
         self.target = target
         self.generation += 1
-        log.info("Wolf: sessão %s espelhando %s, conversão %s", sid, target.describe(), choice)
+        log.info(tr("Wolf: session %s mirroring %s, conversion %s"), sid, target.describe(), choice)
         seq0 = self.latest()[0]
         deadline = time.monotonic() + self.first_frame_s
         n = 0
@@ -650,7 +658,7 @@ class WolfSource(FrameSource):
                 n += 1
                 self._stop.wait(0.1)
         if not self._stop.is_set():
-            log.info("Wolf: nenhum frame com a conversão %s%s", choice,
+            log.info(tr("Wolf: no frame with the %s conversion%s"), choice,
                      f" ({receiver.failed})" if receiver.failed else "")
         return False
 
@@ -663,27 +671,27 @@ class WolfSource(FrameSource):
                 return False
             hub = self._audio_hub
             if hub is not None and self._session_audio != hub.config:
-                log.info("Wolf: refazendo a sessão para o som (%d Hz, %s)", hub.rate,
-                         "estéreo" if hub.channels == 2 else "mono")
+                log.info(tr("Wolf: redoing the session for the audio (%d Hz, %s)"), hub.rate,
+                         tr("stereo") if hub.channels == 2 else "mono")
                 return True
             try:
                 lobbies, sessions = self.api.lobbies(), self.api.sessions()
             except WolfApiError as exc:
                 errors += 1
                 if errors >= 3:
-                    log.warning("Wolf: %s; recriando a sessão quando o Wolf responder", exc)
+                    log.warning(tr("Wolf: %s; recreating the session when Wolf answers"), exc)
                     return False
                 continue
             errors = 0
             if not any(str(s.get("client_id")) == self.session_id for s in sessions):
-                log.warning("Wolf: a sessão %s sumiu (o Wolf reiniciou?); criando outra", self.session_id)
+                log.warning(tr("Wolf: session %s vanished (did Wolf restart?); creating another"), self.session_id)
                 return True
             now, _ = resolve_target(target.id, lobbies, sessions, own=self.session_id)
             if now is None:
-                log.info("Wolf: %s fechou; esperando", target.describe())
+                log.info(tr("Wolf: %s closed; waiting"), target.describe())
                 return True
             if now.producer != target.producer:
-                log.info("Wolf: %s mudou de lobby; refazendo a sessão", target.describe())
+                log.info(tr("Wolf: %s changed lobby; redoing the session"), target.describe())
                 return True
             self._sync_input(lobbies)
         return True
@@ -698,7 +706,7 @@ class WolfSource(FrameSource):
             try:
                 self.api.stop_session(sid)
             except WolfApiError as exc:
-                log.warning("Wolf: não consegui encerrar a sessão %s: %s", sid, exc)
+                log.warning(tr("Wolf: could not end session %s: %s"), sid, exc)
         if receiver is not None:
             deadline = time.monotonic() + 1.0  # o Wolf manda EOS e fecha a conexão
             while not receiver.failed and time.monotonic() < deadline:

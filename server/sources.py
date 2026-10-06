@@ -8,6 +8,7 @@ import threading
 import time
 
 from jpeginfo import jpeg_info
+from i18n import tr
 
 log = logging.getLogger("pspstream.source")
 
@@ -72,14 +73,14 @@ class StaticSource(FrameSource):
         self.raw_i420 = raw_i420
         self._quality = quality if reencode or raw_i420 else None
         if raw_i420:
-            log.info("imagem estática: I420 cru, codificada a cada envio (frames P)")
+            log.info(tr("static image: raw I420, encoded on every send (P frames)"))
         elif jpeg[:2] == b"\xff\xd8":
             info = jpeg_info(jpeg)
             for problem in info.problems():
-                log.warning("imagem estática: %s", problem)
-            log.info("imagem estática: %dx%d, %.1f KB", info.width, info.height, len(jpeg) / 1024)
+                log.warning(tr("static image: %s"), problem)
+            log.info(tr("static image: %dx%d, %.1f KB"), info.width, info.height, len(jpeg) / 1024)
         else:
-            log.info("imagem estática: H.264, %.1f KB", len(jpeg) / 1024)
+            log.info(tr("static image: H.264, %.1f KB"), len(jpeg) / 1024)
         self.publish(jpeg)
 
     def set_quality(self, quality: int) -> None:

@@ -11,6 +11,7 @@ preinst/%pre a guarda e o postinst/%post a devolve).
 import os
 import struct
 from pathlib import Path
+from i18n import tr
 
 ROOT = Path(__file__).resolve().parent.parent
 REPO_KMS_HELPER = ROOT / "tools" / "kms" / "pspstream-kms"
@@ -77,11 +78,11 @@ def kms_cap_ignored(path) -> str:
     except OSError:
         nosuid = False
     if nosuid:
-        return (f"{path} está numa partição montada com nosuid, que ignora a permissão: use o pacote "
-                "ou um clone do repositório em outra partição")
+        return tr("{path} is on a partition mounted with nosuid, which ignores the permission: use the package "
+                  "or a clone of the repository on another partition").format(path=path)
     if no_new_privs():
-        return ("o servidor roda com no_new_privs (num terminal de Flatpak, como o do VS Code, ou num "
-                "container), e o kernel ignora a permissão do auxiliar: rode o servidor num terminal comum")
+        return tr("the server runs with no_new_privs (in a Flatpak terminal, like VS Code's, or in a "
+                  "container), and the kernel ignores the helper's permission: run the server in a regular terminal")
     return ""
 
 
@@ -89,7 +90,9 @@ def kms_permission_problem(path) -> str:
     """O que fazer quando o auxiliar KMS diz que não pode ler a tela."""
     path = Path(path)
     if not has_cap_sys_admin(path):
-        again = " (de novo depois de cada make)" if path == REPO_KMS_HELPER else ""
-        return f"o auxiliar {path} está sem a permissão: rode {kms_fix(path)}{again}"
-    return kms_cap_ignored(path) or (f"o auxiliar {path} tem a permissão, mas o kernel não devolveu a "
-                                     "imagem (num container ou toolbox, ela não vale fora dele)")
+        if path == REPO_KMS_HELPER:
+            return tr("the helper {path} lacks the permission: run {fix} (again after every make)").format(
+                path=path, fix=kms_fix(path))
+        return tr("the helper {path} lacks the permission: run {fix}").format(path=path, fix=kms_fix(path))
+    return kms_cap_ignored(path) or tr("the helper {path} has the permission, but the kernel did not return the "
+                                       "image (in a container or toolbox, it does not apply outside of it)").format(path=path)

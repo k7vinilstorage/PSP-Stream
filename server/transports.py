@@ -16,6 +16,7 @@ import time
 from collections import OrderedDict
 
 import protocol
+from i18n import tr
 
 log = logging.getLogger("pspstream.transport")
 
@@ -40,7 +41,7 @@ def recv_exact(conn: socket.socket, size: int) -> bytes:
     while len(buf) < size:
         chunk = conn.recv(size - len(buf))
         if not chunk:
-            raise ConnectionError("PSP fechou a conexão")
+            raise ConnectionError(tr("the PSP closed the connection"))
         buf += chunk
     return bytes(buf)
 
@@ -54,7 +55,7 @@ def set_dscp(sock: socket.socket, name: str) -> None:
     try:
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, DSCP[name])
     except OSError as exc:
-        log.debug("DSCP não aplicado: %s", exc)
+        log.debug(tr("DSCP not applied: %s"), exc)
 
 
 class TcpTransport:
@@ -77,10 +78,10 @@ class TcpTransport:
             while session.alive:
                 session.on_request(protocol.Request.unpack(recv_exact(self.conn, protocol.REQ_STRUCT.size)))
         except socket.timeout:
-            log.info("PSP ficou %.0f s sem responder", IDLE_TIMEOUT_S)
+            log.info(tr("the PSP did not answer for %.0f s"), IDLE_TIMEOUT_S)
         except (OSError, ConnectionError, ValueError) as exc:
             if session.alive:
-                log.info("leitura terminou: %s", exc)
+                log.info(tr("reading ended: %s"), exc)
         finally:
             session.close()
 
@@ -130,7 +131,7 @@ class UdpTransport:
         while self.session.alive:
             time.sleep(0.5)
             if time.monotonic() - self.last_seen > IDLE_TIMEOUT_S:
-                log.info("PSP ficou %.0f s sem responder", IDLE_TIMEOUT_S)
+                log.info(tr("the PSP did not answer for %.0f s"), IDLE_TIMEOUT_S)
                 self.session.close()
 
     def feed(self, req: protocol.Request, nack=None) -> None:

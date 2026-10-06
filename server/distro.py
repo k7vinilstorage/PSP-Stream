@@ -12,6 +12,7 @@ import shutil
 import subprocess
 from functools import lru_cache
 from pathlib import Path
+from i18n import N_, tr
 
 FAMILY_IDS = {
     "debian": ("debian", "ubuntu", "linuxmint", "pop", "elementary", "zorin", "kali", "raspbian", "neon", "pureos",
@@ -60,8 +61,8 @@ PACKAGES = {
 
 # Notas por família, para o que não é só instalar um pacote.
 NOTES = {
-    ("openh264", "fedora"): "vem do repositório fedora-cisco-openh264, já ativo no Fedora Workstation",
-    ("openh264", "suse"): "vem do repositório codecs.opensuse.org (ativo no Tumbleweed)",
+    ("openh264", "fedora"): N_("comes from the fedora-cisco-openh264 repository, already enabled on Fedora Workstation"),
+    ("openh264", "suse"): N_("comes from the codecs.opensuse.org repository (enabled on Tumbleweed)"),
 }
 
 
@@ -120,8 +121,8 @@ def hint(*needs, fam=None) -> str:
     fam = fam if fam is not None else current()[0]
     cmd = install_command(needs, fam)
     if not cmd:
-        return "instale pelo gerenciador de pacotes (veja https://github.com/k7vinilstorage/PSP-Stream/wiki/Instalação)"
-    notes = [NOTES[(n, fam)] for n in needs if (n, fam) in NOTES]
+        return tr("install it with the package manager (see https://github.com/k7vinilstorage/PSP-Stream/wiki/Installation)")
+    notes = [tr(NOTES[(n, fam)]) for n in needs if (n, fam) in NOTES]
     return cmd + (f" ({'; '.join(notes)})" if notes else "")
 
 

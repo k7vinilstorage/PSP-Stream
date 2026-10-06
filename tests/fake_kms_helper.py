@@ -31,7 +31,7 @@ def main():
         if cmd == 2:
             return
         if os.environ.get("FAKE_KMS_NOPERM"):  # como sem o setcap: handles zerados
-            sock.send(reply(-1, msg="sem permissão para ler a tela (falso)".encode()))
+            sock.send(reply(-1, msg="no permission to read the screen (fake)".encode()))
             return
         fb += 1
         fd = os.memfd_create(f"fb{fb}")

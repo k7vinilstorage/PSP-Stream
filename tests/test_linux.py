@@ -73,7 +73,7 @@ class DistroTest(unittest.TestCase):
         self.assertEqual(distro.install_command(["evdev"], "arch"), "sudo pacman -S --needed python-evdev")
         self.assertEqual(distro.install_command(["evdev"], ""), "")
         self.assertIn("fedora-cisco-openh264", distro.hint("openh264", fam="fedora"))
-        self.assertIn("/wiki/Instalação", distro.hint("evdev", fam=""))
+        self.assertIn("/wiki/Installation", distro.hint("evdev", fam=""))
         self.assertEqual(distro.firewall_command(5123, "ufw"), "sudo ufw allow 5123/udp && sudo ufw allow 5123/tcp")
         self.assertIn("--add-port=5123/udp", distro.firewall_command(5123, "firewalld"))
         self.assertEqual(distro.firewall_command(5123, ""), "")
@@ -89,18 +89,18 @@ class DoctorTest(unittest.TestCase):
     def test_runs_here(self):
         items = doctor.run_checks(port=0)  # porta 0: não disputa a do servidor
         groups = {i.group for i in items}
-        self.assertTrue({"Sistema", "GStreamer", "Vídeo", "Controles", "Som", "Rede"} <= groups, groups)
+        self.assertTrue({"System", "GStreamer", "Video", "Controls", "Audio", "Network"} <= groups, groups)
         for item in items:
-            self.assertIn(item.state, ("ok", "aviso", "falta", "info"))
+            self.assertIn(item.state, ("ok", "warn", "missing", "info"))
         self.assertTrue(doctor.report(items))
 
     def test_report_collects_packages(self):
         items = [
-            doctor.Item("GStreamer", "falta", "gi", ("gi",), essential=True),
-            doctor.Item("Som", "aviso", "pactl", ("pactl",)),
-            doctor.Item("Captura", "aviso", "portal", extra=["xdg-desktop-portal", "xdg-desktop-portal-gnome"]),
-            doctor.Item("Controles", "aviso", "uinput", fix=doctor.UINPUT_RULE),
-            doctor.Item("Vídeo", "ok", "openh264", ("openh264",)),  # ok: não entra
+            doctor.Item("GStreamer", "missing", "gi", ("gi",), essential=True),
+            doctor.Item("Audio", "warn", "pactl", ("pactl",)),
+            doctor.Item("Capture", "warn", "portal", extra=["xdg-desktop-portal", "xdg-desktop-portal-gnome"]),
+            doctor.Item("Controls", "warn", "uinput", fix=doctor.UINPUT_RULE),
+            doctor.Item("Video", "ok", "openh264", ("openh264",)),  # ok: não entra
         ]
         with mock.patch.object(distro, "current", return_value=("debian", "Ubuntu 24.04")):
             text = doctor.report(items)
@@ -108,15 +108,15 @@ class DoctorTest(unittest.TestCase):
                       "pulseaudio-utils xdg-desktop-portal xdg-desktop-portal-gnome", text)
         self.assertNotIn("libopenh264", text)
         self.assertIn("60-pspstream-uinput.rules", text)
-        self.assertNotIn("Tudo pronto", text)
+        self.assertNotIn("All set", text)
         with mock.patch.object(distro, "current", return_value=("debian", "Ubuntu 24.04")):
-            self.assertIn("Tudo pronto", doctor.report([doctor.Item("Sistema", "ok", "x")]))
+            self.assertIn("All set", doctor.report([doctor.Item("System", "ok", "x")]))
 
     def test_exit_code(self):
-        missing = [doctor.Item("GStreamer", "falta", "gi", ("gi",), essential=True)]
+        missing = [doctor.Item("GStreamer", "missing", "gi", ("gi",), essential=True)]
         with mock.patch.object(doctor, "run_checks", return_value=missing), mock.patch("builtins.print"):
             self.assertEqual(doctor.main(0), 1)
-        warn = [doctor.Item("Som", "aviso", "pactl", ("pactl",))]
+        warn = [doctor.Item("Audio", "warn", "pactl", ("pactl",))]
         with mock.patch.object(doctor, "run_checks", return_value=warn), mock.patch("builtins.print"):
             self.assertEqual(doctor.main(0), 0)
 
@@ -129,28 +129,28 @@ class DoctorTest(unittest.TestCase):
 
 class SetupTest(unittest.TestCase):
     ITEMS = [
-        doctor.Item("GStreamer", "aviso", "pipewiresrc", ("pipewire",)),
-        doctor.Item("Controles", "aviso", "uinput", ("evdev",), fix=doctor.UINPUT_RULE),
-        doctor.Item("Captura", "info", "auxiliar KMS não compilado", ("kms",), fix="make -C tools/kms"),
-        doctor.Item("Rede", "info", "firewall ufw ativo", fix="sudo ufw allow 5123/udp && sudo ufw allow 5123/tcp"),
-        doctor.Item("Som", "ok", "pactl", ("pactl",)),
+        doctor.Item("GStreamer", "warn", "pipewiresrc", ("pipewire",)),
+        doctor.Item("Controls", "warn", "uinput", ("evdev",), fix=doctor.UINPUT_RULE),
+        doctor.Item("Capture", "info", "KMS helper not built", ("kms",), fix="make -C tools/kms"),
+        doctor.Item("Network", "info", "ufw firewall active", fix="sudo ufw allow 5123/udp && sudo ufw allow 5123/tcp"),
+        doctor.Item("Audio", "ok", "pactl", ("pactl",)),
     ]
 
     def test_plan(self):
         steps = dict(doctor.plan(self.ITEMS, "debian"))
         titles = list(steps)
         self.assertEqual(steps[titles[0]], ["sudo apt install gstreamer1.0-pipewire python3-evdev"])
-        uinput = steps["Liberar o /dev/uinput para os controles"]
+        uinput = steps["Open /dev/uinput for the controls"]
         self.assertEqual(len(uinput), 3)  # a linha continuada com \\ vira uma só
         self.assertTrue(uinput[1].startswith("printf") and uinput[1].endswith("60-pspstream-uinput.rules"))
-        kms = next(v for k, v in steps.items() if k.startswith("Captura KMS"))
+        kms = next(v for k, v in steps.items() if k.startswith("KMS capture"))
         self.assertTrue(kms[0].startswith("sudo apt install gcc make pkg-config libdrm-dev"))
-        self.assertEqual(steps["Liberar a porta no firewall"], ["sudo ufw allow 5123/udp && sudo ufw allow 5123/tcp"])
+        self.assertEqual(steps["Open the port in the firewall"], ["sudo ufw allow 5123/udp && sudo ufw allow 5123/tcp"])
         # distribuição desconhecida: sem o passo dos pacotes
-        self.assertNotIn("Instalar os pacotes que faltam", dict(doctor.plan(self.ITEMS, "")))
+        self.assertNotIn("Install the missing packages", dict(doctor.plan(self.ITEMS, "")))
 
     def test_setup_runs_only_what_was_confirmed(self):
-        answers = iter(["s", "n", "", "n"])
+        answers = iter(["y", "n", "", "n"])
         with mock.patch.object(doctor, "run_checks", return_value=self.ITEMS), \
                 mock.patch.object(distro, "current", return_value=("debian", "Ubuntu 24.04")), \
                 mock.patch.object(doctor.subprocess, "run", return_value=mock.Mock(returncode=0)) as run, \
@@ -202,7 +202,7 @@ class KmsPermissionTest(unittest.TestCase):
             self.assertNotIn("make", msg)
             msg = paths.kms_permission_problem(paths.REPO_KMS_HELPER)
             self.assertIn("make -C", msg)
-            self.assertIn("depois de cada make", msg)
+            self.assertIn("again after every make", msg)
 
     def test_problem_with_permission_ignored(self):
         nosuid = mock.Mock(f_flag=os.ST_NOSUID)
@@ -214,7 +214,7 @@ class KmsPermissionTest(unittest.TestCase):
                 self.assertIn("no_new_privs", paths.kms_permission_problem(self.PKG))
             with mock.patch("os.statvfs", return_value=mock.Mock(f_flag=0)), \
                     mock.patch.object(paths, "no_new_privs", return_value=False):
-                self.assertIn("tem a permissão", paths.kms_permission_problem(self.PKG))
+                self.assertIn("has the permission", paths.kms_permission_problem(self.PKG))
 
     def test_no_new_privs_here(self):
         status = Path("/proc/self/status").read_text()
@@ -231,7 +231,7 @@ class KmsPermissionTest(unittest.TestCase):
             return items[0]
         self.assertEqual(check(True).state, "ok")
         item = check(True, "x está numa partição montada com nosuid")
-        self.assertEqual(item.state, "aviso")
+        self.assertEqual(item.state, "warn")
         self.assertIn("nosuid", item.text)
         self.assertEqual(check(False).fix, f"sudo setcap cap_sys_admin+ep {self.PKG}")
 

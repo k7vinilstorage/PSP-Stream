@@ -18,6 +18,7 @@ import logging
 import statistics
 import time
 from collections import deque
+from i18n import tr
 
 log = logging.getLogger("pspstream.adaptive")
 
@@ -65,7 +66,7 @@ class AdaptiveQuality:
             return
         new_q = max(self.q_min, min(self.q_max, new_q))
         if new_q != q:
-            log.debug("qualidade %d -> %d (alvo %.1f KB, média %.1f KB, vazão %.0f KB/s, decode %.1f ms)",
+            log.debug(tr("quality %d -> %d (target %.1f KB, average %.1f KB, throughput %.0f KB/s, decode %.1f ms)"),
                       q, new_q, target / 1024, statistics.mean(self.sizes) / 1024,
                       rate * 1000 / 1024, decode)
             self.source.set_quality(new_q)

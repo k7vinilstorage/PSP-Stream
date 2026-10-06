@@ -69,14 +69,14 @@ def main():
             time.sleep(0.3)
 
         time.sleep(2.0)
-        if "PSP iniciou o stream" in log_path.read_text():
+        if "the PSP started the stream" in log_path.read_text():
             print("FALHOU: conectou sem IP, a tela não esperou")
             return 1
         press("cross")          # o item inicial sem IP é "Procurar o PC na rede"
         time.sleep(3.0)         # Wi-Fi emulado + broadcast
         press("start")          # salvar e conectar
         for _ in range(150):
-            if "PSP iniciou o stream" in log_path.read_text():
+            if "the PSP started the stream" in log_path.read_text():
                 ok = True
                 break
             time.sleep(0.1)

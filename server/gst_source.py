@@ -35,6 +35,7 @@ gi.require_version("Gst", "1.0")
 from gi.repository import Gst  # noqa: E402
 
 from sources import FrameSource  # noqa: E402
+from i18n import tr  # noqa: E402
 
 log = logging.getLogger("pspstream.gst")
 
@@ -224,14 +225,14 @@ class GstSource(FrameSource):
             self._caps_logged = True
             caps = self._queue_in.get_current_caps()
             if caps is not None:
-                log.info("formato da captura: %s", caps.to_string())
+                log.info(tr("capture format: %s"), caps.to_string())
         if iv:
-            spread = (f"intervalo mediano {statistics.median(iv):.1f} ms, "
-                      f"p10 {iv[len(iv) // 10]:.1f}, p90 {iv[len(iv) * 9 // 10]:.1f}")
+            spread = tr("median interval {median:.1f} ms, p10 {p10:.1f}, p90 {p90:.1f}").format(
+                median=statistics.median(iv), p10=iv[len(iv) // 10], p90=iv[len(iv) * 9 // 10])
         else:
-            spread = "sem intervalos"
-        log.info("captura: a fonte entrega %.1f fps (%s); passam pelo limite de %d fps: %.1f; "
-                 "codificados: %.1f", (arrived - a0) / dt, spread, self.fps, (kept - k0) / dt,
+            spread = tr("no intervals")
+        log.info(tr("capture: the source delivers %.1f fps (%s); through the %d fps limit: %.1f; "
+                    "encoded: %.1f"), (arrived - a0) / dt, spread, self.fps, (kept - k0) / dt,
                  (self.latest()[0] - p0) / dt)
         self._report_at = now + 60
         self._report_base = (now, arrived, kept, self.latest()[0])
@@ -257,7 +258,7 @@ class GstSource(FrameSource):
             if self.h264 is not None:
                 data = self.h264.encode(data)
                 if data is None:
-                    log.warning("o encoder H.264 não devolveu o frame")
+                    log.warning(tr("the H.264 encoder did not return the frame"))
                     return Gst.FlowReturn.OK
                 if capture_ms is not None and clock is not None:
                     capture_ms = (clock.get_time() - self.pipeline.get_base_time() - buf.pts) / Gst.MSECOND
@@ -280,7 +281,7 @@ class GstSource(FrameSource):
                 self._ended(f"{err.message} ({dbg})")
                 return
             elif msg.type == Gst.MessageType.EOS:
-                self._ended("fim do stream (EOS)")
+                self._ended(tr("end of stream (EOS)"))
                 return
 
     def _ended(self, reason: str) -> None:
@@ -290,7 +291,7 @@ class GstSource(FrameSource):
 
     def start(self) -> None:
         if self.pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
-            raise RuntimeError("não foi possível iniciar o pipeline GStreamer")
+            raise RuntimeError(tr("could not start the GStreamer pipeline"))
         threading.Thread(target=self._watch_bus, name="gst-bus", daemon=True).start()
 
     def stop(self) -> None:
@@ -335,7 +336,7 @@ def transcode_image(path: str, width: int, height: int, quality: int, keep_aspec
     try:
         sample = sink.emit("try-pull-sample", 10 * Gst.SECOND)
         if sample is None:
-            raise RuntimeError(f"não consegui converter {path}")
+            raise RuntimeError(tr("could not convert {path}").format(path=path))
         buf = sample.get_buffer()
         return buf.extract_dup(0, buf.get_size())
     finally:

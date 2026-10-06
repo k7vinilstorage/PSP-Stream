@@ -221,6 +221,20 @@ class WebServerTest(unittest.TestCase):
             self.assertEqual((status, headers["Content-Type"].split(";")[0]), (200, ctype))
         self.assertEqual(self.request("GET", "/../settings.py")[0], 404)
 
+    def test_i18n(self):
+        """As traduções da página: vazias em inglês (o padrão), o catálogo em português."""
+        import i18n
+        status, _, body = self.request("GET", "/api/i18n")
+        self.assertEqual((status, json.loads(body)), (200, {"lang": "en", "messages": {}}))
+        i18n.set_language("pt")
+        try:
+            data = json.loads(self.request("GET", "/api/i18n")[2])
+        finally:
+            i18n.set_language("en")
+        self.assertEqual(data["lang"], "pt")
+        self.assertEqual(data["messages"]["Apply"], "Aplicar")
+        self.assertEqual(self.request("GET", "/nada")[2], b'{"error": "not found"}')
+
     def test_api(self):
         status, _, body = self.request("GET", "/api/config")
         self.assertEqual((status, json.loads(body)["values"]), (200, {}))
@@ -455,6 +469,33 @@ class ControllerTest(unittest.TestCase):
         self.assertEqual(cfg["profiles"]["xbox"], "gamepad")
         self.assertIn("monitor", by["audio_device"]["suggestions"])
         self.assertNotIn("gst", by["source"]["choices"])  # pipeline próprio só pela linha de comando
+
+
+class LanguageSettingTest(unittest.TestCase):
+    """O idioma pela interface web: vale na hora e fica no server.json."""
+
+    make = ControllerTest.make
+    saved = ControllerTest.saved
+
+    def tearDown(self):
+        import i18n
+        i18n.set_language("en")
+
+    def test_language(self):
+        import i18n
+        ctl = self.make()
+        cfg = ctl.config()
+        lang = next(s for s in cfg["settings"] if s["key"] == "language")
+        self.assertEqual((lang["choices"], cfg["values"]["language"]), (["en", "pt"], "en"))
+        self.assertEqual(lang["label"], "Language")
+        result = ctl.apply({"language": "pt"})
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(i18n.language(), "pt")
+        self.assertEqual(self.saved(), {"language": "pt"})
+        labels = {s["key"]: s["label"] for s in ctl.config()["settings"]}
+        self.assertEqual((labels["language"], labels["port"]), ("Idioma", "Porta"))
+        self.assertIn("esperava um objeto", ctl.apply([])["errors"][""])
+        self.assertFalse(ctl.apply({"language": "fr"})["ok"])
 
 
 class HotSwapTest(unittest.TestCase):

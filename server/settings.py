@@ -25,16 +25,17 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from i18n import N_, tr
 
 log = logging.getLogger("pspstream.settings")
 
 APPLY_TEXT = {
-    "live": "vale na hora",
-    "capture": "refaz a captura (o PSP continua conectado)",
-    "audio": "refaz a captura do som",
-    "input": "refaz os controles",
-    "next": "vale na próxima conexão do PSP",
-    "restart": "vale ao reiniciar o servidor",
+    "live": N_("applies right away"),
+    "capture": N_("restarts the capture (the PSP stays connected)"),
+    "audio": N_("restarts the audio capture"),
+    "input": N_("restarts the controls"),
+    "next": N_("applies on the PSP's next connection"),
+    "restart": N_("applies when the server restarts"),
 }
 
 # Nome de fonte do PipeWire/PulseAudio (pactl list short sources). Vai para
@@ -63,87 +64,90 @@ class Setting:
 
 
 SETTINGS = (
+    # Geral
+    Setting("language", "lang", "choice", N_("General"), N_("Language"),
+            N_("Language of this page and of the server messages (log, --check). English is the default."),
+            "live", ("en", "pt"), flag="--lang"),
     # Captura
-    Setting("source", "source", "choice", "Captura", "Fonte",
-            "portal: a tela pelo portal do Wayland (pede permissão na primeira vez). kms: direto da placa de "
-            "vídeo, 60 fps no GNOME 50 (o auxiliar precisa da permissão de ler a tela: o --setup a dá). "
-            "x11: sessão X11. "
-            "test: padrão animado. static: imagem fixa. wolf: o que roda no Wolf (Games on Whales); aparece "
-            "quando o socket da API do Wolf existe.",
+    Setting("source", "source", "choice", N_("Capture"), N_("Source"),
+            N_("portal: the screen through the Wayland portal (asks for permission the first time). kms: straight "
+               "from the graphics card, 60 fps on GNOME 50 (the helper needs permission to read the screen: "
+               "--setup gives it). x11: X11 session. test: animated pattern. static: still image. wolf: what runs "
+               "in Wolf (Games on Whales); shows up when the Wolf API socket exists."),
             "capture", ("portal", "kms", "x11", "test", "static", "wolf"), flag="--source"),
-    Setting("kms_monitor", "kms_monitor", "int", "Captura", "Monitor (KMS)",
-            "0 = o primeiro monitor ligado; o log diz quantos há.", "capture", min=0, max=15,
+    Setting("kms_monitor", "kms_monitor", "int", N_("Capture"), N_("Monitor (KMS)"),
+            N_("0 = the first connected monitor; the log says how many there are."), "capture", min=0, max=15,
             flag="--kms-monitor", show_if=("source", ("kms",))),
-    Setting("window", "window", "bool", "Captura", "Capturar uma janela",
-            "O portal pergunta qual janela, em vez de um monitor.", "capture", flag="--window",
+    Setting("window", "window", "bool", N_("Capture"), N_("Capture a window"),
+            N_("The portal asks for a window instead of a monitor."), "capture", flag="--window",
             show_if=("source", ("portal",))),
-    Setting("no_cursor", "no_cursor", "bool", "Captura", "Esconder o cursor", "", "capture",
+    Setting("no_cursor", "no_cursor", "bool", N_("Capture"), N_("Hide the cursor"), "", "capture",
             flag="--no-cursor", show_if=("source", ("portal",))),
-    Setting("wolf_target", "wolf_target", "text", "Captura", "Alvo no Wolf",
-            "Id ou nome do lobby, ou id da sessão. Vazio = o único lobby aberto (com vários, o log lista as "
-            "opções).", "capture", flag="--wolf-target", show_if=("source", ("wolf",))),
-    Setting("wolf_video_convert", "wolf_video_convert", "choice", "Captura", "Conversão no Wolf",
-            "Como o Wolf desce a imagem da GPU: nvidia (CUDA), va (Intel/AMD) ou cpu (Wolf sem zero-copy). "
-            "auto tenta nessa ordem; o log diz qual funcionou.", "capture", ("auto", "nvidia", "va", "cpu"),
-            flag="--wolf-video-convert", show_if=("source", ("wolf",))),
-    Setting("fps", "fps", "int", "Captura", "Limite de FPS",
-            "Numa tela de 60 Hz, 30 é um frame sim, um não (uniforme); 40 alterna intervalos de 17 e 33 ms.",
+    Setting("wolf_target", "wolf_target", "text", N_("Capture"), N_("Target in Wolf"),
+            N_("Lobby id or name, or session id. Empty = the only open lobby (with several, the log lists the "
+               "options)."), "capture", flag="--wolf-target", show_if=("source", ("wolf",))),
+    Setting("wolf_video_convert", "wolf_video_convert", "choice", N_("Capture"), N_("Conversion in Wolf"),
+            N_("How Wolf brings the image down from the GPU: nvidia (CUDA), va (Intel/AMD) or cpu (Wolf without "
+               "zero-copy). auto tries them in that order; the log says which one worked."), "capture",
+            ("auto", "nvidia", "va", "cpu"), flag="--wolf-video-convert", show_if=("source", ("wolf",))),
+    Setting("fps", "fps", "int", N_("Capture"), N_("FPS limit"),
+            N_("On a 60 Hz screen, 30 is every other frame (even); 40 alternates 17 and 33 ms intervals."),
             "live", min=5, max=240, flag="--fps"),
-    Setting("scale", "scale", "choice", "Captura", "Filtro de redução",
-            "bilinear2 (padrão) não serrilha e gera frames menores; lanczos deixa o texto um pouco mais "
-            "nítido, com ~2 ms a mais.",
+    Setting("scale", "scale", "choice", N_("Capture"), N_("Scaling filter"),
+            N_("bilinear2 (default) does not alias and makes smaller frames; lanczos makes text a little sharper, "
+               "~2 ms more."),
             "capture", ("nearest-neighbour", "bilinear", "bilinear2", "lanczos", "mitchell", "catrom"),
             flag="--scale"),
-    Setting("stretch", "stretch", "bool", "Captura", "Esticar para a tela do PSP",
-            "Sem as bordas pretas; a imagem perde a proporção.", "capture", flag="--stretch"),
+    Setting("stretch", "stretch", "bool", N_("Capture"), N_("Stretch to the PSP screen"),
+            N_("No black bars; the image loses its aspect ratio."), "capture", flag="--stretch"),
     # Vídeo
-    Setting("codec", "codec_choice", "choice", "Vídeo", "Codec",
-            "auto = h264p com o openh264. h264p: H.264 com frames P, ~10x menos bytes. h264: todo frame "
-            "completo, aguenta perdas melhor com 2-3x mais banda. jpeg: sem openh264.",
+    Setting("codec", "codec_choice", "choice", N_("Video"), N_("Codec"),
+            N_("auto = h264p with openh264. h264p: H.264 with P frames, ~10x fewer bytes. h264: every frame "
+               "complete, copes better with losses at 2-3x the bandwidth. jpeg: without openh264."),
             "capture", ("auto", "h264p", "h264", "jpeg"), flag="--codec", arg="codec"),
-    Setting("adaptive", "adaptive", "bool", "Vídeo", "Qualidade adaptativa",
-            "Ajusta a qualidade à banda medida do Wi-Fi.", "live", flag="--fixed-quality"),
-    Setting("quality", "quality", "int", "Vídeo", "Qualidade",
-            "1-100. Com a adaptativa, é a inicial.", "live", min=1, max=100, flag="-q"),
-    Setting("target_fps", "target_fps", "float", "Vídeo", "FPS que a banda tem de sustentar",
-            "Adaptativa: menor = mais qualidade e mais tempo por frame.", "live", min=5, max=60,
+    Setting("adaptive", "adaptive", "bool", N_("Video"), N_("Adaptive quality"),
+            N_("Adjusts the quality to the measured Wi-Fi bandwidth."), "live", flag="--fixed-quality"),
+    Setting("quality", "quality", "int", N_("Video"), N_("Quality"),
+            N_("1-100. With adaptive quality, it is the starting one."), "live", min=1, max=100, flag="-q"),
+    Setting("target_fps", "target_fps", "float", N_("Video"), N_("FPS the bandwidth must sustain"),
+            N_("Adaptive: lower = more quality and more time per frame."), "live", min=5, max=60,
             flag="--target-fps", show_if=("adaptive", (True,))),
-    Setting("q_min", "q_min", "int", "Vídeo", "Qualidade mínima", "", "live", min=1, max=100,
+    Setting("q_min", "q_min", "int", N_("Video"), N_("Minimum quality"), "", "live", min=1, max=100,
             flag="--q-min", show_if=("adaptive", (True,))),
-    Setting("q_max", "q_max", "int", "Vídeo", "Qualidade máxima", "", "live", min=1, max=100,
+    Setting("q_max", "q_max", "int", N_("Video"), N_("Maximum quality"), "", "live", min=1, max=100,
             flag="--q-max", show_if=("adaptive", (True,))),
     # Som
-    Setting("audio", "no_audio", "bool", "Som", "Som do PC",
-            "O PSP também liga e desliga (SELECT + START + cima). Só pelo UDP.", "audio", invert=True,
+    Setting("audio", "no_audio", "bool", N_("Audio"), N_("PC audio"),
+            N_("The PSP also turns it on and off (SELECT + START + up). UDP only."), "audio", invert=True,
             flag="--no-audio"),
-    Setting("audio_device", "audio_device", "text", "Som", "Fonte do som",
-            "monitor = o que sai nas caixas (com a fonte wolf, o som do Wolf); test = tom de 440 Hz; ou uma "
-            "fonte do PipeWire.", "audio",
+    Setting("audio_device", "audio_device", "text", N_("Audio"), N_("Audio source"),
+            N_("monitor = what plays on the speakers (with the wolf source, Wolf's audio); test = 440 Hz tone; or "
+               "a PipeWire source."), "audio",
             flag="--audio-device", show_if=("audio", (True,))),
-    Setting("audio_rate", "audio_rate", "choice", "Som", "Taxa (Hz)",
-            "44100 é a do PSP (sem reamostrar). ~46 KB/s em estéreo.", "audio", (22050, 32000, 44100, 48000),
+    Setting("audio_rate", "audio_rate", "choice", N_("Audio"), N_("Rate (Hz)"),
+            N_("44100 is the PSP's (no resampling). ~46 KB/s in stereo."), "audio", (22050, 32000, 44100, 48000),
             flag="--audio-rate", show_if=("audio", (True,))),
-    Setting("audio_mono", "audio_mono", "bool", "Som", "Mono", "Metade dos bytes.", "audio",
+    Setting("audio_mono", "audio_mono", "bool", N_("Audio"), N_("Mono"), N_("Half the bytes."), "audio",
             flag="--audio-mono", show_if=("audio", (True,))),
     # Controles
-    Setting("input", "no_input", "bool", "Controles", "Controles do PSP no PC",
-            "Precisa de acesso ao /dev/uinput (wiki do PSPStream, Instalação).", "input", invert=True,
+    Setting("input", "no_input", "bool", N_("Controls"), N_("PSP controls on the PC"),
+            N_("Needs access to /dev/uinput (PSPStream wiki, Installation)."), "input", invert=True,
             flag="--no-input"),
-    Setting("profile", "profile", "choice", "Controles", "Perfil",
-            "jogo, desktop, setas: teclado e mouse. xbox*: controle de Xbox 360 virtual.", "input",
+    Setting("profile", "profile", "choice", N_("Controls"), N_("Profile"),
+            N_("game, desktop, arrows: keyboard and mouse. xbox*: virtual Xbox 360 controller."), "input",
             flag="--profile", show_if=("input", (True,))),
-    Setting("mouse_speed", "mouse_speed", "float", "Controles", "Velocidade do mouse",
-            "Multiplica a do perfil (perfis de teclado e mouse).", "input", min=0.1, max=5, flag="--mouse-speed",
-            show_if=("input", (True,))),
+    Setting("mouse_speed", "mouse_speed", "float", N_("Controls"), N_("Mouse speed"),
+            N_("Multiplies the profile's (keyboard and mouse profiles)."), "input", min=0.1, max=5,
+            flag="--mouse-speed", show_if=("input", (True,))),
     # Rede
-    Setting("dscp", "dscp", "choice", "Rede", "Prioridade no Wi-Fi (DSCP)",
-            "ef = fila de voz do WMM (padrão); cs5/af41 = vídeo; 0 = nenhuma.", "live",
+    Setting("dscp", "dscp", "choice", N_("Network"), N_("Wi-Fi priority (DSCP)"),
+            N_("ef = WMM voice queue (default); cs5/af41 = video; 0 = none."), "live",
             ("ef", "cs5", "af41", "0"), flag="--dscp"),
-    Setting("p_redundancy_ms", "p_redundancy_ms", "float", "Rede", "Cópia do último pedaço (ms)",
-            "Frames P: o último pedaço de cada frame vai de novo depois disso; 0 desliga.", "next",
+    Setting("p_redundancy_ms", "p_redundancy_ms", "float", N_("Network"), N_("Copy of the last chunk (ms)"),
+            N_("P frames: the last chunk of each frame is sent again after this; 0 turns it off."), "next",
             min=0, max=50, flag="--p-redundancy-ms"),
-    Setting("port", "port", "int", "Rede", "Porta", "TCP e UDP. No PSP, a mesma no server.txt.", "restart",
-            min=1024, max=65535, flag="--port"),
+    Setting("port", "port", "int", N_("Network"), N_("Port"), N_("TCP and UDP. On the PSP, the same in server.txt."),
+            "restart", min=1024, max=65535, flag="--port"),
 )
 
 BY_KEY = {s.key: s for s in SETTINGS}
@@ -171,48 +175,48 @@ def coerce(setting: Setting, value, choices=None):
     if kind == "bool":
         if isinstance(value, bool):
             return value
-        raise ValueError("use verdadeiro ou falso")
+        raise ValueError(tr("use true or false"))
     if kind in ("int", "float"):
         if isinstance(value, bool) or not isinstance(value, (int, float, str)):
-            raise ValueError("número inválido")
+            raise ValueError(tr("invalid number"))
         try:
             number = float(value)
         except ValueError:
-            raise ValueError("número inválido") from None
+            raise ValueError(tr("invalid number")) from None
         if number != number or number in (float("inf"), float("-inf")):
-            raise ValueError("número inválido")
+            raise ValueError(tr("invalid number"))
         if kind == "int":
             if number != int(number):
-                raise ValueError("use um número inteiro")
+                raise ValueError(tr("use a whole number"))
             number = int(number)
         if setting.min is not None and number < setting.min:
-            raise ValueError(f"o mínimo é {setting.min:g}")
+            raise ValueError(tr("the minimum is {min:g}").format(min=setting.min))
         if setting.max is not None and number > setting.max:
-            raise ValueError(f"o máximo é {setting.max:g}")
+            raise ValueError(tr("the maximum is {max:g}").format(max=setting.max))
         return number
     if kind == "choice":
         allowed = tuple(choices) if choices is not None else setting.choices
         for option in allowed:
             if value == option or (isinstance(option, int) and isinstance(value, str) and value == str(option)):
                 return option
-        raise ValueError("opção inválida (" + ", ".join(str(c) for c in allowed) + ")")
+        raise ValueError(tr("invalid option ({options})").format(options=", ".join(str(c) for c in allowed)))
     if kind == "text":
         if not isinstance(value, str):
-            raise ValueError("texto inválido")
+            raise ValueError(tr("invalid text"))
         value = value.strip()
         if setting.key == "audio_device" and not AUDIO_DEVICE_RE.match(value):
-            raise ValueError("nome de fonte inválido (letras, números e . : @ + - _)")
+            raise ValueError(tr("invalid source name (letters, digits and . : @ + - _)"))
         if setting.key == "wolf_target" and not WOLF_TARGET_RE.match(value):
-            raise ValueError("até 100 caracteres, sem caracteres de controle")
+            raise ValueError(tr("up to 100 characters, no control characters"))
         return value
-    raise ValueError(f"tipo desconhecido: {kind}")
+    raise ValueError(tr("unknown type: {kind}").format(kind=kind))
 
 
 def check_together(values: dict) -> dict:
     """Regras entre configurações. {chave: erro}."""
     errors = {}
     if values.get("q_min") is not None and values.get("q_max") is not None and values["q_min"] > values["q_max"]:
-        errors["q_min"] = "a mínima passa da máxima"
+        errors["q_min"] = tr("the minimum is above the maximum")
     return errors
 
 
@@ -255,27 +259,27 @@ class ConfigStore:
         except FileNotFoundError:
             return {}
         except (OSError, ValueError) as exc:
-            log.warning("configuração %s ignorada: %s", self.path, exc)
+            log.warning(tr("settings %s ignored: %s"), self.path, exc)
             return {}
         if not isinstance(raw, dict):
-            log.warning("configuração %s ignorada: não é um objeto JSON", self.path)
+            log.warning(tr("settings %s ignored: not a JSON object"), self.path)
             return {}
         for key, value in raw.items():
             setting = BY_KEY.get(key)
             if setting is None:
-                log.warning("configuração %s: '%s' não existe, ignorada", self.path, key)
+                log.warning(tr("settings %s: '%s' does not exist, ignored"), self.path, key)
                 continue
             try:
                 if setting.kind == "choice" and not setting.choices:  # perfil: conferido ao abrir os controles
                     if not isinstance(value, str):
-                        raise ValueError("opção inválida")
+                        raise ValueError(tr("invalid option"))
                     self.values[key] = value
                 else:
                     self.values[key] = coerce(setting, value)
             except ValueError as exc:
-                log.warning("configuração %s: %s = %r ignorada (%s)", self.path, key, value, exc)
+                log.warning(tr("settings %s: %s = %r ignored (%s)"), self.path, key, value, exc)
         for key, msg in check_together({**self.defaults, **self.values}).items():
-            log.warning("configuração %s: %s ignorada (%s)", self.path, key, msg)
+            log.warning(tr("settings %s: %s ignored (%s)"), self.path, key, msg)
             self.values.pop(key, None)
         return dict(self.values)
 

@@ -20,6 +20,7 @@ import protocol
 import settings
 from settings import BY_KEY, SETTINGS
 from transports import set_dscp
+from i18n import N_, set_language, tr
 
 log = logging.getLogger("pspstream.control")
 
@@ -29,12 +30,12 @@ ADAPTIVE_KEYS = ("adaptive", "target_fps", "q_min", "q_max")
 
 
 def keymap_profiles(path) -> dict:
-    """Perfis do keymap.json: nome -> 'gamepad' ou 'teclado'."""
+    """Perfis do keymap.json: nome -> 'gamepad' ou 'keyboard'."""
     try:
         data = json.loads(Path(path).read_text())
     except (OSError, ValueError):
         return {}
-    return {name: "gamepad" if p.get("type") == "gamepad" else "teclado"
+    return {name: "gamepad" if p.get("type") == "gamepad" else "keyboard"
             for name, p in data.items() if not name.startswith("_") and isinstance(p, dict)}
 
 
@@ -110,8 +111,9 @@ class Controller:
         """Esquema + valores, para montar a página."""
         items = []
         for s in SETTINGS:
-            item = {"key": s.key, "kind": s.kind, "group": s.group, "label": s.label, "help": s.help,
-                    "apply": s.apply, "apply_text": settings.APPLY_TEXT[s.apply], "flag": s.flag,
+            item = {"key": s.key, "kind": s.kind, "group": tr(s.group), "label": tr(s.label),
+                    "help": tr(s.help) if s.help else "", "apply": s.apply,
+                    "apply_text": tr(settings.APPLY_TEXT[s.apply]), "flag": s.flag,
                     "cli": settings.cli_dest(s) in self.explicit}
             if s.kind == "choice":
                 item["choices"] = list(self.choices(s))
@@ -142,7 +144,7 @@ class Controller:
                         "quality": src.quality, "failed": getattr(src, "failed", None)},
             "audio": None,
             "wolf": src.status() if hasattr(src, "status") else None,
-            "input": {"on": server.injector is not None, "profile": args.profile, "note": self.input_note},
+            "input": {"on": server.injector is not None, "profile": args.profile, "note": tr(self.input_note)},
             "psp": None,
         }
         cap = server.audio
@@ -150,7 +152,7 @@ class Controller:
             st["audio"] = {"on": True, "device": cap.device, "rate": cap.rate, "channels": cap.channels,
                            "kbps": round(cap.kbps, 1), "failed": cap.failed}
         else:
-            st["audio"] = {"on": False, "note": self.audio_note}
+            st["audio"] = {"on": False, "note": tr(self.audio_note)}
         sess = server.session()
         if sess is not None:
             info = {"transport": sess.transport.name, "addr": "%s:%d" % tuple(sess.transport.addr[:2]),
@@ -175,14 +177,14 @@ class Controller:
         """Valida tudo antes; depois aplica por grupo. Grava no arquivo o que
         foi aplicado (ou fica para reiniciar)."""
         if not isinstance(changes, dict):
-            return {"ok": False, "errors": {"": "esperava um objeto"}}
+            return {"ok": False, "errors": {"": tr("expected an object")}}
         with self.lock:
             current = self.values()
             errors, parsed = {}, {}
             for key, raw in changes.items():
                 setting = BY_KEY.get(key)
                 if setting is None:
-                    errors[key] = "configuração desconhecida"
+                    errors[key] = tr("unknown setting")
                     continue
                 try:
                     value = settings.coerce(setting, raw, self.choices(setting) if setting.kind == "choice" else None)
@@ -220,14 +222,14 @@ class Controller:
                         self.pending.update(part)
                 except RuntimeError as exc:
                     msg = str(exc)
-                    log.warning("interface web: %s", msg)
+                    log.warning(tr("web interface: %s"), msg)
                     failed.update({k: msg for k in part})
                     continue
                 if apply in ("next", "restart"):
-                    later.extend({"key": k, "when": settings.APPLY_TEXT[apply]} for k in part)
+                    later.extend({"key": k, "when": tr(settings.APPLY_TEXT[apply])} for k in part)
                 else:
                     applied.extend(part)
-                log.info("interface web: %s", ", ".join(f"{k} = {v}" for k, v in part.items()))
+                log.info(tr("web interface: %s"), ", ".join(f"{k} = {v}" for k, v in part.items()))
             saved = {k: v for k, v in parsed.items() if k not in failed}
             save_error = None
             if saved and self.store is not None:
@@ -235,7 +237,7 @@ class Controller:
                 try:
                     self.store.save()
                 except OSError as exc:
-                    save_error = f"não foi possível gravar {self.store.path}: {exc}"
+                    save_error = tr("could not save {path}: {error}").format(path=self.store.path, error=exc)
                     log.warning("%s", save_error)
             return {"ok": not failed and not save_error, "applied": applied, "later": later, "errors": failed,
                     "save_error": save_error, "values": self.values(), "pending": dict(self.pending)}
@@ -269,7 +271,7 @@ class Controller:
         except SystemExit as exc:  # build_source: --source gst sem --gst-src
             raise RuntimeError(str(exc)) from None
         except Exception as exc:  # portal recusado, GStreamer, KMS sem o auxiliar...
-            raise RuntimeError(f"não foi possível iniciar a captura: {exc}") from None
+            raise RuntimeError(tr("could not start the capture: {error}").format(error=exc)) from None
         deadline = time.monotonic() + FIRST_FRAME_S
         while not getattr(source, "failed", None) and source.latest()[1] is None and time.monotonic() < deadline:
             time.sleep(0.05)
@@ -278,13 +280,13 @@ class Controller:
             source.stop()
             if new.source == "portal" and portal is None and getattr(source, "keepalive", None) is not None:
                 source.keepalive.close()
-            raise RuntimeError(f"a captura nova falhou: {failed}")
+            raise RuntimeError(tr("the new capture failed: {error}").format(error=failed))
         self.server.set_source(source)
         vars(self.args).update(vars(new))
         old.stop()
         if old_args.source == "portal" and not same_portal and getattr(old, "keepalive", None) is not None:
             old.keepalive.close()  # sessão do portal que ninguém mais usa
-        log.info("captura: %s, %s, até %d fps", new.source, new.codec, new.fps)
+        log.info(tr("capture: %s, %s, up to %d fps"), new.source, new.codec, new.fps)
         if "wolf" in (old_source, self.args.source):
             self._follow_source_audio()
             self._follow_source_input()
@@ -294,13 +296,13 @@ class Controller:
         old = self.server.injector
         if old is None and self.args.no_input:
             return
-        injector, kind = None, "desligados"
+        injector, kind = None, N_("off")
         if not self.args.no_input:
             try:
                 injector, kind = capture.open_injector(self.args)
             except RuntimeError as exc:
-                kind = f"desativados: {exc}"
-                log.warning("controles desativados: %s", exc)
+                kind = tr("disabled: {error}").format(error=exc)
+                log.warning(tr("controls disabled: %s"), exc)
         self.server.set_injector(injector)
         if old is not None:
             old.release_all()
@@ -316,14 +318,16 @@ class Controller:
             cap = capture.open_audio(self.args, seq0=old.seq if old is not None else 0)
         except RuntimeError as exc:
             cap = None
-            self.audio_note = f"a captura não abriu: {exc}"
-            log.warning("som desativado: %s", exc)
+            self.audio_note = tr("the capture did not open: {error}").format(error=exc)
+            log.warning(tr("audio disabled: %s"), exc)
         self.server.set_audio(cap)
         if old is not None:
             old.stop()
 
     def _apply_live(self, part: dict) -> None:
         self._commit(self.args, part)
+        if "language" in part:
+            set_language(part["language"])
         src = self.server.source
         if "fps" in part and hasattr(src, "set_fps"):
             src.set_fps(part["fps"])
@@ -353,14 +357,14 @@ class Controller:
         if old is not None:
             old.stop()
         self._commit(self.args, part)
-        self.audio_note = "" if cap is not None else "desligado na interface web"
+        self.audio_note = "" if cap is not None else N_("turned off in the web interface")
         if cap is None:
-            log.info("som desligado")
+            log.info(tr("audio off"))
 
     def _restart_input(self, part: dict) -> None:
         new = self._candidate(part)
         old = self.server.injector
-        injector, kind = None, "desligados"
+        injector, kind = None, N_("off")
         if not new.no_input:
             injector, kind = capture.open_injector(new)  # RuntimeError
         self.server.set_injector(injector)
@@ -370,4 +374,4 @@ class Controller:
         self._commit(self.args, part)
         self.input_note = kind
         if injector is None:
-            log.info("controles desligados")
+            log.info(tr("controls off"))

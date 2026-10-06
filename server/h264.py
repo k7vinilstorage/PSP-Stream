@@ -22,6 +22,7 @@ import gi
 gi.require_version("Gst", "1.0")
 gi.require_version("GstVideo", "1.0")
 from gi.repository import Gst, GstVideo  # noqa: E402
+from i18n import tr  # noqa: E402
 
 Gst.init(None)
 
@@ -70,7 +71,7 @@ class _GstPipe:
         self._src = self._pipe.get_by_name("src")
         self._sink = self._pipe.get_by_name("sink")
         if self._pipe.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
-            raise RuntimeError(f"não foi possível iniciar o {ENCODER}")
+            raise RuntimeError(tr("could not start {encoder}").format(encoder=ENCODER))
         self._n = 0
 
     def encode(self, i420: bytes) -> bytes:
@@ -81,7 +82,7 @@ class _GstPipe:
         self._src.emit("push-buffer", buf)
         sample = self._sink.emit("try-pull-sample", Gst.SECOND)
         if sample is None:
-            raise RuntimeError(f"o {ENCODER} não devolveu o frame")
+            raise RuntimeError(tr("{encoder} did not return the frame").format(encoder=ENCODER))
         out = sample.get_buffer()
         return out.extract_dup(0, out.get_size())
 
@@ -104,14 +105,14 @@ def _open(width: int, height: int, qp: int, idr_every_frame: bool, backend: str)
             enc = openh264.Encoder(width, height, qp, idr_every_frame=idr_every_frame)
             if "direct" not in _warned:
                 _warned.add("direct")
-                log.info("H.264: libopenh264 %s chamada direto", ".".join(map(str, enc.version)))
+                log.info(tr("H.264: libopenh264 %s called directly"), ".".join(map(str, enc.version)))
             return enc
         except openh264.OpenH264Error as exc:
             if backend == "openh264":
                 raise RuntimeError(f"--h264-encoder openh264: {exc}") from exc
             if "fallback" not in _warned:
                 _warned.add("fallback")
-                log.warning("H.264: %s; usando o openh264enc do GStreamer", exc)
+                log.warning(tr("H.264: %s; using GStreamer's openh264enc"), exc)
     return _GstPipe(width, height, qp, idr_every_frame)
 
 
@@ -124,7 +125,7 @@ def _encode_safe(owner, i420: bytes) -> bytes:
     except openh264.OpenH264Error as exc:
         if owner.backend == "openh264":
             raise
-        log.warning("H.264: %s; passando para o openh264enc do GStreamer", exc)
+        log.warning(tr("H.264: %s; switching to GStreamer's openh264enc"), exc)
         owner._enc.close()
         owner.backend = "gstreamer"
         owner._enc = _GstPipe(owner.width, owner.height, owner._qp, owner.idr_every_frame)
@@ -311,7 +312,7 @@ def set_sps_level(data: bytes, level_idc: int) -> bytes:
             return bytes(out)
         if out[j + 3] & 0x1F == 7:
             if 0 in out[j + 4:j + 6]:
-                raise ValueError("SPS com zero antes do level_idc")
+                raise ValueError(tr("SPS with a zero before level_idc"))
             out[j + 6] = level_idc
         i = j + 3
 
@@ -330,7 +331,7 @@ def image_to_i420(path: str, width: int, height: int, keep_aspect: bool = True, 
     try:
         sample = sink.emit("try-pull-sample", 10 * Gst.SECOND)
         if sample is None:
-            raise RuntimeError(f"não consegui converter {path}")
+            raise RuntimeError(tr("could not convert {path}").format(path=path))
         buf = sample.get_buffer()
         return buf.extract_dup(0, buf.get_size())
     finally:

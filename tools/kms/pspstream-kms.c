@@ -63,6 +63,9 @@ typedef struct {
 } candidate_t;
 
 static int sock = -1;
+/* Mensagens em inglês; --lang pt (o servidor manda quando o idioma é português) troca para português. */
+static int lang_pt;
+#define T(en, pt) (lang_pt ? (pt) : (en))
 
 static void send_reply(struct reply *r, const int *fds, int nfds)
 {
@@ -170,8 +173,10 @@ static int send_frame(int fd, uint32_t fb_id)
         return 1;
     if (!fb->handles[0]) {
         drmModeFreeFB2(fb);
-        send_error("sem permissão para ler a tela: rode sudo setcap cap_sys_admin+ep neste programa "
-                   "(e de novo depois de cada make)");
+        send_error("%s", T("no permission to read the screen: run sudo setcap cap_sys_admin+ep on this program "
+                           "(and again after every make)",
+                           "sem permissão para ler a tela: rode sudo setcap cap_sys_admin+ep neste programa "
+                           "(e de novo depois de cada make)"));
         return -1;
     }
     struct reply r = {0};
@@ -206,7 +211,8 @@ static int send_frame(int fd, uint32_t fb_id)
     for (int i = 0; i < n; i++)
         close(fds[i]);
     if (!ok) {
-        send_error("não consegui exportar o buffer da tela (drmPrimeHandleToFD: %s)", strerror(errno));
+        send_error(T("could not export the screen buffer (drmPrimeHandleToFD: %s)",
+                     "não consegui exportar o buffer da tela (drmPrimeHandleToFD: %s)"), strerror(errno));
         return -1;
     }
     return 0;
@@ -222,7 +228,8 @@ static uint64_t now_ns(void)
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        fprintf(stderr, "uso: %s <fd> [--card /dev/dri/cardN] [--monitor N] (chamado pelo servidor)\n", argv[0]);
+        fprintf(stderr, "usage: %s <fd> [--card /dev/dri/cardN] [--monitor N] [--lang en|pt] (called by the server)\n",
+                argv[0]);
         return 2;
     }
     sock = atoi(argv[1]);
@@ -233,21 +240,25 @@ int main(int argc, char **argv)
             card = argv[i + 1];
         else if (!strcmp(argv[i], "--monitor"))
             monitor = atoi(argv[i + 1]);
+        else if (!strcmp(argv[i], "--lang"))
+            lang_pt = !strncmp(argv[i + 1], "pt", 2);
     }
     /* Só abre placas de vídeo: o programa tem CAP_SYS_ADMIN. */
     if (card && (strncmp(card, "/dev/dri/card", 13) || !card[13] || strspn(card + 13, "0123456789") != strlen(card + 13))) {
-        send_error("--kms-card precisa ser /dev/dri/cardN");
+        send_error("%s", T("--kms-card must be /dev/dri/cardN", "--kms-card precisa ser /dev/dri/cardN"));
         return 1;
     }
 
     candidate_t c[MAX_CANDIDATES];
     int n = find_candidates(card, c, MAX_CANDIDATES);
     if (n == 0) {
-        send_error("nenhum monitor ligado encontrado em %s", card ? card : "/dev/dri/card*");
+        send_error(T("no connected monitor found on %s", "nenhum monitor ligado encontrado em %s"),
+                   card ? card : "/dev/dri/card*");
         return 1;
     }
     if (monitor < 0 || monitor >= n) {
-        send_error("--kms-monitor %d não existe: há %d monitor(es) (0 a %d)", monitor, n, n - 1);
+        send_error(T("--kms-monitor %d does not exist: there are %d monitor(s) (0 to %d)",
+                     "--kms-monitor %d não existe: há %d monitor(es) (0 a %d)"), monitor, n, n - 1);
         return 1;
     }
     candidate_t *m = &c[monitor];
@@ -267,11 +278,13 @@ int main(int argc, char **argv)
     hello.refresh_mhz = m->refresh_mhz;
     hello.crtc_id = m->crtc_id;
     /* Lista todos: o servidor mostra no log, para escolher com --kms-monitor. */
-    int len = snprintf(hello.msg, sizeof(hello.msg), "monitor %d de %d (%s %ux%u a %.3f Hz)", monitor, n, m->path,
+    int len = snprintf(hello.msg, sizeof(hello.msg), T("monitor %d of %d (%s %ux%u at %.3f Hz)",
+                                                       "monitor %d de %d (%s %ux%u a %.3f Hz)"), monitor, n, m->path,
                        m->width, m->height, m->refresh_mhz / 1000.0);
     for (int i = 0; i < n && len < (int)sizeof(hello.msg); i++)
         if (i != monitor)
-            len += snprintf(hello.msg + len, sizeof(hello.msg) - len, "; --kms-monitor %d = %ux%u a %.3f Hz", i,
+            len += snprintf(hello.msg + len, sizeof(hello.msg) - len,
+                            T("; --kms-monitor %d = %ux%u at %.3f Hz", "; --kms-monitor %d = %ux%u a %.3f Hz"), i,
                             c[i].width, c[i].height, c[i].refresh_mhz / 1000.0);
     send_reply(&hello, NULL, 0);
 

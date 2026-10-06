@@ -142,21 +142,21 @@ class WolfApiErrorsTest(unittest.TestCase):
         self.addCleanup(sock.close)
         with self.assertRaises(WolfApiError) as cm:
             WolfApi(self.path).lobbies()
-        self.assertIn("o Wolf está rodando", str(cm.exception))
+        self.assertIn("is Wolf running", str(cm.exception))
 
     def test_not_json(self):
         body = b"Chunked encoding not supported, use HTTP/1.0 instead"
         self.serve_once(b"HTTP/1.0 500 OK\r\nContent-Length: %d\r\n\r\n%s" % (len(body), body))
         with self.assertRaises(WolfApiError) as cm:
             WolfApi(self.path).lobbies()
-        self.assertIn("não é JSON", str(cm.exception))
+        self.assertIn("not JSON", str(cm.exception))
         self.assertIn("Chunked", str(cm.exception))
 
     def test_timeout(self):
         self.serve_once(delay=1.5)
         with self.assertRaises(WolfApiError) as cm:
             WolfApi(self.path, timeout=0.3).lobbies()
-        self.assertIn("não respondeu", str(cm.exception))
+        self.assertIn("did not answer", str(cm.exception))
 
     @unittest.skipIf(os.geteuid() == 0, "root abre o socket mesmo sem permissão")
     def test_permission(self):
@@ -168,7 +168,7 @@ class WolfApiErrorsTest(unittest.TestCase):
         os.chmod(self.path, 0o555)
         with self.assertRaises(WolfApiError) as cm:
             WolfApi(self.path).lobbies()
-        self.assertIn("sem permissão", str(cm.exception))
+        self.assertIn("no permission", str(cm.exception))
 
     def test_env_defaults(self):
         with mock.patch.dict(os.environ, {"WOLF_SOCKET_PATH": "/run/x/wolf.sock", "WOLF_VIDEO_PING_PORT": "49100",
@@ -246,7 +246,7 @@ class PipelineTextTest(unittest.TestCase):
 class ResolveTargetTest(unittest.TestCase):
     def test_auto(self):
         self.assertIsNone(resolve_target("", [], [])[0])
-        self.assertIn("nenhum lobby", resolve_target("", [], [])[1])
+        self.assertIn("no lobby", resolve_target("", [], [])[1])
         target, _ = resolve_target("", [lobby()], [])
         self.assertEqual(target, Target("lobby", LOBBY, "Steam", LOBBY))
         with self.assertRaises(TargetError) as cm:
@@ -263,16 +263,16 @@ class ResolveTargetTest(unittest.TestCase):
         self.assertEqual(resolve_target("retroarch", lobbies, sessions)[0].id, LOBBY2)
         # uma sessão Moonlight num lobby vê o lobby; fora dele, o próprio compositor
         self.assertEqual(resolve_target("555", lobbies, sessions)[0].producer, LOBBY2)
-        self.assertEqual(resolve_target("777", lobbies, sessions)[0], Target("sessão", "777", "192.168.0.30", "777"))
+        self.assertEqual(resolve_target("777", lobbies, sessions)[0], Target("session", "777", "192.168.0.30", "777"))
         # a nossa sessão e as que sobraram de outro PSPStream não são alvo
         self.assertIsNone(resolve_target("777", lobbies, sessions, own="777")[0])
         target, why = resolve_target("999", lobbies, sessions)
         self.assertIsNone(target)
         self.assertIn("lobby " + LOBBY, why)
-        self.assertIn("sessão 555", why)
-        self.assertNotIn("sessão 999", why)
+        self.assertIn("session 555", why)
+        self.assertNotIn("session 999", why)
         twins = [lobby(), lobby(LOBBY2, "Steam")]
-        self.assertIn("use o id", resolve_target("steam", twins, [])[1])
+        self.assertIn("use the id", resolve_target("steam", twins, [])[1])
 
 
 class WolfSourceTest(WolfCase):
@@ -342,7 +342,7 @@ class WolfSourceTest(WolfCase):
             for pipe in pipes:  # o pipeline do Wolf morreu: a conexão fecha
                 pipe.set_state(fake_wolf.Gst.State.NULL)
             self.assertTrue(self.wolf.wait_for(lambda: self.wolf.paths("POST").count("/sessions/add") == 2, 15))
-        self.assertIn("parou de chegar", "\n".join(logs.output))
+        self.assertIn("stopped arriving", "\n".join(logs.output))
         n = src.latest()[0]
         self.assertIsNotNone(src.wait_newer(n, 10))
         self.assertIsNone(src.failed)
@@ -355,7 +355,7 @@ class WolfSourceTest(WolfCase):
         with self.assertLogs("pspstream.wolf", "WARNING") as logs:
             src.start()
             self.assertIsNotNone(src.wait_newer(0, 10))
-        self.assertIn("sobrou", "\n".join(logs.output))
+        self.assertIn("left over", "\n".join(logs.output))
         posts = self.wolf.paths("POST")
         self.assertLess(posts.index("/sessions/stop"), posts.index("/sessions/add"))
 
@@ -377,7 +377,7 @@ class WolfSourceTest(WolfCase):
         src = self.source()
         with self.assertLogs("pspstream.wolf", "WARNING") as logs:
             src.start()  # não falha: espera o Wolf subir
-        self.assertIn("não existe", "\n".join(logs.output))
+        self.assertIn("does not exist", "\n".join(logs.output))
         self.assertIsNone(src.failed)
         self.wolf = fake_wolf.FakeWolf(self.tmp.name, [lobby()])
         self.addCleanup(self.wolf.close)
@@ -418,14 +418,14 @@ class WolfStatusTest(WolfCase):
             self.wolf.lobbies.clear()
         src = self.source()
         src.start()
-        self.assertTrue(self.wolf.wait_for(lambda: "nenhum lobby" in src.status()["text"]))
+        self.assertTrue(self.wolf.wait_for(lambda: "no lobby" in src.status()["text"]))
         self.assertTrue(src.status()["warn"])
         with self.wolf.lock:
             self.wolf.lobbies.append(lobby())
         self.assertIsNotNone(src.wait_newer(0, 10))
         st = src.status()
-        self.assertIn("espelhando lobby Steam", st["text"])
-        self.assertIn("conversão cpu", st["text"])
+        self.assertIn("mirroring lobby Steam", st["text"])
+        self.assertIn("conversion cpu", st["text"])
         self.assertFalse(st["warn"])
 
 
@@ -687,7 +687,7 @@ class WolfInputTest(WolfCase):
             self.assertIsNotNone(src.wait_newer(0, 10))
             inj.update(self.CROSS, 128, 128)
             time.sleep(1)
-        self.assertIn("só visualização", "\n".join(logs.output))
+        self.assertIn("view only", "\n".join(logs.output))
         self.assertNotIn("/lobbies/join", self.wolf.paths("POST"))
         self.assertEqual(self.wolf.inputs, [])  # nada vai para o compositor vazio da nossa sessão
 
@@ -722,7 +722,7 @@ class WolfInputTest(WolfCase):
             inj, kind = capture.open_injector(args)
         self.addCleanup(inj.close)
         self.assertIsInstance(inj, wolf_input.WolfInjector)
-        self.assertIn("INFO:pspstream.capture:controles: o perfil 'jogo' é de teclado", "\n".join(logs.output))
+        self.assertIn("INFO:pspstream.capture:controls: profile 'game' is keyboard and mouse", "\n".join(logs.output))
         desktop = pspstream.build_parser().parse_args(["--source", "wolf", "--profile", "desktop"])
         with self.assertLogs("pspstream.capture", "WARNING"):  # escolhido de propósito: avisa
             inj2, _ = capture.open_injector(desktop)

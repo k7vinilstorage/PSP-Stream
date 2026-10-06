@@ -28,6 +28,7 @@ import threading
 import time
 
 from inject import PSP_BUTTONS
+from i18n import tr
 
 log = logging.getLogger("pspstream.gamepad")
 
@@ -62,8 +63,8 @@ def parse_targets(action: str):
     names = [t.strip().upper() for t in action.split("+") if t.strip()]
     bad = [t for t in names if t not in TARGETS]
     if bad:
-        raise SystemExit(f"destino desconhecido no keymap (gamepad): {', '.join(bad)}; "
-                         f"use {', '.join(sorted(TARGETS))}")
+        raise SystemExit(tr("unknown target in the keymap (gamepad): {names}; use {valid}").format(
+            names=", ".join(bad), valid=", ".join(sorted(TARGETS))))
     return names
 
 
@@ -71,7 +72,7 @@ def _button_map(table: dict, what: str) -> dict:
     out = {}
     for name, action in table.items():
         if name not in PSP_BUTTONS:
-            raise SystemExit(f"botão do PSP desconhecido em {what}: {name}")
+            raise SystemExit(tr("unknown PSP button in {where}: {name}").format(where=what, name=name))
         out[PSP_BUTTONS[name]] = parse_targets(action)
     return out
 
@@ -86,7 +87,7 @@ class _PadDryRun:
     def emit(self, changes):
         for kind, code, value in changes:
             self.events.append((code, value))
-            log.info("controle %s = %d", code, value)
+            log.info(tr("gamepad %s = %d"), code, value)
         self.syns += 1
 
     def close(self):
@@ -99,7 +100,7 @@ class _PadUInput:
             from evdev import AbsInfo, UInput, ecodes
         except ImportError as exc:
             import distro
-            raise RuntimeError(f"python-evdev não instalado ({distro.hint('evdev')})") from exc
+            raise RuntimeError(tr("python-evdev is not installed ({hint})").format(hint=distro.hint("evdev"))) from exc
         self.ec = ecodes
         stick = AbsInfo(value=0, min=-32768, max=32767, fuzz=16, flat=128, resolution=0)
         trigger = AbsInfo(value=0, min=0, max=255, fuzz=0, flat=0, resolution=0)
@@ -116,7 +117,7 @@ class _PadUInput:
             self.ui = UInput(caps, name=NAME, vendor=VENDOR, product=PRODUCT, version=VERSION,
                              bustype=BUS_USB, max_effects=0)
         except Exception as exc:  # OSError/PermissionError ou evdev.UInputError
-            raise RuntimeError(f"sem acesso a /dev/uinput ({exc}); veja a página Instalação da wiki do PSPStream, Controles (uinput)") from exc
+            raise RuntimeError(tr("no access to /dev/uinput ({error}); see \"Controls (uinput)\" on the Installation page of the PSPStream wiki").format(error=exc)) from exc
 
     def emit(self, changes):
         ec = self.ec
@@ -139,7 +140,7 @@ class GamepadInjector:
         if shift:
             name = shift.get("button", "SELECT")
             if name not in PSP_BUTTONS:
-                raise SystemExit(f"botão de shift desconhecido: {name}")
+                raise SystemExit(tr("unknown shift button: {name}").format(name=name))
             self.shift_mask = PSP_BUTTONS[name]
             self.shift_buttons = _button_map(shift.get("buttons", {}), "shift")
             self.tap = parse_targets(shift["tap"]) if shift.get("tap") else None
@@ -147,7 +148,7 @@ class GamepadInjector:
         analog = profile.get("analog", {})
         self.stick = analog.get("stick", "left")
         if self.stick not in ("left", "right", "dpad", "none"):
-            raise SystemExit(f"analog.stick deve ser left, right, dpad ou none (veio {self.stick})")
+            raise SystemExit(tr("analog.stick must be left, right, dpad or none (got {value})").format(value=self.stick))
         self.deadzone = float(analog.get("deadzone", 0.15))
         self.outer = float(analog.get("max", 0.92))  # o analógico do PSP raramente chega a 100%
         self.curve = float(analog.get("curve", 1.0))
@@ -282,7 +283,7 @@ class GamepadInjector:
                     self._flush()
             if self.timeout and not self.timed_out and self._is_active() and \
                     now - self.last_update > self.timeout:
-                log.warning("controle: PSP sem mandar nada há %.0f ms, voltando ao neutro",
+                log.warning(tr("gamepad: nothing from the PSP for %.0f ms, back to neutral"),
                             (now - self.last_update) * 1000)
                 self.release_all()
                 self.timed_out = True

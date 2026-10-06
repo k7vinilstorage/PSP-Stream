@@ -1,14 +1,17 @@
-// Interface web do PSPStream: lê /api/config uma vez, /api/status a cada 2 s,
-// e manda só o que mudou para POST /api/config.
+// Interface web do PSPStream: lê /api/i18n e /api/config uma vez, /api/status
+// a cada 2 s, e manda só o que mudou para POST /api/config.
+// Textos em inglês, dentro de t(); a tradução vem do servidor (lang_pt.py).
 "use strict";
 
-const GROUPS = ["Captura", "Vídeo", "Som", "Controles", "Rede"];
+const N_ = (text) => text;  // marca para tradução; t() na hora de mostrar
 const LABELS = {
-  source: { portal: "portal (Wayland)", kms: "kms (placa de vídeo)", x11: "x11", test: "test (padrão animado)",
-            static: "static (imagem fixa)", gst: "gst (linha de comando)" },
-  codec: { auto: "auto", h264p: "h264p (frames P)", h264: "h264 (quadros completos)", jpeg: "jpeg" },
-  dscp: { ef: "ef (voz)", cs5: "cs5 (vídeo)", af41: "af41 (vídeo)", "0": "nenhuma" },
+  source: { portal: "portal (Wayland)", kms: N_("kms (graphics card)"), x11: "x11", test: N_("test (animated pattern)"),
+            static: N_("static (still image)"), gst: N_("gst (command line)") },
+  codec: { auto: "auto", h264p: N_("h264p (P frames)"), h264: N_("h264 (complete frames)"), jpeg: "jpeg" },
+  dscp: { ef: N_("ef (voice)"), cs5: N_("cs5 (video)"), af41: N_("af41 (video)"), "0": N_("none") },
 };
+// Os nomes dos idiomas ficam no próprio idioma, sem tradução.
+const LANG_NAMES = { en: "English", pt: "Português" };
 
 let schema = [];
 let saved = {};      // valores do servidor
@@ -17,6 +20,7 @@ let profiles = {};
 let lastLog = 0;
 let busy = false;
 let configPath = "";
+let messages = {};   // inglês -> idioma escolhido (vazio em inglês)
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, props = {}, ...kids) => {
@@ -25,11 +29,24 @@ const el = (tag, props = {}, ...kids) => {
   return n;
 };
 
+function t(text, params) {
+  const s = messages[text] || text;
+  return params ? s.replace(/\{(\w+)\}/g, (m, k) => (k in params ? String(params[k]) : m)) : s;
+}
+
+function translatePage(lang) {
+  document.documentElement.lang = lang === "pt" ? "pt-BR" : "en";
+  for (const n of document.querySelectorAll("[data-i18n]")) n.textContent = t(n.dataset.i18n);
+  for (const n of document.querySelectorAll("[data-i18n-aria-label]")) n.setAttribute("aria-label", t(n.dataset.i18nAriaLabel));
+}
+
 function optionLabel(key, value) {
   if (key === "profile" && profiles[value]) {
-    return `${value} (${profiles[value] === "gamepad" ? "controle de Xbox" : "teclado e mouse"})`;
+    return profiles[value] === "gamepad" ? t("{name} (Xbox controller)", { name: value })
+      : t("{name} (keyboard and mouse)", { name: value });
   }
-  return (LABELS[key] && LABELS[key][value]) || String(value);
+  if (key === "language") return LANG_NAMES[value] || String(value);
+  return LABELS[key] && LABELS[key][value] ? t(LABELS[key][value]) : String(value);
 }
 
 function control(s) {
@@ -63,9 +80,9 @@ function control(s) {
 function render() {
   const form = $("form");
   form.textContent = "";
-  for (const g of GROUPS) {
+  const groups = [...new Set(schema.map((s) => s.group))];  // na ordem do servidor, já traduzidos
+  for (const g of groups) {
     const items = schema.filter((s) => s.group === g);
-    if (!items.length) continue;
     const fs = el("fieldset", { className: "card" }, el("legend", { textContent: g }));
     for (const s of items) {
       const [widget, input] = control(s);
@@ -76,8 +93,8 @@ function render() {
       if (s.apply !== "live") badges.append(el("span", { className: "badge", textContent: s.apply_text }));
       if (s.cli) {
         badges.append(el("span", {
-          className: "badge cli", textContent: "linha de comando",
-          title: `${s.flag} foi dado na linha de comando: ao reiniciar, ele vale mais que esta configuração`,
+          className: "badge cli", textContent: t("command line"),
+          title: t("{flag} was given on the command line: on restart, it wins over this setting", { flag: s.flag }),
         }));
       }
       badges.append(el("span", { className: "badge later", id: "p-" + s.key, hidden: true }));
@@ -101,7 +118,7 @@ function fill(values) {
     else input.value = v == null ? "" : String(v);
     const p = $("p-" + s.key);
     p.hidden = !(s.key in pending);
-    if (s.key in pending) p.textContent = `${pending[s.key]} ao reiniciar`;
+    if (s.key in pending) p.textContent = t("{value} on restart", { value: pending[s.key] });
   }
   refresh();
 }
@@ -139,7 +156,7 @@ function refresh() {
   }
   const n = Object.keys(changes()).length;
   $("bar").hidden = n === 0 && !busy;
-  if (!busy) $("bar-msg").textContent = n === 1 ? "1 mudança ainda não aplicada" : `${n} mudanças ainda não aplicadas`;
+  if (!busy) $("bar-msg").textContent = n === 1 ? t("1 change not applied yet") : t("{n} changes not applied yet", { n });
 }
 
 function showErrors(errors) {
@@ -154,11 +171,11 @@ function showErrors(errors) {
 
 let toastTimer = null;
 function toast(text, ms = 5000) {
-  const t = $("toast");
-  t.textContent = text;
-  t.hidden = false;
+  const box = $("toast");
+  box.textContent = text;
+  box.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; }, ms);
+  toastTimer = setTimeout(() => { box.hidden = true; }, ms);
 }
 
 async function apply() {
@@ -167,26 +184,30 @@ async function apply() {
   busy = true;
   $("apply").disabled = $("undo").disabled = true;
   $("bar-msg").textContent = "source" in diff && diff.source === "portal"
-    ? "Aplicando... (confirme a tela na janela do portal, no PC)" : "Aplicando...";
+    ? t("Applying... (confirm the screen in the portal window, on the PC)") : t("Applying...");
   try {
     const res = await fetch("/api/config", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ values: diff }),
     });
     const r = await res.json();
     if (!res.ok) throw new Error(r.error || res.statusText);
+    if (r.applied && r.applied.includes("language")) {
+      location.reload();  // a página inteira no idioma novo
+      return;
+    }
     showErrors(r.errors);
     if (r.values) saved = r.values;
     if (r.pending) pending = r.pending;
     const keep = r.errors ? Object.fromEntries(Object.keys(r.errors).filter((k) => k in diff).map((k) => [k, diff[k]])) : {};
     fill({ ...saved, ...keep });
     const parts = [];
-    if (r.applied && r.applied.length) parts.push(`Aplicado: ${r.applied.join(", ")}.`);
+    if (r.applied && r.applied.length) parts.push(t("Applied: {keys}.", { keys: r.applied.join(", ") }));
     for (const l of r.later || []) parts.push(`${l.key}: ${l.when}.`);
-    if (r.errors && Object.keys(r.errors).length) parts.push("Algumas mudanças não foram aplicadas (veja os campos).");
+    if (r.errors && Object.keys(r.errors).length) parts.push(t("Some changes were not applied (see the fields)."));
     if (r.save_error) parts.push(r.save_error);
-    toast(parts.join(" ") || "Nada mudou.", r.ok ? 4000 : 9000);
+    toast(parts.join(" ") || t("Nothing changed."), r.ok ? 4000 : 9000);
   } catch (err) {
-    toast(`Não foi possível aplicar: ${err.message}`, 9000);
+    toast(t("Could not apply: {error}", { error: err.message }), 9000);
   } finally {
     busy = false;
     $("apply").disabled = $("undo").disabled = false;
@@ -209,10 +230,10 @@ function showStatus(st) {
   const pill = $("conn");
   if (psp && psp.streaming) {
     pill.className = "pill ok";
-    pill.textContent = `PSP conectado (${psp.transport.toUpperCase()})`;
+    pill.textContent = t("PSP connected ({transport})", { transport: psp.transport.toUpperCase() });
   } else {
     pill.className = "pill wait";
-    pill.textContent = psp ? "PSP conectando" : "aguardando o PSP";
+    pill.textContent = psp ? t("PSP connecting") : t("waiting for the PSP");
   }
   const s = (psp && psp.summary) || {};
   $("t-fps").textContent = fmt(s.fps, 1);
@@ -224,30 +245,36 @@ function showStatus(st) {
 
   const rows = [];
   if (psp) {
-    let line = `${psp.addr} via ${psp.transport.toUpperCase()}, há ${psp.since_s} s, ${psp.frames} frames (${psp.mb} MB)`;
-    if (psp.wifi) line += `, sinal ${psp.wifi.signal}%`;
+    let line = t("{addr} over {transport}, for {seconds} s, {frames} frames ({mb} MB)", {
+      addr: psp.addr, transport: psp.transport.toUpperCase(), seconds: psp.since_s, frames: psp.frames, mb: psp.mb,
+    });
+    if (psp.wifi) line += t(", signal {signal}%", { signal: psp.wifi.signal });
     rows.push(["PSP", line]);
     if (psp.wifi && psp.wifi.power_save) {
-      rows.push(["Wi-Fi do PSP", "economia de energia WLAN ligada: desligue em Ajustes > Economia de energia", true]);
+      rows.push([t("PSP Wi-Fi"), t("WLAN power save on: turn it off in Settings > Power Save Settings"), true]);
     }
   } else {
-    rows.push(["PSP", `no server.txt: ${st.ip}:${st.port} (ou "Procurar o PC na rede")`]);
+    rows.push(["PSP", t('in server.txt: {ip}:{port} (or "Find the PC on the network")', { ip: st.ip, port: st.port })]);
   }
   const c = st.capture;
-  rows.push(["Captura", `${c.source}, ${c.codec}, até ${c.fps_limit} fps` + (c.failed ? ` — parou: ${c.failed}` : ""), !!c.failed]);
+  rows.push([t("Capture"), t("{source}, {codec}, up to {fps} fps", { source: c.source, codec: c.codec, fps: c.fps_limit }) +
+    (c.failed ? t(" — stopped: {error}", { error: c.failed }) : ""), !!c.failed]);
   if (st.wolf) rows.push(["Wolf", st.wolf.text, st.wolf.warn]);
   const a = st.audio;
   if (a && a.on) {
-    rows.push(["Som", `${a.device}, ${a.rate} Hz ${a.channels === 2 ? "estéreo" : "mono"}, ~${a.kbps} KB/s` +
-      (psp && psp.audio_on === false ? " (desligado no PSP)" : "") + (a.failed ? ` — parou: ${a.failed}` : ""), !!a.failed]);
+    rows.push([t("Audio"), `${a.device}, ${a.rate} Hz ${a.channels === 2 ? t("stereo") : "mono"}, ~${a.kbps} KB/s` +
+      (psp && psp.audio_on === false ? t(" (turned off on the PSP)") : "") +
+      (a.failed ? t(" — stopped: {error}", { error: a.failed }) : ""), !!a.failed]);
   } else {
-    rows.push(["Som", (a && a.note) || "desligado"]);
+    rows.push([t("Audio"), (a && a.note) || t("turned off")]);
   }
   const i = st.input;
-  rows.push(["Controles", i.on ? `perfil ${i.profile} (${i.note})` : i.note || "desligados", !i.on && /desativ/.test(i.note || "")]);
+  rows.push([t("Controls"), i.on ? t("profile {profile} ({note})", { profile: i.profile, note: i.note }) : i.note || t("off"),
+    !i.on && /disabled|desativ/.test(i.note || "")]);
   setFacts(rows);
-  $("foot").textContent = `Servidor em ${st.ip}:${st.port}, rodando há ${Math.round(st.uptime_s / 60)} min` +
-    (configPath ? ` — configurações gravadas em ${configPath}` : "");
+  $("foot").textContent = t("Server at {ip}:{port}, running for {minutes} min", {
+    ip: st.ip, port: st.port, minutes: Math.round(st.uptime_s / 60),
+  }) + (configPath ? t(" — settings saved in {path}", { path: configPath }) : "");
 
   const log = $("log");
   const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
@@ -267,12 +294,20 @@ async function poll() {
   } catch (err) {
     const pill = $("conn");
     pill.className = "pill bad";
-    pill.textContent = "servidor fora do ar";
+    pill.textContent = t("server offline");
   }
   setTimeout(poll, 2000);
 }
 
 async function start() {
+  try {
+    const res = await fetch("/api/i18n", { cache: "no-store" });
+    const i18n = await res.json();
+    messages = i18n.messages || {};
+    translatePage(i18n.lang);
+  } catch (err) {
+    messages = {};  // segue em inglês
+  }
   try {
     const res = await fetch("/api/config", { cache: "no-store" });
     const cfg = await res.json();
@@ -284,7 +319,7 @@ async function start() {
     render();
     configPath = cfg.config_path || "";
   } catch (err) {
-    toast(`Não foi possível ler as configurações: ${err.message}`, 15000);
+    toast(t("Could not read the settings: {error}", { error: err.message }), 15000);
   }
   $("apply").addEventListener("click", apply);
   $("undo").addEventListener("click", () => { showErrors({}); fill(saved); });

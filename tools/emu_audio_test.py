@@ -80,21 +80,21 @@ def main():
                   {"select": False, "start": False, button: False})
 
         opened = "som: canal aberto"
-        checks = {"o PSP pede o som ao conectar": wait_log("som: ligado no PSP"),
+        checks = {"o PSP pede o som ao conectar": wait_log("audio: turned on on the PSP"),
                   "o PSP abre o canal de som": wait_log(opened, path=psp_path)}
-        checks["os pacotes de som saem"] = wait_log("| som ")
+        checks["os pacotes de som saem"] = wait_log("| audio ")
         time.sleep(1.0)
         combo("up")
-        checks["SELECT + START + cima desliga"] = wait_log("som: desligado no PSP")
+        checks["SELECT + START + cima desliga"] = wait_log("audio: turned off on the PSP")
         time.sleep(0.5)
         combo("up")
-        checks["... e liga de novo"] = wait_log("som: ligado no PSP", count=2)
+        checks["... e liga de novo"] = wait_log("audio: turned on on the PSP", count=2)
         checks["... com o canal aberto de novo"] = wait_log(opened, count=2, path=psp_path)
         time.sleep(1.0)
         combo("rtrigger")  # tela de configuração
         time.sleep(1.5)
         press({"circle": True}, {"circle": False})  # conectar sem salvar
-        checks["depois da configuração, o som volta"] = wait_log("som: ligado no PSP", count=3, timeout=20)
+        checks["depois da configuração, o som volta"] = wait_log("audio: turned on on the PSP", count=3, timeout=20)
         checks["... e o canal abre"] = wait_log(opened, count=3, timeout=10, path=psp_path)
         checks["o canal nunca falhou"] = "falhou" not in psp_path.read_text(errors="replace")
         ws.close()

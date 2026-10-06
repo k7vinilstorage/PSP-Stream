@@ -22,6 +22,7 @@ import http.client
 import json
 import os
 import socket
+from i18n import tr
 
 DEFAULT_SOCKET = "/var/run/wolf/wolf.sock"
 VIDEO_PING_PORT = 48100  # do Wolf (state/data-structures.hpp); 47998 é a do Moonlight
@@ -80,15 +81,16 @@ class WolfApi:
             resp = conn.getresponse()
             status, data = resp.status, resp.read()
         except FileNotFoundError:
-            raise WolfApiError(f"o socket da API do Wolf não existe: {self.socket_path} (no serviço do Wolf: "
-                               "WOLF_SOCKET_PATH e o volume /var/run/wolf; aqui: --wolf-socket)") from None
+            raise WolfApiError(tr("the Wolf API socket does not exist: {path} (in the Wolf service: "
+                                  "WOLF_SOCKET_PATH and the /var/run/wolf volume; here: --wolf-socket)")
+                               .format(path=self.socket_path)) from None
         except PermissionError:
-            raise WolfApiError(f"sem permissão para abrir {self.socket_path} (o Wolf cria o socket como root; "
-                               "veja a página Wolf da wiki do PSPStream)") from None
+            raise WolfApiError(tr("no permission to open {path} (Wolf creates the socket as root; "
+                                  "see the Wolf page of the PSPStream wiki)").format(path=self.socket_path)) from None
         except ConnectionRefusedError:
-            raise WolfApiError(f"ninguém atende em {self.socket_path}: o Wolf está rodando?") from None
+            raise WolfApiError(tr("nobody answers at {path}: is Wolf running?").format(path=self.socket_path)) from None
         except TimeoutError:
-            raise WolfApiError(f"{where}: o Wolf não respondeu em {self.timeout:g} s") from None
+            raise WolfApiError(tr("{where}: Wolf did not answer in {seconds:g} s").format(where=where, seconds=self.timeout)) from None
         except (OSError, http.client.HTTPException) as exc:
             raise WolfApiError(f"{where}: {exc}") from None
         finally:
@@ -97,10 +99,11 @@ class WolfApi:
             obj = json.loads(data)
         except ValueError:
             text = data[:200].decode("utf-8", "replace")
-            raise WolfApiError(f"{where}: resposta que não é JSON (HTTP {status}): {text!r}") from None
+            raise WolfApiError(tr("{where}: reply that is not JSON (HTTP {status}): {text}").format(
+                where=where, status=status, text=repr(text))) from None
         if status != 200 or not isinstance(obj, dict) or not obj.get("success", False):
             error = obj.get("error") if isinstance(obj, dict) else None
-            raise WolfApiError(f"{where}: {error or 'falhou'} (HTTP {status})")
+            raise WolfApiError(f"{where}: {error or tr('failed')} (HTTP {status})")
         return obj
 
     # ---- leitura ----
@@ -119,7 +122,7 @@ class WolfApi:
         Devolve o id da sessão (texto)."""
         sid = self._request("POST", "/sessions/add", session).get("session_id")
         if not sid:
-            raise WolfApiError("POST /api/v1/sessions/add: a resposta não trouxe o session_id")
+            raise WolfApiError(tr("POST /api/v1/sessions/add: the reply has no session_id"))
         return str(sid)
 
     def start_session(self, session_id: str, video_session: dict, audio_session: dict) -> None:

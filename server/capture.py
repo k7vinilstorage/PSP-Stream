@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 import distro
+from i18n import tr
 
 log = logging.getLogger("pspstream.capture")
 
@@ -31,17 +32,18 @@ def resolve_codec(args):
     if want == "auto":
         args.codec = "h264p" if ok and tuple(args.size) == (480, 272) else "jpeg"
         if args.codec == "jpeg":
-            log.info("codec: JPEG (%s)", f"sem o openh264: {distro.hint('openh264')}"
-                     if not ok else "--size diferente de 480x272")
+            log.info(tr("codec: JPEG (%s)"), tr("no openh264: {hint}").format(hint=distro.hint("openh264"))
+                     if not ok else tr("--size other than 480x272"))
     if args.codec in ("h264", "h264p"):
         if not ok:
-            return f"--codec {args.codec} precisa do openh264: {distro.hint('openh264')}"
+            return tr("--codec {codec} needs openh264: {hint}").format(codec=args.codec, hint=distro.hint("openh264"))
         if tuple(args.size) != (480, 272):
-            return f"--codec {args.codec} só funciona em 480x272 (o decoder do PSP escreve a tela inteira)"
+            return tr("--codec {codec} only works at 480x272 (the PSP decoder writes the whole screen)").format(
+                codec=args.codec)
         if args.codec == "h264":
-            log.info("codec: H.264 (todo frame IDR, decoder de hardware do PSP)")
+            log.info(tr("codec: H.264 (every frame IDR, the PSP's hardware decoder)"))
         else:
-            log.info("codec: H.264 com frames P (codificado na hora de enviar; EBOOT v0.9+, senão só IDR)")
+            log.info(tr("codec: H.264 with P frames (encoded when sending; EBOOT v0.9+, otherwise IDR only)"))
     return None
 
 
@@ -58,11 +60,11 @@ def open_injector(args):
     if profile.get("type") == "gamepad":
         from gamepad import GamepadInjector
         injector = GamepadInjector(profile, args.input_dry_run, args.input_timeout)
-        kind = "controle de Xbox 360 virtual"
+        kind = tr("virtual Xbox 360 controller")
     else:
         injector = Injector(profile, args.input_dry_run, args.mouse_speed, args.input_timeout)
-        kind = "teclado e mouse"
-    log.info("controles: perfil '%s' (%s)%s", args.profile, kind, " (dry-run)" if args.input_dry_run else "")
+        kind = tr("keyboard and mouse")
+    log.info(tr("controls: profile '%s' (%s)%s"), args.profile, kind, " (dry-run)" if args.input_dry_run else "")
     return injector, kind
 
 
@@ -73,18 +75,20 @@ def open_wolf_injector(args, profile):
     from wolf_input import WolfInjector
     name = args.profile
     if profile.get("type") != "gamepad":
-        # o perfil padrão (jogo) é de teclado: com o Wolf, o padrão é o xbox, sem aviso
-        level = logging.INFO if name == "jogo" else logging.WARNING
-        log.log(level, "controles: o perfil '%s' é de teclado e mouse; pelo Wolf os controles vão como um "
-                "controle de Xbox: usando o perfil xbox (ou --profile xbox-camera, xbox-ombros)", name)
+        # o perfil padrão (game) é de teclado: com o Wolf, o padrão é o xbox, sem aviso
+        from inject import canonical_profile
+        level = logging.INFO if canonical_profile(name) == "game" else logging.WARNING
+        log.log(level, tr("controls: profile '%s' is keyboard and mouse; through Wolf the controls go as an "
+                          "Xbox controller: using the xbox profile (or --profile xbox-camera, xbox-shoulders)"), name)
         name = "xbox"
         try:
             profile = load_profile(args.keymap, name)
         except SystemExit as exc:
             raise RuntimeError(str(exc)) from None
     injector = WolfInjector(profile, args.input_dry_run, args.input_timeout)
-    kind = "controle de Xbox virtual no Wolf" + (f", com o perfil {name}" if name != args.profile else "")
-    log.info("controles: perfil '%s' (%s; a sessão do PSP entra no lobby)%s", name, kind,
+    kind = tr("virtual Xbox controller in Wolf") + (tr(", with the {name} profile").format(name=name)
+                                                     if name != args.profile else "")
+    log.info(tr("controls: profile '%s' (%s; the PSP session joins the lobby)%s"), name, kind,
              " (dry-run)" if args.input_dry_run else "")
     return injector, kind
 
@@ -140,11 +144,11 @@ def build_source(args, portal=None):
         if args.dmabuf:
             gpu_from = tuple(keepalive.size) if keepalive.size else (w, h)
             if not keepalive.size and not args.stretch:
-                log.warning("--dmabuf: o portal não disse o tamanho da tela; a imagem pode sair esticada")
+                log.warning(tr("--dmabuf: the portal did not report the screen size; the image may come out stretched"))
         src = keepalive.gst_source(dmabuf=args.dmabuf)
     elif args.source == "gst":
         if not args.gst_src:
-            raise SystemExit("--source gst precisa de --gst-src \"<elementos GStreamer>\"")
+            raise SystemExit(tr("--source gst needs --gst-src \"<GStreamer elements>\""))
         src = args.gst_src
     else:
         src = SOURCES[args.source]
@@ -170,19 +174,19 @@ def open_audio(args, seq0: int = 0):
     except (ImportError, ValueError) as exc:
         raise RuntimeError(str(exc)) from None
     if args.audio_device == "wolf" and args.source != "wolf":
-        raise RuntimeError("--audio-device wolf só vale com --source wolf")
+        raise RuntimeError(tr("--audio-device wolf only works with --source wolf"))
     if wolf_audio(args):
         return open_wolf_audio(args, seq0)
     if not audio.available():
-        raise RuntimeError(f"faltam o pulsesrc e o adpcmenc do GStreamer ({distro.hint('good', 'bad')})")
+        raise RuntimeError(tr("GStreamer's pulsesrc and adpcmenc are missing ({hint})").format(hint=distro.hint("good", "bad")))
     try:
         capture = audio.AudioCapture(args.audio_device, args.audio_rate, 1 if args.audio_mono else 2)
         capture.seq = seq0
         capture.start()
     except Exception as exc:  # sem PipeWire/PulseAudio, fonte errada...
         raise RuntimeError(str(exc)) from None
-    log.info("som: %s, %d Hz %s, IMA ADPCM em pacotes de %.0f ms (~%.0f KB/s quando o PSP pede)",
-             capture.device, capture.rate, "estéreo" if capture.channels == 2 else "mono", capture.packet_ms,
+    log.info(tr("audio: %s, %d Hz %s, IMA ADPCM in %.0f ms packets (~%.0f KB/s when the PSP asks)"),
+             capture.device, capture.rate, tr("stereo") if capture.channels == 2 else "mono", capture.packet_ms,
              capture.kbps)
     return capture
 
@@ -192,15 +196,16 @@ def open_wolf_audio(args, seq0: int = 0):
     import audio
     import wolf_source
     if not audio.available(pulse=False):
-        raise RuntimeError(f"falta o adpcmenc do GStreamer ({distro.hint('bad')})")
+        raise RuntimeError(tr("GStreamer's adpcmenc is missing ({hint})").format(hint=distro.hint("bad")))
     source = wolf_source.current()
     if source is None:
-        raise RuntimeError("a captura do Wolf não está rodando")
+        raise RuntimeError(tr("the Wolf capture is not running"))
     capture = wolf_source.WolfAudio(source, args.audio_rate, 1 if args.audio_mono else 2)
     capture.seq = seq0
     capture.start()
-    log.info("som: do Wolf (o som do alvo, pela sessão do PSPStream), %d Hz %s, IMA ADPCM em pacotes de %.0f ms "
-             "(~%.0f KB/s quando o PSP pede)", capture.rate, "estéreo" if capture.channels == 2 else "mono",
+    log.info(tr("audio: from Wolf (the target's audio, through the PSPStream session), %d Hz %s, IMA ADPCM in "
+                "%.0f ms packets (~%.0f KB/s when the PSP asks)"), capture.rate,
+             tr("stereo") if capture.channels == 2 else "mono",
              capture.packet_ms, capture.kbps)
     return capture
 
@@ -210,7 +215,7 @@ def start_audio(args):
     try:
         return open_audio(args)
     except RuntimeError as exc:
-        log.warning("som desativado: %s", exc)
+        log.warning(tr("audio disabled: %s"), exc)
         return None
 
 
@@ -237,13 +242,13 @@ def start_source(args, portal=None):
         got = None
         while not got and not source.failed and time.monotonic() < deadline:
             got = source.wait_newer(0, 0.1)
-        reason = source.failed or (None if got else f"nenhum frame em {DMABUF_FIRST_FRAME_S} s")
+        reason = source.failed or (None if got else tr("no frame in {seconds} s").format(seconds=DMABUF_FIRST_FRAME_S))
     except Exception as exc:  # pipeline que não monta (GLib.Error) ou não inicia
         reason = str(exc)
     if reason is None:
-        log.info("captura: DMA-BUF + redução na GPU (OpenGL), --dmabuf")
+        log.info(tr("capture: DMA-BUF + scaling on the GPU (OpenGL), --dmabuf"))
         return source
-    log.warning("--dmabuf não funcionou (%s); voltando para a captura pela memória comum", reason)
+    log.warning(tr("--dmabuf did not work (%s); falling back to capturing through regular memory"), reason)
     if source is not None:
         source.stop()
     args.dmabuf = False

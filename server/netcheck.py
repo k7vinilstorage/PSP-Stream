@@ -4,6 +4,7 @@ import os
 import re
 import socket
 import subprocess
+from i18n import tr
 
 log = logging.getLogger("pspstream.netcheck")
 
@@ -45,17 +46,18 @@ def channel_24(freq: float):
 def band_advice(freq, iface: str):
     """(nível, mensagem) sobre a banda do PC. O PSP só fala 802.11b (2,4 GHz)."""
     if freq is None:
-        return (logging.WARNING, f"o PC está no Wi-Fi ({iface}): se der, use cabo, ou a rede de 5 GHz do "
-                                 "roteador. No mesmo canal, cada pacote cruza o ar duas vezes e a banda do PSP cai")
+        return (logging.WARNING, tr("the PC is on Wi-Fi ({iface}): if you can, use a cable, or the router's 5 GHz "
+                                    "network. On the same channel, every packet crosses the air twice and the PSP's "
+                                    "bandwidth drops").format(iface=iface))
     if freq >= 4900:
-        return (logging.INFO, f"PC no Wi-Fi de {freq / 1000:.1f} GHz ({iface}): bom, ele não disputa o canal "
-                              "de 2,4 GHz do PSP")
+        return (logging.INFO, tr("PC on {ghz:.1f} GHz Wi-Fi ({iface}): good, it does not compete for the PSP's "
+                                 "2.4 GHz channel").format(ghz=freq / 1000, iface=iface))
     ch = channel_24(freq)
     return (logging.WARNING,
-            f"o PC está no Wi-Fi de 2,4 GHz ({iface}, canal {ch if ch else '?'}), o mesmo do PSP: cada pacote "
-            "cruza o mesmo canal duas vezes e a banda do PSP cai pela metade. Use cabo, ou conecte o PC na "
-            "rede de 5 GHz do roteador (o PSP continua no 2,4). Com um nome de rede só para as duas bandas: "
-            "nmcli connection modify <rede> 802-11-wireless.band a")
+            tr("the PC is on 2.4 GHz Wi-Fi ({iface}, channel {channel}), the same as the PSP: every packet "
+               "crosses the same channel twice and the PSP's bandwidth is halved. Use a cable, or connect the PC "
+               "to the router's 5 GHz network (the PSP stays on 2.4). With one network name for both bands: "
+               "nmcli connection modify <network> 802-11-wireless.band a").format(iface=iface, channel=ch or "?"))
 
 
 def check_pc_wifi(ip: str) -> None:
@@ -88,8 +90,8 @@ def check_pc_wifi(ip: str) -> None:
     level, msg = band_advice(freq, iface)
     log.log(level, "%s", msg)
     if state is True:
-        log.warning("power save do Wi-Fi do PC LIGADO: o roteador segura os pedidos do PSP até a placa "
-                    "acordar. Desligue: sudo iw dev %s set power_save off (até reiniciar) ou "
-                    "nmcli connection modify <rede> 802-11-wireless.powersave 2 (permanente)", iface)
+        log.warning(tr("the PC's Wi-Fi power save is ON: the router holds the PSP's requests until the card "
+                       "wakes up. Turn it off: sudo iw dev %s set power_save off (until reboot) or "
+                       "nmcli connection modify <network> 802-11-wireless.powersave 2 (permanent)"), iface)
     elif state is None:
-        log.info("confira o power save do Wi-Fi do PC: iw dev %s get power_save", iface)
+        log.info(tr("check the PC's Wi-Fi power save: iw dev %s get power_save"), iface)

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -10,19 +10,19 @@
 <body>
 <header class="top">
   <div class="brand">PSPStream <span id="version" class="muted"></span></div>
-  <div id="conn" class="pill wait">conectando ao servidor</div>
+  <div id="conn" class="pill wait" data-i18n="connecting to the server">connecting to the server</div>
 </header>
 
 <main>
   <section class="card" aria-labelledby="now-title">
-    <h2 id="now-title">Agora</h2>
+    <h2 id="now-title" data-i18n="Now">Now</h2>
     <div class="tiles" id="tiles">
-      <div class="tile"><span class="num" id="t-fps">–</span><span class="cap">fps no PSP</span></div>
-      <div class="tile"><span class="num" id="t-src">–</span><span class="cap">fps da captura</span></div>
-      <div class="tile"><span class="num" id="t-lat">–</span><span class="cap">latência (ms)</span></div>
+      <div class="tile"><span class="num" id="t-fps">–</span><span class="cap" data-i18n="fps on the PSP">fps on the PSP</span></div>
+      <div class="tile"><span class="num" id="t-src">–</span><span class="cap" data-i18n="capture fps">capture fps</span></div>
+      <div class="tile"><span class="num" id="t-lat">–</span><span class="cap" data-i18n="latency (ms)">latency (ms)</span></div>
       <div class="tile"><span class="num" id="t-wifi">–</span><span class="cap">Wi-Fi (KB/s)</span></div>
-      <div class="tile"><span class="num" id="t-hitch">–</span><span class="cap">engasgos</span></div>
-      <div class="tile"><span class="num" id="t-q">–</span><span class="cap">qualidade</span></div>
+      <div class="tile"><span class="num" id="t-hitch">–</span><span class="cap" data-i18n="hitches">hitches</span></div>
+      <div class="tile"><span class="num" id="t-q">–</span><span class="cap" data-i18n="quality">quality</span></div>
     </div>
     <dl class="facts" id="facts"></dl>
   </section>
@@ -31,17 +31,17 @@
 
   <section class="card" aria-labelledby="log-title">
     <h2 id="log-title">Log</h2>
-    <pre id="log" tabindex="0" aria-label="Log do servidor"></pre>
+    <pre id="log" tabindex="0" aria-label="Server log" data-i18n-aria-label="Server log"></pre>
   </section>
 
   <p class="foot muted" id="foot"></p>
 </main>
 
 <div class="bar" id="bar" hidden>
-  <span id="bar-msg">Mudanças ainda não aplicadas</span>
+  <span id="bar-msg" data-i18n="Changes not applied yet">Changes not applied yet</span>
   <span class="grow"></span>
-  <button type="button" id="undo" class="ghost">Desfazer</button>
-  <button type="button" id="apply" class="primary">Aplicar</button>
+  <button type="button" id="undo" class="ghost" data-i18n="Undo">Undo</button>
+  <button type="button" id="apply" class="primary" data-i18n="Apply">Apply</button>
 </div>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 

@@ -1,7 +1,7 @@
 {
-  "_ajuda": "Botões: UP DOWN LEFT RIGHT CROSS CIRCLE SQUARE TRIANGLE L R START SELECT. Valores: nomes do evdev (KEY_*, BTN_LEFT/RIGHT/MIDDLE); use + para combinações (KEY_LEFTALT+KEY_TAB). Analógico: mode = mouse | keys | none; speed = pixels/s com o direcional no máximo; curve > 1 = mais precisão perto do centro.",
+  "_help": "Buttons: UP DOWN LEFT RIGHT CROSS CIRCLE SQUARE TRIANGLE L R START SELECT. Values: evdev names (KEY_*, BTN_LEFT/RIGHT/MIDDLE); use + for combinations (KEY_LEFTALT+KEY_TAB). Analog: mode = mouse | keys | none; speed = pixels/s with the stick all the way; curve > 1 = more precision near the center. Old profile names still work: jogo = game, setas = arrows, xbox-ombros = xbox-shoulders.",
 
-  "jogo": {
+  "game": {
     "buttons": {
       "UP": "KEY_W", "DOWN": "KEY_S", "LEFT": "KEY_A", "RIGHT": "KEY_D",
       "CROSS": "KEY_SPACE", "CIRCLE": "KEY_LEFTCTRL", "SQUARE": "KEY_R", "TRIANGLE": "KEY_E",
@@ -21,7 +21,7 @@
     "analog": {"mode": "mouse", "speed": 700, "deadzone": 0.15, "curve": 2.2}
   },
 
-  "_ajuda_xbox": "type gamepad: o PC ganha um controle de Xbox 360 virtual. Destinos: A B X Y LB RB LT RT BACK START GUIDE L3 R3, DPAD_UP/DOWN/LEFT/RIGHT, LS_UP/DOWN/LEFT/RIGHT e RS_UP/DOWN/LEFT/RIGHT (analógicos no digital); + aperta mais de um. shift: segurando esse botão vale a tabela shift.buttons (o que não estiver nela usa a normal); um toque rápido nele sozinho vale shift.tap. analog.stick = left | right | dpad | none; deadzone e max em fração do curso; digital_stick = quanto o analógico vai com RS_*/LS_* (1 = até o fim).",
+  "_help_xbox": "type gamepad: the PC gets a virtual Xbox 360 controller. Targets: A B X Y LB RB LT RT BACK START GUIDE L3 R3, DPAD_UP/DOWN/LEFT/RIGHT, LS_UP/DOWN/LEFT/RIGHT and RS_UP/DOWN/LEFT/RIGHT (sticks on digital buttons); + presses more than one. shift: while that button is held, the shift.buttons table applies (anything not in it uses the normal one); a quick tap on it alone is shift.tap. analog.stick = left | right | dpad | none; deadzone and max as a fraction of the travel; digital_stick = how far the stick goes with RS_*/LS_* (1 = all the way).",
 
   "xbox": {
     "type": "gamepad",
@@ -61,7 +61,7 @@
     "digital_stick": 0.8
   },
 
-  "xbox-ombros": {
+  "xbox-shoulders": {
     "type": "gamepad",
     "buttons": {
       "CROSS": "A", "CIRCLE": "B", "SQUARE": "X", "TRIANGLE": "Y",
@@ -80,7 +80,7 @@
     "digital_stick": 1.0
   },
 
-  "setas": {
+  "arrows": {
     "buttons": {
       "UP": "KEY_UP", "DOWN": "KEY_DOWN", "LEFT": "KEY_LEFT", "RIGHT": "KEY_RIGHT",
       "CROSS": "KEY_Z", "CIRCLE": "KEY_X", "SQUARE": "KEY_A", "TRIANGLE": "KEY_S",
