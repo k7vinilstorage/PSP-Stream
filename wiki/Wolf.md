@@ -1,10 +1,8 @@
-# PSPStream no Wolf (Games on Whales)
-
 O PSPStream mostra no PSP o que roda num lobby do
 [Wolf](https://github.com/games-on-whales/wolf): a imagem, o som e os
 controles, ao lado do Moonlight e sem mudar nada no Wolf. Ele roda num
 container ao lado do Wolf e fala com a API dele. Como isso funciona por
-dentro está em [WOLF-INTERNALS.md](WOLF-INTERNALS.md).
+dentro está em [Wolf por dentro](Wolf-por-dentro).
 
 **Estado:** funciona num Wolf `stable` com NVIDIA, gerenciado pelo
 Portainer. A instalação do zero (`install.sh`, os compose completos) e as
@@ -123,7 +121,7 @@ O mesmo que o instalador faz, passo a passo.
    sudo udevadm control --reload-rules && sudo udevadm trigger
    ```
 
-2. **Arquivos**: a pasta [`docker/`](../docker) do repositório tem:
+2. **Arquivos**: a pasta [`docker/`](https://github.com/k7vinilstorage/PSP-Stream/tree/main/docker) do repositório tem:
 
    | arquivo | o quê |
    |---|---|
@@ -203,7 +201,7 @@ Portainer, container `steam-wolf-1`).
    ```
 
 2. **O PSPStream, numa stack separada** com o
-   [`docker/pspstream.yml`](../docker/pspstream.yml), pelo Portainer (seção 4,
+   [`docker/pspstream.yml`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/docker/pspstream.yml), pelo Portainer (seção 4,
    compose path `docker/pspstream.yml`) ou na linha de comando:
 
    ```sh

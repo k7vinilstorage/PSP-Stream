@@ -1,7 +1,7 @@
 """Captura KMS (--source kms): a imagem que a placa de vídeo está mostrando.
 
 No GNOME 50, a captura pelo portal fica em ~40 fps por causa do limitador do
-mutter (docs/MEASUREMENTS.md). O KMS não passa pelo compositor: o auxiliar
+mutter (wiki/Medições.md). O KMS não passa pelo compositor: o auxiliar
 tools/kms/pspstream-kms (o único com CAP_SYS_ADMIN) exporta o buffer da tela
 como DMA-BUF a cada quadro novo, e este processo, sem privilégio, reduz para
 480x272 no OpenGL (o mesmo caminho do --dmabuf).

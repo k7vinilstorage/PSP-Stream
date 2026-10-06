@@ -2,7 +2,7 @@
 
 uinput cria um teclado + mouse virtuais no kernel, então funciona no Wayland
 (o pynput não injeta entrada no Wayland) e em jogos. Requer acesso de
-escrita a /dev/uinput (ver README).
+escrita a /dev/uinput (wiki/Instalação.md).
 
 Os botões viram teclas assim que o pedido chega. O analógico vira movimento
 de mouse numa thread a 125 Hz: o PSP só manda a posição quando ela muda, e o
@@ -70,7 +70,7 @@ class _UInput:
         try:
             self.ui = UInput(caps, name="PSPStream (PSP)")
         except Exception as exc:  # OSError/PermissionError ou evdev.UInputError (módulo não carregado)
-            raise RuntimeError(f"sem acesso a /dev/uinput ({exc}); veja a seção Controles do README") from exc
+            raise RuntimeError(f"sem acesso a /dev/uinput ({exc}); veja a página Instalação da wiki do PSPStream, Controles (uinput)") from exc
 
     def key(self, code: str, down: bool):
         self.ui.write(self.ec.EV_KEY, getattr(self.ec, code), 1 if down else 0)

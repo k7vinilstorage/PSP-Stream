@@ -525,7 +525,7 @@ def build_parser() -> argparse.ArgumentParser:
                         "~40 fps do GNOME 50 (precisa de make -C tools/kms e make -C tools/kms cap); "
                         "test = padrão animado com relógio; x11 = sessão X11; gst = pipeline próprio "
                         "(--gst-src); static = uma imagem; wolf = o que roda no Wolf (Games on Whales), pela "
-                        "API dele (README, seção Wolf)")
+                        "API dele (wiki do PSPStream, página Wolf)")
     p.add_argument("--kms-monitor", type=int, default=0, metavar="N",
                    help="kms: qual monitor ligado (0 = o primeiro; o log mostra quantos há)")
     p.add_argument("--kms-card", metavar="/dev/dri/cardN", help="kms: placa de vídeo (padrão: procura em todas)")

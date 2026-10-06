@@ -74,7 +74,7 @@ info "$(docker --version); $(docker compose version | head -n1)"
 other_wolf=$(docker ps -a --format '{{.Names}} {{.Image}} {{.Label "com.docker.compose.project"}}' \
     | awk -v p="$(basename "$dir")" '$2 ~ /games-on-whales\/wolf/ && $3 != p {print $1}' | head -n1)
 if [ -n "$other_wolf" ] && [ "$only_psp" = 0 ]; then
-    die "já existe um Wolf neste servidor ($other_wolf). Para pôr o PSPStream ao lado dele, use --only-pspstream (e as duas linhas no serviço do Wolf: docs/WOLF.md, \"Já tenho o Wolf\")"
+    die "já existe um Wolf neste servidor ($other_wolf). Para pôr o PSPStream ao lado dele, use --only-pspstream (e as duas linhas no serviço do Wolf: https://github.com/k7vinilstorage/PSP-Stream/wiki/Wolf, \"Já tenho o Wolf\")"
 fi
 
 # ---- 2. GPU ----
@@ -242,3 +242,4 @@ else
 fi
 info "Log: cd $dir && docker compose logs -f pspstream"
 info "Atualizar: rode este script de novo (ou: cd $dir && docker compose pull && docker compose up -d)"
+info "Ajuda e problemas: https://github.com/k7vinilstorage/PSP-Stream/wiki/Wolf"

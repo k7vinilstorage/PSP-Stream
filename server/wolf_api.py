@@ -84,7 +84,7 @@ class WolfApi:
                                "WOLF_SOCKET_PATH e o volume /var/run/wolf; aqui: --wolf-socket)") from None
         except PermissionError:
             raise WolfApiError(f"sem permissão para abrir {self.socket_path} (o Wolf cria o socket como root; "
-                               "veja a seção Wolf do README)") from None
+                               "veja a página Wolf da wiki do PSPStream)") from None
         except ConnectionRefusedError:
             raise WolfApiError(f"ninguém atende em {self.socket_path}: o Wolf está rodando?") from None
         except TimeoutError:

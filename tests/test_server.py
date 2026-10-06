@@ -851,7 +851,7 @@ class H264QualityTest(unittest.TestCase):
             import h264
         except (ImportError, ValueError):
             self.skipTest("sem GStreamer")
-        # calibrado na mesma SSIM do jpegenc (docs/MEASUREMENTS.md)
+        # calibrado na mesma SSIM do jpegenc (wiki/Medições.md)
         self.assertEqual([h264.qp_for_quality(q) for q in (30, 50, 70, 90)], [40, 37, 33, 30])
         self.assertEqual(h264.qp_for_quality(1), 44)
         self.assertEqual(h264.qp_for_quality(100), 29)

@@ -65,7 +65,7 @@ de outra versão do protocolo é recusado com aviso no log.
   `--fps 50`: 46-48). Agora é uma grade fixa: a taxa pedida, e um frame
   atrasado não empurra os seguintes.
 - `--fps 40` de uma tela de 60 Hz é 2 de cada 3 frames: intervalos de 17 e
-  33 ms. Para um movimento uniforme, `--fps 30` ou 60 (README).
+  33 ms. Para um movimento uniforme, `--fps 30` ou 60 (wiki, Opções do servidor).
 - **Som que não voltava depois de mexer na configuração** ("erro" até
   reiniciar o app): o PSP só solta o canal de som com a fila vazia, o erro
   era ignorado e o canal ficava preso; o stream seguinte não conseguia
@@ -86,7 +86,7 @@ de outra versão do protocolo é recusado com aviso no log.
 - Servidor reorganizado para isso: `capture.py` (montagem da captura, som e
   controles), `settings.py`, `control.py`, `web.py`. As ferramentas do
   emulador rodam o servidor com `--config` próprio e `--no-web`.
-- **Qualquer Linux, com guia do Ubuntu** ([docs/UBUNTU.md](docs/UBUNTU.md)).
+- **Qualquer Linux, com guia do Ubuntu** ([Guia do Ubuntu](https://github.com/k7vinilstorage/PSP-Stream/wiki/Guia-do-Ubuntu)).
   `--check` confere tudo o que o servidor usa (Python, PyGObject, cada
   elemento do GStreamer, libopenh264, portal, uinput, som, auxiliar KMS,
   firewall, porta) e termina com o comando para a distribuição detectada
@@ -155,7 +155,7 @@ de outra versão do protocolo é recusado com aviso no log.
   usa o uid 0 sem nenhuma capability, sem ganhar privilégios e com o sistema
   de arquivos só leitura (o usuário comum com `setfacl` também foi testado).
   O CI compila a imagem e a testa contra o Wolf falso
-  (`packaging/docker-test.sh`). Seção "Wolf" no README; a interface web
+  (`packaging/docker-test.sh`). Página "Wolf" na wiki; a interface web
   mostra uma linha "Wolf" com o que está sendo espelhado.
 - **Wolf, instalação do zero:** `docker/install.sh` instala o Wolf e o
   PSPStream num servidor com Docker (detecta a GPU, prepara o sistema como a
@@ -176,10 +176,18 @@ de outra versão do protocolo é recusado com aviso no log.
 - Padrões por variável de ambiente para o Docker (a interface web ainda
   muda): `PSPSTREAM_WEB`, `PSPSTREAM_WOLF_TARGET`, `PSPSTREAM_VIDEO_CONVERT`,
   `PSPSTREAM_WOLF_PIN`, `PSPSTREAM_PROFILE`.
-- Documentação do Wolf: `docs/WOLF.md` (instalação, primeiro uso, lobbies
-  Start e Coop do Wolf UI e a ordem dos controles, interface web,
-  configurações, problemas) e `docs/WOLF-INTERNALS.md` (como funciona por
-  dentro e o que foi conferido no código do Wolf).
+- Documentação do Wolf: as páginas "Wolf" (instalação, primeiro uso,
+  lobbies Start e Coop do Wolf UI e a ordem dos controles, interface web,
+  configurações, problemas) e "Wolf por dentro" (como funciona por dentro e
+  o que foi conferido no código do Wolf) da wiki.
+- **Documentação na wiki.** O README ficou curto: recursos, como funciona,
+  início rápido, atalhos e créditos. O resto (instalação, uso no PSP,
+  controles, interface web, Wolf, opções, problemas, desempenho, protocolo,
+  medições, desenvolvimento) foi para a
+  [wiki do projeto](https://github.com/k7vinilstorage/PSP-Stream/wiki), gerada da pasta `wiki/`
+  pelo workflow `wiki.yml` a cada push na `main`; `docs/` saiu.
+  `tests/test_docs.py` confere os links do README e da wiki. Os pacotes
+  `.deb` e `.rpm` levam o README, o CHANGELOG e a licença.
 - O servidor encerra direito no SIGTERM (`docker stop`, `systemctl stop`),
   como no Ctrl+C.
 

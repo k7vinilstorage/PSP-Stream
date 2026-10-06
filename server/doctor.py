@@ -303,7 +303,7 @@ def setup(port: int = 5123, version: str = "", ask=input) -> int:
     items = run_checks(port)
     print(f"PSPStream {version}: preparando esta máquina ({distro.current()[1]})\n")
     if not fam:
-        print("Distribuição desconhecida: instale os pacotes pelo README (Instalação). "
+        print("Distribuição desconhecida: instale os pacotes como em https://github.com/k7vinilstorage/PSP-Stream/wiki/Instalação. "
               "O resto (uinput, firewall) segue abaixo.\n")
     steps = plan(items, fam)
     if not steps:

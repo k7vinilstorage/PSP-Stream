@@ -72,7 +72,7 @@ class DistroTest(unittest.TestCase):
         self.assertEqual(distro.install_command(["evdev"], "arch"), "sudo pacman -S --needed python-evdev")
         self.assertEqual(distro.install_command(["evdev"], ""), "")
         self.assertIn("fedora-cisco-openh264", distro.hint("openh264", fam="fedora"))
-        self.assertIn("README", distro.hint("evdev", fam=""))
+        self.assertIn("/wiki/Instalação", distro.hint("evdev", fam=""))
         self.assertEqual(distro.firewall_command(5123, "ufw"), "sudo ufw allow 5123/udp && sudo ufw allow 5123/tcp")
         self.assertIn("--add-port=5123/udp", distro.firewall_command(5123, "firewalld"))
         self.assertEqual(distro.firewall_command(5123, ""), "")

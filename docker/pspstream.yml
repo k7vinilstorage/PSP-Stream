@@ -6,7 +6,7 @@
 #     volumes:
 #       - /var/run/wolf:/var/run/wolf
 #
-# Passo a passo: docs/WOLF.md, "Já tenho o Wolf".
+# Passo a passo: https://github.com/k7vinilstorage/PSP-Stream/wiki/Wolf ("Já tenho o Wolf").
 
 services:
   pspstream:

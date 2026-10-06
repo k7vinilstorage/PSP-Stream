@@ -1,5 +1,3 @@
-# Protocolo PSPStream v5
-
 TCP **ou** UDP, porta padrão **5123** (o servidor atende os dois ao mesmo
 tempo; o PSP escolhe com `transport=` no `server.txt`). Todos os inteiros são **little-endian** (PSP e PC
 x86 são LE, então não há conversão de ordem de bytes). Definições em
@@ -126,7 +124,7 @@ latência = idade + caminho                -> frame pronto no PC -> exibido no P
 `net_t`, `local_t` e `decode_t` servem para decompor esse total. A latência
 real "vidro a vidro" soma ainda o tempo de captura no PC (compositor +
 GStreamer, alguns ms) e o scanout do LCD do PSP. Isso só se mede filmando as
-duas telas (ver README).
+duas telas (ver [Medições](Medições#53-latência-vidro-a-vidro-a-única-que-inclui-tudo)).
 
 ## UDP
 
