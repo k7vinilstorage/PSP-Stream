@@ -6,17 +6,21 @@ EBOOT with another protocol version is refused with a warning in the log.
 
 ## 1.1
 
-- **Windows server (experimental).** `PSPStream-Windows-x64.zip`
-  (Windows 10/11, 64-bit), built by CI with PyInstaller and the GStreamer
-  plugins it needs (GStreamer 1.28, from the project's official wheels on
-  PyPI, pinned by hash): unzip and run `pspstream.exe`. The capture runs in
+- **Windows server (experimental).** `PSPStream-Setup-x64.exe`, an
+  installer (Inno Setup, English and Portuguese) that also allows the PSP
+  through the firewall and installs the ViGEmBus driver, and
+  `PSPStream-Windows-x64.zip`, the same portable (Windows 10/11, 64-bit).
+  Built by CI with PyInstaller and the GStreamer plugins it needs
+  (GStreamer 1.28, from the project's official wheels on PyPI, pinned by
+  hash); CI also installs, tests and uninstalls the installer. The capture runs in
   GStreamer's `gst-launch-1.0` as a child process (no PyGObject on
   Windows) and reaches the server over local TCP: the screen through
   Desktop Duplication (`--source screen`, `--monitor`), scaled on the GPU
   with a CPU fallback, and the audio through WASAPI loopback. Keyboard and
   mouse through SendInput, and the virtual Xbox 360 controller (the `xbox`
   profiles) through the ViGEmBus driver, which the user installs once
-  (`--setup` opens its page); `vigem\ViGEmClient.dll` is built by CI from
+  (`--setup` downloads the official installer, version and SHA-256
+  pinned, and runs it as administrator); `vigem\ViGEmClient.dll` is built by CI from
   ViGEmClient's source.
   `--check` and `--setup` for Windows (GStreamer, openh264, the firewall
   rule, the network profile, Cisco's openh264 DLL, ViGEmBus). The protocol, P

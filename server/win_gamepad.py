@@ -5,7 +5,8 @@ xbox-shoulders e a camada do SELECT); aqui esse estado vira o XUSB_REPORT do ViG
 entrega aos jogos pelo XInput como um controle de Xbox 360 com fio.
 
 Precisa:
-- do driver ViGEmBus, instalado uma vez como administrador (pspstream --setup abre a página dele);
+- do driver ViGEmBus, instalado uma vez como administrador (pspstream --setup baixa o instalador oficial,
+  numa versão e com um hash fixos, e o roda);
 - da ViGEmClient.dll (MIT), que vai junto do pspstream.exe, compilada do código-fonte oficial no CI
   (packaging/windows/vigem.py). PSPSTREAM_VIGEMCLIENT aponta para outra.
 
@@ -16,6 +17,7 @@ import ctypes
 import logging
 import os
 import sys
+import time
 from ctypes import POINTER, Structure, c_short, c_ubyte, c_uint32, c_ulong, c_ushort, c_void_p
 from pathlib import Path
 
@@ -118,8 +120,7 @@ def load_client():
 
 def error_text(code: int) -> str:
     if code == BUS_NOT_FOUND:
-        return tr("the ViGEmBus driver is not installed: pspstream --setup opens its download page "
-                  "(install it once, as administrator)")
+        return tr("the ViGEmBus driver is not installed: pspstream --setup installs it (once, as administrator)")
     if code == BUS_VERSION_MISMATCH:
         return tr("the ViGEmBus driver is too old: install the latest version ({url})").format(url=DOWNLOAD_URL)
     if code == NO_FREE_SLOT:
@@ -187,6 +188,53 @@ class ViGEmPad:
             self.lib.vigem_target_free(self.target)
             self.target = None
         self._disconnect()
+
+
+class XINPUT_STATE(Structure):
+    _fields_ = [("dwPacketNumber", c_uint32), ("Gamepad", XUSB_REPORT)]
+
+
+def xinput_reader():
+    """index -> XUSB_REPORT (o XINPUT_GAMEPAD) ou None se não há controle nesse número: o que um jogo lê."""
+    for name in ("xinput1_4", "xinput9_1_0"):
+        try:
+            dll = ctypes.WinDLL(name)
+            break
+        except OSError:
+            continue
+    else:
+        raise RuntimeError(tr("XInput not found"))
+    get = dll.XInputGetState
+    get.argtypes, get.restype = (c_uint32, POINTER(XINPUT_STATE)), c_uint32
+
+    def read(index):
+        state = XINPUT_STATE()
+        return state.Gamepad if get(index, ctypes.byref(state)) == 0 else None
+    return read
+
+
+def self_test(pad=None, read=None, timeout: float = 3.0):
+    """O controle de ponta a ponta: cria um, aperta A com o analógico para a direita e lê de volta pelo
+    XInput, como um jogo; depois o remove. (True, número do controle no XInput) ou (False, motivo)."""
+    read = read or xinput_reader()
+    pad = pad or ViGEmPad()
+    try:
+        deadline = time.monotonic() + timeout
+        index = pad.user_index()
+        while index is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+            index = pad.user_index()
+        if index is None:
+            return False, tr("the controller got no XInput number")
+        pad.emit([("key", "BTN_A", 1), ("abs", "ABS_X", 32767)])
+        while time.monotonic() < deadline:
+            got = read(index)
+            if got is not None and got.wButtons & XUSB_BUTTONS["BTN_A"] and got.sThumbLX == 32767:
+                return True, index
+            time.sleep(0.02)
+        return False, tr("XInput did not see the button press (controller {index})").format(index=index + 1)
+    finally:
+        pad.close()
 
 
 def bus_status():

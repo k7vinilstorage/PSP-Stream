@@ -109,11 +109,12 @@ are at **http://localhost:5124**.
 
 ### On Windows (experimental)
 
-Download `PSPStream-Windows-x64.zip` from
-[Releases](https://github.com/k7vinilstorage/PSP-Stream/releases), unzip it,
-run `pspstream --setup` once (firewall rule and openh264) and then
-`pspstream`. Details on the
-[Windows](https://github.com/k7vinilstorage/PSP-Stream/wiki/Windows) page.
+Download `PSPStream-Setup-x64.exe` from
+[Releases](https://github.com/k7vinilstorage/PSP-Stream/releases) and run it:
+the wizard installs PSPStream, allows it through the firewall and, if you
+want the Xbox controller, installs the ViGEmBus driver. Then open
+**PSPStream** from the Start menu. A portable zip is there too. Details on
+the [Windows](https://github.com/k7vinilstorage/PSP-Stream/wiki/Windows) page.
 
 ### With Wolf (Games on Whales)
 

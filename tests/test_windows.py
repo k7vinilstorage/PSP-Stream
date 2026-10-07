@@ -376,6 +376,20 @@ class ViGEmReportTest(unittest.TestCase):
         pad.close()  # de novo: nada
         self.assertEqual(lib.calls.count("remove"), 1)
 
+    def test_self_test(self):
+        lib = FakeViGEm()
+
+        def read(index):  # o XInput de mentira devolve o último relatório do controle 0
+            return win_gamepad.XUSB_REPORT(**lib.reports[-1]) if index == 0 and lib.reports else None
+        self.assertEqual(win_gamepad.self_test(win_gamepad.ViGEmPad(lib), read), (True, 0))
+        self.assertEqual(lib.reports[-1]["wButtons"], 0x1000)
+        self.assertEqual(lib.calls[-4:], ["remove", "target_free", "disconnect", "free"])  # o controle sai
+        lib = FakeViGEm()
+        ok, reason = win_gamepad.self_test(win_gamepad.ViGEmPad(lib), lambda index: None, timeout=0.2)
+        self.assertFalse(ok)
+        self.assertIn("XInput did not see", reason)
+        self.assertEqual(lib.calls[-1], "free")
+
     def test_errors(self):
         lib = FakeViGEm(connect=win_gamepad.BUS_NOT_FOUND)
         with self.assertRaisesRegex(RuntimeError, "ViGEmBus driver is not installed"):
@@ -387,10 +401,96 @@ class ViGEmReportTest(unittest.TestCase):
         self.assertEqual(lib.calls, ["alloc", "connect", "target_alloc", "add", "target_free", "disconnect", "free"])
 
 
+class ViGEmBusSetupTest(unittest.TestCase):
+    """O --setup baixa o instalador do ViGEmBus (hash fixo) e o roda como administrador."""
+
+    def test_download_checks_the_hash(self):
+        import hashlib
+        import tempfile
+        from unittest import mock
+        import win_doctor
+
+        class Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        good = b"installer"
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(win_doctor, "VIGEMBUS_SHA256", hashlib.sha256(good).hexdigest()):
+            with mock.patch("urllib.request.urlopen", return_value=Resp(good)) as urlopen:
+                path = win_doctor.download_vigembus(Path(tmp))
+            self.assertEqual(urlopen.call_args[0][0], win_doctor.VIGEMBUS_URL)
+            try:  # os certificados do Windows, não só os que o OpenSSL acha gravados
+                import truststore
+                self.assertIsInstance(urlopen.call_args.kwargs["context"], truststore.SSLContext)
+            except ImportError:
+                pass
+            self.assertEqual(path.read_bytes(), good)
+            self.assertEqual(path.name, win_doctor.VIGEMBUS_FILE)
+            with mock.patch("urllib.request.urlopen", return_value=Resp(b"tampered")):
+                with self.assertRaisesRegex(RuntimeError, "checksum"):
+                    win_doctor.download_vigembus(Path(tmp) / "other")
+            self.assertFalse((Path(tmp) / "other" / win_doctor.VIGEMBUS_FILE).exists())
+
+    def test_install_runs_elevated(self):
+        from unittest import mock
+        import win_doctor
+        exe, log = Path("C:/x/it's.exe"), Path("C:/x/i.log")
+        with mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0)) as run:
+            self.assertEqual(win_doctor.install_vigembus(exe, quiet=True, log=log), 0)
+        script = run.call_args[0][0][-1]
+        self.assertIn("-Verb RunAs -Wait -PassThru", script)
+        self.assertIn("-FilePath '{}'".format(str(exe).replace("'", "''")), script)  # aspas simples dobradas
+        self.assertIn(f"-ArgumentList '/quiet', '/norestart', '/log', '{log}'", script)
+        self.assertTrue(script.endswith("exit $p.ExitCode"))
+
+
+class InstallerScriptTest(unittest.TestCase):
+    """O instalador (packaging/windows/pspstream.iss) faz o mesmo que o --setup."""
+
+    def setUp(self):
+        self.iss = (ROOT / "packaging" / "windows" / "pspstream.iss").read_text(encoding="utf-8")
+
+    def test_same_firewall_rules_as_setup(self):
+        import re
+        import win_doctor
+        port = re.search(r'#define Port "(\d+)"', self.iss).group(1)
+        self.assertEqual(port, "5123")
+        rules = [line.split('Parameters: "', 1)[1].split('";', 1)[0].replace('""', '"').replace("{#Port}", port)
+                 for line in self.iss.splitlines() if "firewall add rule" in line]
+        self.assertEqual(["netsh " + r for r in rules], win_doctor.firewall_commands(int(port)))
+
+    def test_both_languages(self):
+        import re
+        names = set(re.findall(r"^(?:en|pt)\.(\w+)=", self.iss, re.M))
+        for name in names:
+            self.assertIn(f"\nen.{name}=", self.iss, name)
+            self.assertIn(f"\npt.{name}=", self.iss, name)
+        for used in set(re.findall(r"\{cm:(\w+)", self.iss)) - {"CreateDesktopIcon", "AdditionalIcons",
+                                                                    "UninstallProgram", "LaunchProgram"}:
+            self.assertIn(used, names)
+
+    def test_defines_come_from_win_doctor(self):
+        import tempfile
+        sys.path.insert(0, str(ROOT / "packaging" / "windows"))
+        import installer
+        import win_doctor
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "VERSION.txt").write_text("1.2.3\n")
+            got = installer.defines(Path(tmp), Path(tmp))
+        self.assertIn("/DAppVersion=1.2.3", got)
+        self.assertIn(f"/DViGEmBusSHA256={win_doctor.VIGEMBUS_SHA256}", got)
+        self.assertIn(f"/DViGEmBusURL={win_doctor.VIGEMBUS_URL}", got)
+
+
 @unittest.skipUnless(WINDOWS, "só no Windows")
 class ViGEmBusTest(unittest.TestCase):
     """O controle virtual de verdade, lido de volta pelo XInput. Precisa da ViGEmClient.dll e do driver
-    ViGEmBus; sem eles, pula (PSPSTREAM_REQUIRE_VIGEM=1 faz falhar)."""
+    ViGEmBus; sem eles, pula (PSPSTREAM_REQUIRE_VIGEM=1 faz falhar). Roda num Windows 10/11 com o
+    driver: o instalador do ViGEmBus recusa o Windows Server, que é o sistema dos runners do GitHub."""
 
     def setUp(self):
         self.status, self.detail = win_gamepad.bus_status()
@@ -402,6 +502,12 @@ class ViGEmBusTest(unittest.TestCase):
             self.skipTest(self.status)
         with self.assertRaisesRegex(RuntimeError, "ViGEmBus driver is not installed"):
             win_gamepad.ViGEmPad()
+
+    def test_self_test(self):
+        if self.status != "ok":
+            self.skipTest(self.detail)
+        ok, got = win_gamepad.self_test()
+        self.assertTrue(ok, got)
 
     def test_xinput(self):
         if self.status != "ok":

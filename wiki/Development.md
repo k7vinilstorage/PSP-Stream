@@ -39,13 +39,22 @@ folder with `packaging/windows/gstreamer.py` (nothing installed). It runs
 `packaging/windows/build.py` and tests the packaged `pspstream.exe` with
 `packaging/windows/smoke.py` (`--version`, `--check`, the Portuguese help
 and a stream to the fake PSP with audio and the web interface, in H.264 with
-P frames and in JPEG). `packaging/windows/vigem.py` builds
+P frames and in JPEG). `packaging/windows/installer.py` turns that folder
+into `PSPStream-Setup-x64.exe` with Inno Setup (`pspstream.iss`), and the job
+installs it silently in `C:\Program Files`, runs the same smoke test on the
+installed copy, checks the firewall rule and uninstalls it.
+`packaging/windows/vigem.py` builds
 `ViGEmClient.dll` (the virtual Xbox controller) from ViGEmClient's source at
-a pinned commit, with the runner's Visual Studio. Two last, informational
-steps try the real screen capture on the runner and install the ViGEmBus
-driver (a pinned release, its signature checked) to read the virtual
-controller back through XInput. The zip goes to the run's artifacts, the `nightly`
-pre-release and the releases.
+a pinned commit, with the runner's Visual Studio, and the Windows tests load
+it. A last, informational step tries the real screen capture on the runner,
+and the job downloads the ViGEmBus installer the way `--setup` does (pinned
+version and SHA-256, the signature checked). The driver itself cannot be
+installed there: its installer refuses Windows Server, which is what
+GitHub's Windows runners run. The controller end to end (the driver, the
+DLL, XInput) is tested on a Windows 10/11 PC by `pspstream --check`, and by
+`tests/test_windows.py` (`ViGEmBusTest`) where the driver is installed. The
+installer and the zip go to the run's artifacts, the `nightly` pre-release and the
+releases.
 
 `build.py` runs PyInstaller (`packaging/windows/pspstream.spec`, a folder,
 not a single exe) and copies only the GStreamer plugins the server uses
@@ -53,10 +62,11 @@ not a single exe) and copies only the GStreamer plugins the server uses
 file's import table with `pefile`. By hand, on Windows:
 
 ```bat
-pip install pyinstaller pillow pefile
+pip install pyinstaller pillow pefile truststore
 python packaging\windows\gstreamer.py C:\gst
 python packaging\windows\vigem.py C:\vigem      # ViGEmClient.dll from the source (needs Visual Studio with C++)
 python packaging\windows\build.py --gstreamer C:\gst --vigem C:\vigem
+python packaging\windows\installer.py           # dist\PSPStream-Setup-x64.exe (needs Inno Setup 6)
 ```
 
 `--gstreamer` also takes an installed runtime

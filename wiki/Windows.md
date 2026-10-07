@@ -9,42 +9,46 @@ packaged `pspstream.exe` streams to the fake PSP, with audio and the web
 interface), but it has not been tested on a real PC with a PSP yet. Reports
 are welcome.
 
-## Download and run
+## Install
 
-1. Download **`PSPStream-Windows-x64.zip`** from
+1. Download **`PSPStream-Setup-x64.exe`** from
    [Releases](https://github.com/k7vinilstorage/PSP-Stream/releases)
-   (the `nightly` pre-release has the latest build).
-2. Unzip it anywhere (for example `C:\PSPStream`). Nothing is installed:
-   the folder has `pspstream.exe`, Python and the parts of GStreamer it
-   uses.
-3. Open a terminal in the folder and prepare the machine once:
-
-   ```bat
-   pspstream --check
-   pspstream --setup
-   ```
-
-   `--setup` asks before each step: it creates the firewall rule for port
-   5123 (UDP and TCP, the Windows UAC prompt appears), if no openh264
-   library was found, downloads Cisco's, and, if the ViGEmBus driver is
-   missing, opens its download page (only for the Xbox controller, see
-   below).
-4. Run the server:
-
-   ```bat
-   pspstream
-   ```
-
-   Or double-click `pspstream.exe`: a console window shows the log. The
-   settings are at **http://localhost:5124**.
-5. On the PSP: **Find the PC on the network**, or the PC's IP in
+   (the `nightly` pre-release has the latest build) and run it. The
+   wizard is in English or Portuguese, following Windows.
+2. Leave the boxes on the "Prepare this PC" page checked:
+   - **allow the PSP through the firewall**: port 5123, UDP and TCP, on
+     private networks;
+   - **install the ViGEmBus driver**: the virtual Xbox controller for the
+     `xbox` profiles. The wizard downloads the official installer (version
+     1.22.0, its SHA-256 checked) and installs it. The box does not show if
+     the driver is already there.
+3. At the end, **Launch PSPStream**. A console window shows the log, and
+   the Start menu gets **PSPStream** and **PSPStream settings** (the web
+   interface, **http://localhost:5124**).
+4. On the PSP: **Find the PC on the network**, or the PC's IP in
    `server.txt` ([Using the PSP](Using-the-PSP)).
 
-The first time the server opens the port, Windows may ask whether to allow
-it on the network: allow it on **private** networks.
+The network must be **Private** (Settings > Network & Internet > the
+network): on a Public network Windows blocks the PSP even with the rule.
+Uninstalling (Settings > Apps) removes PSPStream and its firewall rule;
+ViGEmBus stays, because other programs use it, and has its own entry there.
 
-For Portuguese: `pspstream --lang pt`, or **Language** in the web interface
+For Portuguese: **Language** in the web interface, or `pspstream --lang pt`
 ([Language](Server-Options#language)).
+
+### Without installing (zip)
+
+`PSPStream-Windows-x64.zip` is the same program, portable: unzip it
+anywhere and prepare the PC once from a terminal in that folder:
+
+```bat
+pspstream --setup
+pspstream
+```
+
+`--setup` asks before each step: the firewall rule (the Windows UAC prompt
+appears), Cisco's openh264 if none was found, and the ViGEmBus driver if it
+is missing. `pspstream --check` shows what is ready, in both cases.
 
 ## What works
 
@@ -71,10 +75,14 @@ XInput, with the same profiles and the same SELECT layer as on Linux
 driver, so this needs **ViGEmBus**, the same driver Sunshine and DS4Windows
 use:
 
-1. Install ViGEmBus once, as administrator, from its
-   [releases page](https://github.com/nefarius/ViGEmBus/releases/latest)
-   (`pspstream --setup` opens it).
-2. `pspstream --check` shows `ok  ViGEmBus` under Controls.
+1. Install ViGEmBus once: the box in the installer, or `pspstream --setup`
+   with the zip. Both download the official installer (version 1.22.0, its
+   SHA-256 checked) and run it as administrator. By hand: its
+   [releases page](https://github.com/nefarius/ViGEmBus/releases/latest).
+2. `pspstream --check` tests it end to end: it plugs in a controller for a
+   moment, presses A on it and reads it back through XInput, as a game
+   would, then unplugs it. It shows `ok  ViGEmBus: virtual Xbox 360
+   controller works` under Controls.
 3. `pspstream --profile xbox`, or **Profile** in the web interface.
 
 The `vigem\ViGEmClient.dll` next to `pspstream.exe` talks to the driver; CI
@@ -82,7 +90,8 @@ builds it from ViGEmClient's source (MIT). Without the driver, the `xbox`
 profiles are refused with a message in the log, and keyboard and mouse
 keep working. The controller disappears when the server stops. ViGEmBus is
 no longer developed by its author (2023), but it works on Windows 10 and
-11 and is what the other streaming programs still use.
+11 and is what the other streaming programs still use. It does not install
+on Windows Server.
 
 ## How it works
 
@@ -137,6 +146,7 @@ official wheels on PyPI (what the zip is built from).
 | black image in a full-screen game | some older games in exclusive full screen do not show in Desktop Duplication: use borderless window mode |
 | the controls do nothing in one program | Windows does not let a normal program send input to one running as administrator: run `pspstream.exe` as administrator too. Some anti-cheats ignore injected input |
 | no audio | `--check` lists `wasapi2src` and `adpcmenc`; with nothing playing, the loopback sends nothing (the PSP plays silence) |
-| "the ViGEmBus driver is not installed" | install it from its [releases page](https://github.com/nefarius/ViGEmBus/releases/latest) as administrator (`pspstream --setup` opens it), then `pspstream --check` |
+| "the ViGEmBus driver is not installed" | `pspstream --setup` installs it (accept the Windows UAC prompt), or install it from its [releases page](https://github.com/nefarius/ViGEmBus/releases/latest) as administrator; then `pspstream --check` |
+| "the test controller failed" in `--check` | the driver is there but Windows did not show the controller to XInput: restart the PC (a driver update can wait for a restart) and run `pspstream --check` again; reinstall ViGEmBus with `pspstream --setup` if it persists |
 | the game does not see the Xbox controller | the game must read XInput (most PC games do); a game that only reads DirectInput sees it too, but with the triggers on one axis, as with a real Xbox 360 controller. `joy.cpl` (Win+R) shows whether the controller is there and its buttons |
 | antivirus warning | the exe is not signed (PyInstaller builds are sometimes flagged). The zip is built by GitHub Actions from this repository |
