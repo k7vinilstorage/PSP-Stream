@@ -1,4 +1,6 @@
-Status: **a plan, nothing implemented.** A PSPStream **client for the
+Status: **phase 0 (hardware probes) in progress** in its own repository,
+[3ds-stream](https://github.com/k7vinilstorage/3ds-stream); the client
+itself is not implemented yet. A PSPStream **client for the
 Nintendo 3DS** (homebrew, `.3dsx` and `.cia`): it connects to the same
 PSPStream server, shows the PC screen on the top screen, plays the audio
 and sends the 3DS buttons, Circle Pad and touch screen back to the PC.

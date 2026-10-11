@@ -45,4 +45,5 @@ web interface, installer and the PSP screens): see [Language](Server-Options#lan
 - [PC Client Plan](PC-Client-Plan): a receiver for Linux and Windows PCs
   (a plan, nothing implemented).
 - [3DS Port Plan](3DS-Port-Plan): a client for the Nintendo 3DS, hardware
-  H.264 on the New 3DS and JPEG on the Old 3DS (a plan, nothing implemented).
+  H.264 on the New 3DS and JPEG on the Old 3DS (phase 0, the hardware
+  probes, in its own repository).
