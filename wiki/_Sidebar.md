@@ -23,6 +23,7 @@
 - [Development](Development)
 - [Windows Server Plan](Windows-Server-Plan)
 - [PC Client Plan](PC-Client-Plan)
+- [3DS Port Plan](3DS-Port-Plan)
 
 [Repository](https://github.com/k7vinilstorage/PSP-Stream) ·
 [Releases](https://github.com/k7vinilstorage/PSP-Stream/releases)
