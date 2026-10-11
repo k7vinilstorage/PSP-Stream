@@ -250,9 +250,11 @@ jobs:
         run: |
           tag="$GITHUB_REF_NAME"
           sh packaging/release-notes.sh "${tag#v}" > notes.md
-          [ -s notes.md ] || echo "See CHANGELOG.md." > notes.md
+          if [ -s notes.md ]; then has_notes=1; else has_notes=0; echo "See CHANGELOG.md." > notes.md; fi
           if gh release view "$tag" > /dev/null 2>&1; then
             gh release upload "$tag" out/* --clobber
+            # a release já existia: as notas do CHANGELOG valem, se a seção existir (sem ela, não apaga o que há)
+            if [ "$has_notes" = 1 ]; then gh release edit "$tag" --notes-file notes.md; fi
           else
             gh release create "$tag" out/* --title "PSPStream ${tag#v}" --notes-file notes.md
           fi

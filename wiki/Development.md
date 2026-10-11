@@ -29,7 +29,11 @@ A stable version comes from a tag:
 git tag v1.2 && git push origin v1.2
 ```
 
-The release uses the version's section of `CHANGELOG.md` as its notes.
+The release uses the version's section of `CHANGELOG.md` as its notes
+(`tests/test_docs.py` fails if the version in the code has no section).
+If a release went out before its section existed, write the section in
+`main` and run *Actions* → *release-notes* → *Run workflow* with the tag:
+it rewrites the release description without rebuilding anything.
 
 The **Windows** job (`windows-2022`) downloads the official GStreamer
 runtime (MSVC 64-bit) as the project's wheels on PyPI, pinned with their
