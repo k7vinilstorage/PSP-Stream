@@ -36,7 +36,7 @@ WINDOWS = sys.platform == "win32"
 
 # Sem frame novo por este tempo, reenvia o último para a conexão não morrer
 # (no Wayland o compositor só manda frames quando a tela muda).
-VERSION = "1.1"
+VERSION = "1.11"
 KEEPALIVE_S = 1.0
 # Frames que o PSP pode autorizar além do último enviado. Com frames P e
 # prefetch=auto, o PSP autoriza o N+2 quando o decode pega o N: o pedido fica

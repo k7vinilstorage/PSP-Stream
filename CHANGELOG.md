@@ -4,26 +4,47 @@ The EBOOT and server versions move together. The protocol has its own
 version (`PSC5` = v5) and only changes when the message format changes; an
 EBOOT with another protocol version is refused with a warning in the log.
 
+## 1.11
+
+- **Windows: virtual Xbox 360 controller.** The `xbox`, `xbox-camera` and
+  `xbox-shoulders` profiles now work on Windows, with the same SELECT layer
+  as on Linux: games see a wired Xbox 360 controller through XInput. It
+  goes through the ViGEmBus driver (the one Sunshine and DS4Windows use);
+  `vigem\ViGEmClient.dll` is built by CI from ViGEmClient's source at a
+  pinned commit. Without the driver, the `xbox` profiles are refused with a
+  message in the log, and keyboard and mouse keep working.
+- **Windows installer.** `PSPStream-Setup-x64.exe` (Inno Setup, English or
+  Portuguese, following Windows) installs to Program Files with Start menu
+  shortcuts (PSPStream and its settings page) and, with checkboxes, allows
+  the PSP through the firewall and installs the ViGEmBus driver 1.22.0,
+  downloaded with its SHA-256 checked. Uninstalling removes the firewall
+  rule. The portable zip is still there. CI installs it, tests the
+  installed copy and uninstalls it on every run.
+- `--setup` installs ViGEmBus (the official installer, version and SHA-256
+  pinned, run as administrator), and `--check` tests the controller end to
+  end: it plugs in a controller for a moment, presses A and reads it back
+  through XInput, as a game would.
+- `--setup`'s downloads (ViGEmBus, Cisco's openh264) failed on some PCs with
+  "CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate": the
+  bundled Python only trusted the root certificates already stored in
+  Windows, and Windows fetches the missing ones only for its own API. HTTPS
+  is now checked through Windows' certificate API (truststore).
+- Tested on a Windows PC with a PSP: the installer, the driver and the Xbox
+  controller.
+
 ## 1.1
 
-- **Windows server (experimental).** `PSPStream-Setup-x64.exe`, an
-  installer (Inno Setup, English and Portuguese) that also allows the PSP
-  through the firewall and installs the ViGEmBus driver, and
-  `PSPStream-Windows-x64.zip`, the same portable (Windows 10/11, 64-bit).
-  Built by CI with PyInstaller and the GStreamer plugins it needs
-  (GStreamer 1.28, from the project's official wheels on PyPI, pinned by
-  hash); CI also installs, tests and uninstalls the installer. The capture runs in
+- **Windows server (experimental).** `PSPStream-Windows-x64.zip`
+  (Windows 10/11, 64-bit), built by CI with PyInstaller and the GStreamer
+  plugins it needs (GStreamer 1.28, from the project's official wheels on
+  PyPI, pinned by hash): unzip and run `pspstream.exe`. The capture runs in
   GStreamer's `gst-launch-1.0` as a child process (no PyGObject on
   Windows) and reaches the server over local TCP: the screen through
   Desktop Duplication (`--source screen`, `--monitor`), scaled on the GPU
   with a CPU fallback, and the audio through WASAPI loopback. Keyboard and
-  mouse through SendInput, and the virtual Xbox 360 controller (the `xbox`
-  profiles) through the ViGEmBus driver, which the user installs once
-  (`--setup` downloads the official installer, version and SHA-256
-  pinned, and runs it as administrator); `vigem\ViGEmClient.dll` is built by CI from
-  ViGEmClient's source.
+  mouse through SendInput; the virtual Xbox controller is not there yet.
   `--check` and `--setup` for Windows (GStreamer, openh264, the firewall
-  rule, the network profile, Cisco's openh264 DLL, ViGEmBus). The protocol, P
+  rule, the network profile, Cisco's openh264 DLL). The protocol, P
   frames, adaptive quality, web interface and translations are the same
   as on Linux. CI tests the packaged exe against the fake PSP; it was not
   tested on a real PC with a PSP yet.

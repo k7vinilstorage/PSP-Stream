@@ -149,3 +149,22 @@ class DocLinksTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VersionTest(unittest.TestCase):
+    """A versão do servidor, a do EBOOT e a do .rpm andam juntas, e o CHANGELOG tem a seção dela: é o
+    que vira a descrição da release (packaging/release-notes.sh), e sem ela a release sai vazia."""
+
+    def test_versions_match(self):
+        server = re.search(r'^VERSION = "([^"]+)"', (ROOT / "server" / "pspstream.py").read_text(), re.M).group(1)
+        eboot = re.search(r'PSPSTREAM_VERSION "([^"]+)"', (ROOT / "psp" / "src" / "version.h").read_text()).group(1)
+        rpm = re.search(r"%global pspversion (\S+)\}", (ROOT / "packaging" / "pspstream.spec").read_text()).group(1)
+        self.assertEqual((eboot, rpm), (server, server))
+
+    def test_changelog_has_the_version(self):
+        version = re.search(r'^VERSION = "([^"]+)"', (ROOT / "server" / "pspstream.py").read_text(), re.M).group(1)
+        changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        top = re.search(r"^## (\S+)", changelog, re.M).group(1)
+        self.assertEqual(top, version, "the newest CHANGELOG section must be the current version")
+        notes = re.search(rf"^## {re.escape(version)}\b.*?\n(.*?)(?=^## |\Z)", changelog, re.M | re.S).group(1)
+        self.assertTrue(notes.strip(), f"the '## {version}' section of CHANGELOG.md is empty")

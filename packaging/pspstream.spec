@@ -1,6 +1,6 @@
 # Pacote .rpm (Fedora). Gerado por packaging/build-rpm.sh, que define a versão
 # (pspversion) e monta o Source0 a partir do repositório.
-%{!?pspversion: %global pspversion 1.1}
+%{!?pspversion: %global pspversion 1.11}
 %global debug_package %{nil}
 
 Name:           pspstream

@@ -1,0 +1,37 @@
+# Refaz a descrição de uma release a partir da seção da versão no CHANGELOG.md
+# (packaging/release-notes.sh), sem recompilar nada: para uma release publicada
+# antes de a seção existir. Actions -> release-notes -> Run workflow -> a tag.
+name: release-notes
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "release tag (e.g. v1.11)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  notes:
+    name: release notes
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: update the release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          case "$TAG" in
+            v[0-9]*) ;;
+            *) echo "not a version tag: $TAG"; exit 1 ;;
+          esac
+          sh packaging/release-notes.sh "${TAG#v}" > notes.md
+          if [ ! -s notes.md ]; then
+            echo "CHANGELOG.md has no '## ${TAG#v}' section"
+            exit 1
+          fi
+          cat notes.md
+          gh release edit "$TAG" --notes-file notes.md
