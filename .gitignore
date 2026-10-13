@@ -5,6 +5,10 @@ psp/*.PBP
 psp/PARAM.SFO
 psp/src/*.o
 psp/src/*.d
+psp/usbdrv/*.o
+psp/usbdrv/*.d
+psp/usbdrv/*.elf
+psp/usbdrv/*.prx
 psp/dist/
 psp/probe/*.o
 psp/probe/*.elf

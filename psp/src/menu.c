@@ -205,7 +205,8 @@ static void change(ps_config_t *cfg, int item, int dir)
         cfg->wifi_profile = next_profile(cfg->wifi_profile, dir);
         break;
     case IT_TRANSPORT:
-        cfg->udp = !cfg->udp;
+        cfg->transport = (cfg->transport + (dir > 0 ? 1 : 2)) % 3;
+        cfg->udp = (cfg->transport == TRANSPORT_UDP);
         break;
     case IT_H264:
         cfg->h264 = !cfg->h264;
@@ -272,7 +273,7 @@ static void value_text(const ps_config_t *cfg, int item, char *out, int len)
         profile_name(cfg->wifi_profile, out, len);
         break;
     case IT_TRANSPORT:
-        snprintf(out, len, "%s", cfg->udp ? "UDP" : "TCP");
+        snprintf(out, len, "%s", cfg->transport == TRANSPORT_USB ? "USB" : cfg->transport == TRANSPORT_UDP ? "UDP" : "TCP");
         break;
     case IT_H264:
         snprintf(out, len, "%s", yes(cfg->h264));
@@ -484,7 +485,8 @@ int menu_run(ps_config_t *cfg, const char *dir, int countdown_s, const char *sta
             continue;
         }
         int oct[4];
-        if (!cfg->host[0] || (parse_ip(cfg->host, oct) == 0 && !oct[0])) {
+        /* pelo USB não precisa do IP */
+        if (cfg->transport != TRANSPORT_USB && (!cfg->host[0] || (parse_ip(cfg->host, oct) == 0 && !oct[0]))) {
             snprintf(status, sizeof(status), "%s", T("PC IP missing: edit it or use Find the PC on the network",
                                                    "Falta o IP do PC: edite ou use Procurar o PC na rede"));
             status_color = C_BAD;

@@ -111,6 +111,22 @@ sudo modprobe uinput && sudo udevadm control --reload-rules && sudo udevadm trig
 Without uinput, the server warns and streams without the controls. The
 buttons of each profile are in [Controls](Controls).
 
+### USB cable (optional)
+
+To stream over the USB cable (`transport=usb` on the PSP, CFW only; see
+[Using the PSP](Using-the-PSP#over-the-usb-cable)), the server needs pyusb
+and, to open the PSP without root, a udev rule. The `.deb` and `.rpm`
+bring both (pyusb as a recommended package); from the repository:
+
+```sh
+sudo apt install python3-usb      # Ubuntu/Debian (Fedora: python3-pyusb; Arch: python-pyusb)
+printf '%s\n' 'SUBSYSTEM=="usb", ATTR{idVendor}=="054c", ATTR{idProduct}=="02d2", TAG+="uaccess"' \
+  | sudo tee /etc/udev/rules.d/61-pspstream-usb.rules
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+`--setup` does the same. `--no-usb` turns the USB off in the server.
+
 ### KMS capture (recommended on GNOME 50)
 
 Through the portal, GNOME 50 delivers at most ~40 fps (a limiter in GNOME
@@ -143,7 +159,7 @@ ready EBOOT. To build it, use [pspdev](https://pspdev.github.io/installation/fed
 sudo dnf -y install @development-tools cmake bsdtar libusb-compat-0.1 gpgme2 fakeroot xz
 curl -LO https://github.com/pspdev/pspdev/releases/latest/download/pspdev-fedora-latest.tar.gz
 tar xzf pspdev-fedora-latest.tar.gz -C ~
-cd psp && make dist      # dist/PSP/GAME/PSPStream/{EBOOT.PBP,server.txt}
+cd psp && make dist      # dist/PSP/GAME/PSPStream/{EBOOT.PBP,pspstream_usb.prx,server.txt}
 ```
 
 The Makefiles find pspdev in `~/pspdev` or `/usr/local/pspdev` without any

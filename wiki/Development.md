@@ -192,10 +192,12 @@ psp/                   client (C, pspdev)
   src/menu.c           settings screen (IP, Wi-Fi, options, find the PC, language)
   src/audio.c, ima.c   audio: ring with an adaptive buffer, sceAudioSRC, IMA ADPCM decoder
   src/net.c            network modules, Wi-Fi (apctl), TCP/UDP, broadcast
+  src/usb.c            transport=usb: loads usbdrv/ through kubridge and reads/writes its byte streams
   src/display.c        8888 framebuffer, triple buffering, text
   src/config.c         server.txt (read and write)
   src/lang.h           T(en, pt): English or Portuguese texts
   src/protocol.h       message format (mirrored in server/protocol.py)
+  usbdrv/              pspstream_usb.prx: kernel USB driver (054C:02D2, bulk 0x81 IN / 0x02 OUT, 256 KB ring)
   probe/               H.264 decoder test on the hardware
 server/                server (Python 3)
   pspstream.py         sessions, command line, benchmark
@@ -214,7 +216,8 @@ server/                server (Python 3)
   kms.py, portal.py    KMS capture and ScreenCast portal capture
   audio.py             audio: capture (pulsesrc), IMA ADPCM (adpcmenc), packets
   h264.py, openh264.py H.264 encoders (libopenh264 directly through ctypes; GStreamer as a fallback)
-  transports.py        TCP and UDP (chunks, NACK, resend)
+  transports.py        TCP, UDP (chunks, NACK, resend) and USB
+  usb_link.py          USB: finds and opens the PSP (pyusb), opens the session on HELLO
   adaptive.py          adaptive quality
   inject.py, gamepad.py, keymap.json   controls (uinput)
   wolf_api.py          Wolf: API client (HTTP over the Unix socket, standard library only)

@@ -1,6 +1,6 @@
 # Pacote .rpm (Fedora). Gerado por packaging/build-rpm.sh, que define a versão
 # (pspversion) e monta o Source0 a partir do repositório.
-%{!?pspversion: %global pspversion 1.11}
+%{!?pspversion: %global pspversion 1.12}
 %global debug_package %{nil}
 
 Name:           pspstream
@@ -25,10 +25,13 @@ Requires:       python3-evdev
 Recommends:     gstreamer1-plugin-openh264
 Recommends:     pulseaudio-utils
 Recommends:     xdg-desktop-portal
+# o PSP pelo cabo USB (transport=usb)
+Recommends:     python3-pyusb
 
 %description
 Streams the PC screen and audio to a PSP running the PSPStream EBOOT over
-Wi-Fi (H.264 with P frames, decoded by the PSP hardware, and IMA ADPCM),
+Wi-Fi or the USB cable (H.264 with P frames, decoded by the PSP hardware, and
+IMA ADPCM),
 and sends the PSP buttons back as keyboard and mouse or as a virtual Xbox
 controller.
 
@@ -69,6 +72,7 @@ fi
 %{_datadir}/pspstream/
 %{_prefix}/libexec/pspstream/
 %{_prefix}/lib/udev/rules.d/60-pspstream-uinput.rules
+%{_prefix}/lib/udev/rules.d/61-pspstream-usb.rules
 %{_prefix}/lib/modules-load.d/pspstream.conf
 %{_prefix}/lib/systemd/user/pspstream.service
 %{_prefix}/lib/firewalld/services/pspstream.xml

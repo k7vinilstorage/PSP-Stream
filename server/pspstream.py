@@ -25,6 +25,7 @@ from protocol import REQ_FRAME, REQ_HELLO, Request
 import settings
 from stats import SessionStats, Window, format_summary, now_ms
 import transports
+import usb_link
 import wolf_api
 from transports import DSCP, TcpTransport, UdpTransport, parse_datagram, set_dscp
 import i18n
@@ -36,7 +37,7 @@ WINDOWS = sys.platform == "win32"
 
 # Sem frame novo por este tempo, reenvia o último para a conexão não morrer
 # (no Wayland o compositor só manda frames quando a tela muda).
-VERSION = "1.11"
+VERSION = "1.12"
 KEEPALIVE_S = 1.0
 # Frames que o PSP pode autorizar além do último enviado. Com frames P e
 # prefetch=auto, o PSP autoriza o N+2 quando o decode pega o N: o pedido fica
@@ -89,7 +90,7 @@ class Session:
     def run(self) -> None:
         log.info(tr("PSP connected over %s: %s:%d"), self.transport.name.upper(), *self.transport.addr)
         self.transport.start(self)
-        audio_listening = hasattr(self.transport, "send_audio")  # o som só vai pelo UDP
+        audio_listening = hasattr(self.transport, "send_audio")  # o som vai pelo UDP e pelo USB
         with self.cond:
             if self.audio is not None and audio_listening:
                 self.audio.add_listener(self._on_audio)
@@ -195,7 +196,7 @@ class Session:
             return
         self.audio_on = on
         if not hasattr(self.transport, "send_audio"):
-            return  # TCP: o PSP nem pede som (só vai pelo UDP)
+            return  # TCP: o PSP nem pede som (só vai pelo UDP e pelo USB)
         if not on:
             if self.audio is not None:
                 log.info(tr("audio: turned off on the PSP"))
@@ -357,10 +358,13 @@ class Session:
             f"{r['resent_pct']:.1f}% | {r['lost']} |"
             for r in rows
         ]
-        wifi = self.wifi or (0, 0)
         table.append("")
-        table.append((tr("PSP Wi-Fi: signal {signal}%, WLAN power save ON") if wifi[1] & protocol.WIFI_POWER_SAVE
-                      else tr("PSP Wi-Fi: signal {signal}%, WLAN power save off")).format(signal=wifi[0]))
+        if isinstance(self.transport, transports.UsbTransport):  # a coluna de vazão é a do cabo
+            table[0] = table[0].replace("Wi-Fi", "USB")
+        else:
+            wifi = self.wifi or (0, 0)
+            table.append((tr("PSP Wi-Fi: signal {signal}%, WLAN power save ON") if wifi[1] & protocol.WIFI_POWER_SAVE
+                          else tr("PSP Wi-Fi: signal {signal}%, WLAN power save off")).format(signal=wifi[0]))
         if self.ping:
             table.append(tr("Pure round trip (ping at the start of the stream): {ping}").format(ping=format_ping(*self.ping)))
         if isinstance(self.transport, UdpTransport):
@@ -642,6 +646,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-input", action="store_true", help=tr("do not inject the PSP controls on the PC"))
     p.add_argument("--input-dry-run", action="store_true",
                    help=tr("only show in the log the keys/movements that would be injected"))
+    if sys.platform != "win32":
+        p.add_argument("--no-usb", dest="usb", action="store_false",
+                       help=tr("do not stream over the USB cable (transport=usb on the PSP; needs pyusb)"))
     p.add_argument("--keymap", default=str(here / "keymap.json"), help=tr("mapping file (default keymap.json)"))
     p.add_argument("--profile", default=os.environ.get("PSPSTREAM_PROFILE") or "game",
                    help=tr("keymap profile: game, desktop, arrows (keyboard and mouse); xbox, xbox-camera, "
@@ -826,6 +833,14 @@ def main(argv=None) -> int:
     udp.bind((args.bind, args.port))
     server = Server(source, args, injector, audio)
     threading.Thread(target=server.serve_udp, args=(udp,), name="udp", daemon=True).start()
+    usb_mon = None
+    if getattr(args, "usb", False) and args.source != "wolf":  # no container do Wolf não há USB
+        if usb_link.is_available():
+            usb_mon = usb_link.UsbMonitor(server)
+            usb_mon.start()
+        else:
+            import distro
+            log.info(tr("USB transport off: pyusb is not installed (%s)"), distro.hint("pyusb"))
     log.info(tr("PSPStream %s: waiting for the PSP at %s:%d, TCP and UDP (on the PSP: 'Find the PC on the network', "
                 "or this IP in server.txt)"), VERSION, local_ip(), args.port)
 
@@ -878,6 +893,8 @@ def main(argv=None) -> int:
     except KeyboardInterrupt:
         log.info(tr("shutting down"))
     finally:
+        if usb_mon is not None:
+            usb_mon.stop()
         if web is not None:
             web.close()
         server.close()

@@ -1202,4 +1202,30 @@ PT = {
         'o controle não ganhou um número no XInput',
     'XInput did not see the button press (controller {index})':
         'o XInput não viu o botão apertado (controle {index})',
+    # transporte USB
+    'do not stream over the USB cable (transport=usb on the PSP; needs pyusb)':
+        'não transmitir pelo cabo USB (transport=usb no PSP; precisa do pyusb)',
+    'USB transport off: pyusb is not installed (%s)':
+        'transporte USB desligado: o pyusb não está instalado (%s)',
+    'USB reading ended: %s':
+        'leitura do USB encerrada: %s',
+    'USB write returned {n}':
+        'a escrita no USB devolveu {n}',
+    'pyusb is not installed':
+        'o pyusb não está instalado',
+    'USB: waiting for the PSP on the cable (transport=usb on the PSP)':
+        'USB: esperando o PSP no cabo (transport=usb no PSP)',
+    'PSP USB endpoints not found (expected 0x81 and 0x02)':
+        'endpoints USB do PSP não encontrados (esperados 0x81 e 0x02)',
+    'USB: no permission to open the PSP (054C:02D2). Install the udev rule: pspstream --setup (or see pspstream --check)':
+        'USB: sem permissão para abrir o PSP (054C:02D2). Instale a regra do udev: pspstream --setup (ou veja o pspstream --check)',
+    'USB transport: off, pyusb is not installed (optional: streaming over the USB cable, transport=usb on the PSP)':
+        'transporte USB: desligado, o pyusb não está instalado (opcional: stream pelo cabo USB, transport=usb no PSP)',
+    'USB transport: ready (pyusb and the udev rule for the PSP, 054C:02D2)':
+        'transporte USB: pronto (pyusb e a regra do udev para o PSP, 054C:02D2)',
+    'USB transport: the udev rule for the PSP is missing (without it, only root opens the PSP over USB)':
+        'transporte USB: falta a regra do udev para o PSP (sem ela, só o root abre o PSP pelo USB)',
+    'Let the PSP be opened over USB without root (udev rule)':
+        'Deixar abrir o PSP pelo USB sem root (regra do udev)',
 }
+

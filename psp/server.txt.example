@@ -26,9 +26,9 @@ overlay=1
 # 1 = the PSP buttons and analog stick become keyboard/mouse on the PC
 input=1
 
-# udp | tcp. Measured on a PSP-3000, UDP never stalled and TCP stalled several times.
-# With the stream running, SELECT+START+L switches and reconnects.
-# (open both ports in the PC firewall: 5123/udp and 5123/tcp)
+# udp | tcp | usb. Over USB, connects directly through the USB cable without Wi-Fi.
+# With the stream running, SELECT+START+L switches between UDP, TCP and USB.
+# (for UDP/TCP, open ports in PC firewall: 5123/udp and 5123/tcp; for USB, no Wi-Fi/firewall needed)
 transport=udp
 
 # UDP: ask for the next frame when this much of the current one is left, so it

@@ -26,13 +26,13 @@ typedef struct {
 
 struct sockaddr_in;
 
-/* Inicia a thread de rede, que pede e recebe frames sem parar.
- * udp = 1: sock é UDP e dest é o servidor; udp = 0: sock é TCP conectado.
+/* Inicia a thread de rede/USB, que pede e recebe frames sem parar.
+ * transport = TRANSPORT_TCP (0), TRANSPORT_UDP (1), ou TRANSPORT_USB (2).
  * early_bytes (só UDP): pede o próximo frame quando faltarem tantos bytes do
  * atual (0 = só depois de receber inteiro; STREAM_EARLY_AUTO = ida e volta x
  * vazão, medidas). rxwait: RXWAIT_* (só UDP). */
 #define STREAM_EARLY_AUTO (-1)
-int stream_start(int sock, int udp, const struct sockaddr_in *dest, int prefetch, int early_bytes, int rxwait,
+int stream_start(int sock, int transport, const struct sockaddr_in *dest, int prefetch, int early_bytes, int rxwait,
                  volatile int *running);
 
 /* UDP: ida e volta pura medida no início (us, 0 = não medido), se a thread

@@ -34,6 +34,7 @@
 #include "net.h"
 #include "protocol.h"
 #include "stream.h"
+#include "usb.h"
 #include "version.h"
 
 PSP_MODULE_INFO("PSPStream", PSP_MODULE_USER, 1, 1);
@@ -52,6 +53,7 @@ static volatile int g_sock = -1;
 static int exit_callback(int arg1, int arg2, void *common)
 {
     g_running = 0;
+    usb_abort();
     net_abort(g_sock);
     sceKernelDelayThread(1500 * 1000);
     sceKernelExitGame(); /* se a thread principal não saiu a tempo */
@@ -225,7 +227,7 @@ static int input_thread(SceSize args, void *argp)
 }
 
 typedef struct {
-    int overlay, vsync, prefetch, udp, audio;
+    int overlay, vsync, prefetch, transport, udp, audio;
     int early_auto;       /* early_kb=auto: o overlay mostra o valor calculado */
     int switch_transport; /* atalho L: reconectar com o outro transporte */
     int open_config;      /* atalho R: parar o stream e abrir a configuração */
@@ -277,7 +279,7 @@ static void apply_menu(ui_t *ui, unsigned seen[ACT_COUNT])
                 audio_set_enabled(ui->audio);
                 stream_set_audio(ui->audio); /* sem o pedido de som, o PC para de mandar */
                 snprintf(msg, sizeof(msg), T("audio: %s%s", "som: %s%s"), ui->audio ? T("on", "ligado") : T("off", "desligado"),
-                         ui->audio && !ui->udp ? T(" (UDP only)", " (so no UDP)") : "");
+                         ui->audio && (!ui->udp && ui->transport != TRANSPORT_USB) ? T(" (UDP/USB only)", " (so no UDP/USB)") : "");
                 toast(ui, msg);
                 break;
             case ACT_TRANSPORT:
@@ -297,8 +299,8 @@ static void draw_overlay(const ui_t *ui, const stats_t *s)
         display_text(0, 0, 0xFF00FF00, "%4.1f fps %5.1f KB %4.0f KB/s", s->fps, s->kb, s->kbps);
         display_text(0, 1, 0xFF00FF00, T("dec %4.1f ms (%s) net %4.1f ms %s drop %u", "dec %4.1f ms (%s) rede %4.1f ms %s drop %u"),
                      s->dec_ms, decoder_name(),
-                     s->net_ms, ui->udp ? "udp" : "tcp", stream_dropped());
-        if (ui->udp) {
+                     s->net_ms, ui->transport == TRANSPORT_USB ? "usb" : ui->udp ? "udp" : "tcp", stream_dropped());
+        if (ui->udp) { /* a ida e volta só é medida no UDP */
             unsigned sel, poll, live, live_min;
             int polling;
             stream_ping(&sel, &poll, &polling, &live, &live_min);
@@ -383,10 +385,10 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
     stream_set_h264(cfg->h264);
     stream_set_h264p(cfg->h264p);
     stream_set_audio(ui->audio);
-    if (ui->udp) /* o som só vem pelo UDP */
+    if (ui->udp || ui->transport == TRANSPORT_USB) /* o som vem pelo UDP e pelo USB */
         audio_start(ui->audio);
     int early = cfg->early_kb < 0 ? STREAM_EARLY_AUTO : cfg->early_kb * 1024;
-    if (stream_start(sock, ui->udp, dest, ui->prefetch, early, cfg->rxwait, &g_running) < 0) {
+    if (stream_start(sock, ui->transport, dest, ui->prefetch, early, cfg->rxwait, &g_running) < 0) {
         status(T("Could not start the network thread", "Erro ao iniciar a thread de rede"));
         audio_stop();
         return -1;
@@ -414,9 +416,11 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
         if (ui->switch_transport || ui->open_config)
             break;
         if (now_us() - t_wifi > 2 * 1000 * 1000) { /* sinal e economia de energia vão no log do servidor */
-            net_ap_info_t ap;
-            net_ap_info(&ap);
-            stream_set_wifi(ap.strength, ap.power_save == 1 ? PS_WIFI_POWER_SAVE : 0);
+            if (ui->transport != TRANSPORT_USB) {
+                net_ap_info_t ap;
+                net_ap_info(&ap);
+                stream_set_wifi(ap.strength, ap.power_save == 1 ? PS_WIFI_POWER_SAVE : 0);
+            }
             t_wifi = now_us();
             /* como um player de vídeo: sem isso, o modo de espera automático
              * (Ajustes de economia de energia) suspende o PSP no meio do stream
@@ -428,13 +432,20 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
         if (!f) {
             if (stream_error())
                 break;
-            /* No UDP não há "conexão": avisa se o PC não responde. */
+            /* No UDP ou USB não há "conexão": avisa se o PC não responde. */
             if (ui->udp && !stream_completed() && now_us() - t_start > 3 * 1000 * 1000 && !waiting_msg) {
                 status(T("No answer from the PC over UDP. Server running?", "Sem resposta do PC via UDP. Servidor rodando?"));
                 status(T("PC firewall open? Run on the PC: pspstream --check",
                          "Firewall do PC liberado? Rode no PC: pspstream --check"));
                 status(T("SELECT + START + R: settings screen (IP, find the PC)",
                          "SELECT + START + R: tela de configuracao (IP, procurar o PC)"));
+                waiting_msg = 1;
+            } else if (ui->transport == TRANSPORT_USB && !stream_completed() && now_us() - t_start > 3 * 1000 * 1000 && !waiting_msg) {
+                status(T("No answer from the PC over USB. Server running?", "Sem resposta do PC via USB. Servidor rodando?"));
+                status(T("USB cable plugged in? On the PC: pspstream --check",
+                         "Cabo USB conectado? No PC: pspstream --check"));
+                status(T("SELECT + START + R: settings screen",
+                         "SELECT + START + R: tela de configuracao"));
                 waiting_msg = 1;
             }
             continue;
@@ -589,7 +600,8 @@ static void apply_config(const ps_config_t *cfg, ui_t *ui, int decoder_ready)
     ui->early_auto = cfg->early_kb < 0;
     ui->vsync = cfg->vsync;
     ui->prefetch = cfg->prefetch;
-    ui->udp = cfg->udp;
+    ui->transport = cfg->transport;
+    ui->udp = (cfg->transport == TRANSPORT_UDP);
     ui->audio = cfg->audio;
     input_enabled = cfg->input;
     if (decoder_ready)
@@ -650,6 +662,58 @@ int main(int argc, char *argv[])
                 display_console(T("sceJpeg unavailable (%s), using software", "sceJpeg indisponivel (%s), usando software"), decoder_error());
             decoder_ready = 1;
         }
+        if (ui.transport == TRANSPORT_USB) {
+            if ((r = usb_init(dir)) < 0) {
+                display_console(T("USB init failed (0x%08X). CFW required (ARK/PRO/ME)!",
+                                  "Falha ao iniciar USB (0x%08X). CFW necessario (ARK/PRO/ME)!"), r);
+                status(T("Check pspstream_usb.prx in game folder.", "Verifique pspstream_usb.prx na pasta do jogo."));
+                status(T("START: settings screen (or wait: retries in 3 s)",
+                         "START: tela de configuracao (ou espere: tenta de novo em 3 s)"));
+                if (wait_or_menu(3 * 1000 * 1000))
+                    need_menu = 1;
+                continue;
+            }
+            display_console(T("USB Mode: waiting for PC connection...",
+                              "Modo USB: aguardando conexao com o PC..."));
+            while (g_running && !usb_is_attached()) {
+                if (wait_or_menu(500 * 1000)) {
+                    need_menu = 1;
+                    break;
+                }
+            }
+            if (need_menu || !g_running)
+                continue;
+
+            display_console(T("USB Connected! Starting stream...",
+                              "USB Conectado! Iniciando transmissao..."));
+            int e = run_stream(-1, NULL, &cfg, &ui);
+            if (e == 1) {
+                ui.transport = (ui.transport + 1) % 3;
+                cfg.transport = ui.transport;
+                ui.udp = (ui.transport == TRANSPORT_UDP);
+                const char *tname = ui.transport == TRANSPORT_USB ? "USB" : ui.transport == TRANSPORT_UDP ? "UDP" : "TCP";
+                display_console(T("Switching to %s...", "Trocando para %s..."), tname);
+            } else if (e == 2) {
+                cfg.overlay = ui.overlay;
+                cfg.vsync = ui.vsync;
+                cfg.prefetch = ui.prefetch;
+                cfg.transport = ui.transport;
+                cfg.udp = ui.udp;
+                cfg.audio = ui.audio;
+                need_menu = 1;
+            } else if (g_running) {
+                display_console(T("USB Stream ended (%d). Reconnecting...", "Transmissao USB encerrada (%d). Reconectando..."), e);
+            }
+            continue;
+        }
+        /* Fora do USB, o driver sai do cabo: ativo, o PC continuaria vendo o PSP lá. */
+        usb_term();
+        if (!cfg.host[0]) { /* transport=usb sem IP, e o atalho L trocou para o Wi-Fi */
+            menu_msg = T("Set the PC IP (or 'Find the PC on the network')",
+                         "Defina o IP do PC (ou 'Procurar o PC na rede')");
+            need_menu = 1;
+            continue;
+        }
         if ((r = wifi_ensure(cfg.wifi_profile)) < 0) {
             display_console(T("Wi-Fi failed: 0x%08X", "Falha no Wi-Fi: 0x%08X"), r);
             status(T("Does the profile exist? Is the WLAN switch on?", "O perfil existe? A chave WLAN esta ligada?"));
@@ -682,13 +746,17 @@ int main(int argc, char *argv[])
         g_sock = -1;
         close(sock);
         if (e == 1) {
-            ui.udp = !ui.udp;
-            display_console(T("Switching to %s...", "Trocando para %s..."), ui.udp ? "UDP" : "TCP");
+            ui.transport = (ui.transport + 1) % 3;
+            cfg.transport = ui.transport;
+            ui.udp = (ui.transport == TRANSPORT_UDP);
+            const char *tname = ui.transport == TRANSPORT_USB ? "USB" : ui.transport == TRANSPORT_UDP ? "UDP" : "TCP";
+            display_console(T("Switching to %s...", "Trocando para %s..."), tname);
         } else if (e == 2) {
             /* a tela mostra o estado atual, inclusive o que os atalhos mudaram */
             cfg.overlay = ui.overlay;
             cfg.vsync = ui.vsync;
             cfg.prefetch = ui.prefetch;
+            cfg.transport = ui.transport;
             cfg.udp = ui.udp;
             cfg.audio = ui.audio;
             need_menu = 1;
@@ -699,6 +767,7 @@ int main(int argc, char *argv[])
 
     if (decoder_ready)
         decoder_term();
+    usb_term();
     net_term();
     sceKernelExitGame();
     return 0;

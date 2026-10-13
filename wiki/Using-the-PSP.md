@@ -52,7 +52,7 @@ Hold **SELECT + START** and press:
 | circle | vsync |
 | up | audio on/off (the PC stops sending when it is off) |
 | cross | prefetch: auto -> yes -> no (see [Prefetch](#prefetch)) |
-| L | switches the transport TCP/UDP (reconnects) |
+| L | switches the transport UDP -> USB -> TCP (reconnects) |
 | R | opens the settings screen |
 
 While the shortcut is held, nothing is sent to the PC. SELECT pressed alone
@@ -97,14 +97,14 @@ on the settings screen. By hand:
 192.168.1.100        # PC IP (optional :port, default 5123)
 lang=en              # PSP screens: en (default) | pt
 wifi_profile=1       # XMB network profile
-transport=udp        # udp (default) | tcp
+transport=udp        # udp (default) | tcp | usb (the cable; see below)
 h264=1               # accepts H.264
 h264p=1              # accepts H.264 with P frames
 decoder=auto         # JPEG: auto (hardware with software as a fallback) | hw | sw
 vsync=1              # 1 = no tearing (+0 to 16 ms); 0 = immediate swap
 overlay=1            # FPS, KB/frame, timings
 input=1              # PSP controls -> PC
-audio=1              # PC audio (UDP only); 0 = the PC does not even send it
+audio=1              # PC audio (UDP and USB); 0 = the PC does not even send it
 prefetch=auto        # auto (default) | 1 | 0 (see below)
 early_kb=auto        # UDP: ask for the next frame when this much of the current one is left (auto = round trip x throughput; 0 = at the end)
 rxwait=auto          # UDP: auto | select | poll
@@ -114,6 +114,24 @@ menu_wait=3          # s with the settings screen open before connecting by itse
 ```
 
 The PSP only takes the IP as numbers (no DNS names).
+
+### Over the USB cable
+
+`transport=usb` (v1.12) streams over the USB cable, without Wi-Fi: no
+802.11b limit, no router, no firewall. It needs:
+
+- a **custom firmware** (ARK-4, PRO or ME, with kubridge): the EBOOT loads
+  the `pspstream_usb.prx` driver that comes in the same folder;
+- the server on **Linux** with **pyusb** (the packages recommend it;
+  `--check` says if it is missing) and, to run without root, the **udev
+  rule** for the PSP (`61-pspstream-usb.rules`: comes with the packages;
+  from the repository, `--setup` installs it).
+
+The PC IP is not needed. The PSP waits for the cable ("USB Mode: waiting for
+PC connection..."), and the server opens the session when the stream starts.
+Audio goes over the cable too; the overlay does not show the ping (there is
+no round trip to measure). Switching to Wi-Fi with SELECT + START + L turns
+the USB driver off. Not on a PS Vita (Adrenaline) or in PPSSPP.
 
 ### Prefetch
 

@@ -14,7 +14,7 @@ MAGIC_REQ_OLD = (b"PSC1", b"PSC2", b"PSC3", b"PSC4")  # EBOOT antigo: recusado c
 MAGIC_FRAME = b"PSF1"
 MAGIC_CHUNK = b"PSU2"
 MAGIC_PONG = b"PSO1"
-MAGIC_AUDIO = b"PSA1"     # UDP, PC -> PSP: um bloco de som (empurrado, sem pedido)
+MAGIC_AUDIO = b"PSA1"     # UDP e USB, PC -> PSP: um bloco de som (empurrado, sem pedido)
 
 MAX_JPEG = 256 * 1024
 
@@ -35,7 +35,8 @@ FRAME_HDR_STRUCT = struct.Struct("<4sIII")
 CHUNK_HDR_STRUCT = struct.Struct("<4sIIIHHI")  # magic, frame_no, size, send_ts, chunk, count, hdr
 NACK_STRUCT = struct.Struct("<I8I")            # frame_no, máscara de 256 bits
 PONG_STRUCT = struct.Struct("<4sI")            # magic, token (o echo_ts do ping)
-# magic, seq, pos (amostra do 1º do bloco), taxa (Hz), canais, codec, amostras por canal, reservado
+# magic, seq, pos (amostra do 1º do bloco), taxa (Hz), canais, codec, amostras por canal, bytes do bloco
+# (no USB, onde o pacote acaba; o EBOOT no UDP usa o tamanho do datagrama)
 AUDIO_HDR_STRUCT = struct.Struct("<4sIIHBBHH")
 assert REQ_STRUCT.size == 52
 assert FRAME_HDR_STRUCT.size == 16
@@ -103,7 +104,7 @@ WIFI_POWER_SAVE = 0x01  # "Economia de energia WLAN" ligada no XMB
 WIFI_RX_POLL = 0x02     # o PSP espera pacotes consultando o socket (não select())
 CAP_H264 = 0x04         # o PSP decodifica H.264 (todo frame IDR) pelo hardware
 CAP_H264P = 0x08        # ... e também frames P (pacote AUD + frame + 2 cópias, ver h264.H264PEncoder)
-CAP_AUDIO = 0x10        # UDP: o PSP toca o som (pacotes MAGIC_AUDIO, ver audio.py)
+CAP_AUDIO = 0x10        # UDP e USB: o PSP toca o som (pacotes MAGIC_AUDIO, ver audio.py)
 
 CODEC_IMA_ADPCM = 1     # bloco IMA ADPCM do WAV (DVI, 4 bits por amostra; o adpcmenc do GStreamer)
 
@@ -147,7 +148,7 @@ def unpack_chunk(data: bytes):
 def pack_audio(seq: int, pos: int, rate: int, channels: int, samples: int, block: bytes,
                codec: int = CODEC_IMA_ADPCM) -> bytes:
     return AUDIO_HDR_STRUCT.pack(MAGIC_AUDIO, seq & 0xFFFFFFFF, pos & 0xFFFFFFFF, rate, channels, codec,
-                                 samples, 0) + block
+                                 samples, len(block) & 0xFFFF) + block
 
 
 def unpack_audio(data: bytes):

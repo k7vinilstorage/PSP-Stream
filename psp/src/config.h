@@ -1,6 +1,12 @@
 #ifndef PSPSTREAM_CONFIG_H
 #define PSPSTREAM_CONFIG_H
 
+enum {
+    TRANSPORT_TCP = 0,
+    TRANSPORT_UDP = 1,
+    TRANSPORT_USB = 2,
+};
+
 typedef struct {
     char host[64];
     int port;
@@ -13,7 +19,8 @@ typedef struct {
     int rcvbuf_kb;    /* buffer de recepção TCP em KB */
     int bench;        /* 1 = mede decode hw x sw com o primeiro frame */
     int input;        /* 1 = envia os controles para o PC (Marco 4) */
-    int udp;          /* transporte: 0 = TCP, 1 = UDP */
+    int transport;    /* transporte: TRANSPORT_TCP, TRANSPORT_UDP ou TRANSPORT_USB */
+    int udp;          /* mantido para retrocompatibilidade: 1 se TRANSPORT_UDP */
     int h264p;        /* aceita H.264 com frames P (o servidor decide com --codec h264p) */
     int early_kb;     /* UDP: pede o próximo frame quando faltar isso do atual (0 = só no fim, -1 = auto) */
     int rxwait;       /* UDP: RXWAIT_AUTO, RXWAIT_SELECT ou RXWAIT_POLL */

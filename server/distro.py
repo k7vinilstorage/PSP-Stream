@@ -51,6 +51,8 @@ PACKAGES = {
                  "arch": ["openh264"], "suse": ["libopenh264-7"]},
     "evdev": {"debian": ["python3-evdev"], "fedora": ["python3-evdev"], "arch": ["python-evdev"],
               "suse": ["python3-evdev"]},
+    "pyusb": {"debian": ["python3-usb"], "fedora": ["python3-pyusb"], "arch": ["python-pyusb"],
+              "suse": ["python3-pyusb"]},
     "pactl": {"debian": ["pulseaudio-utils"], "fedora": ["pulseaudio-utils"], "arch": ["libpulse"],
               "suse": ["pulseaudio-utils"]},
     "kms": {"debian": ["gcc", "make", "pkg-config", "libdrm-dev", "libcap2-bin"],
