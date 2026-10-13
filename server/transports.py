@@ -98,6 +98,99 @@ class TcpTransport:
         self.conn.close()
 
 
+class UsbTransport:
+    name = "usb"
+
+    def __init__(self, dev, ep_in, ep_out):
+        self.dev = dev
+        self.ep_in = ep_in
+        self.ep_out = ep_out
+        self.addr = ("USB", 0)
+        self.sent_chunks = 0
+        self.resent_chunks = 0
+        self.session = None
+        self.write_lock = threading.Lock()
+        self.alive = True
+
+    def start(self, session) -> None:
+        self.session = session
+        threading.Thread(target=self._reader, args=(session,), name="usb-reader", daemon=True).start()
+
+    def _reader(self, session) -> None:
+        buf = bytearray()
+        try:
+            while self.alive and session.alive:
+                while True:
+                    if len(buf) < protocol.REQ_STRUCT.size:
+                        break
+                    req = protocol.Request.unpack(bytes(buf[:protocol.REQ_STRUCT.size]))
+                    consumed = protocol.REQ_STRUCT.size
+                    if req.flags & protocol.REQ_NACK:
+                        if len(buf) < consumed + protocol.NACK_STRUCT.size:
+                            break
+                        nack = protocol.unpack_nack(bytes(buf[consumed:consumed + protocol.NACK_STRUCT.size]))
+                        consumed += protocol.NACK_STRUCT.size
+                        if req.flags & protocol.REQ_FRAME and nack is not None:
+                            req.want_frame = nack[0]
+                    buf = buf[consumed:]
+                    if req.flags & protocol.REQ_PING:
+                        self.send_pong(req.echo_ts)
+                    session.on_request(req)
+
+                try:
+                    data = self.ep_in.read(4096, timeout=500)
+                except Exception as exc:
+                    err_str = str(exc).lower()
+                    if getattr(exc, "errno", None) in (110, 60, -7) or "timeout" in err_str or "timed out" in err_str:
+                        continue
+                    raise
+                if data:
+                    buf.extend(data)
+        except Exception as exc:
+            if session.alive:
+                log.info(tr("USB reading ended: %s"), exc)
+        finally:
+            self.alive = False
+            session.close()
+
+    def _write_all(self, data: bytes, timeout_ms: int = 3000) -> None:
+        with self.write_lock:
+            if not self.alive:
+                return
+            view = memoryview(data)
+            while len(view) > 0 and self.alive:
+                n = self.ep_out.write(view, timeout=timeout_ms)
+                if n <= 0:
+                    raise OSError("USB write returned <= 0")
+                view = view[n:]
+
+    def send_frame(self, frame_no: int, jpeg: bytes, send_ms: int, redundant: bool = False) -> int:
+        hdr = protocol.pack_frame_header(frame_no, len(jpeg), send_ms)
+        self._write_all(hdr + jpeg)
+        self.sent_chunks += 1
+        return len(jpeg)
+
+    def send_audio(self, datagram: bytes) -> int:
+        self._write_all(datagram)
+        return len(datagram)
+
+    def send_pong(self, token: int) -> None:
+        pong = protocol.pack_pong(token)
+        try:
+            self._write_all(pong, timeout_ms=500)
+        except Exception:
+            pass
+
+    def close(self) -> None:
+        self.alive = False
+        if self.dev is not None:
+            try:
+                import usb.util
+                usb.util.dispose_resources(self.dev)
+            except Exception:
+                pass
+
+
 class UdpTransport:
     name = "udp"
 

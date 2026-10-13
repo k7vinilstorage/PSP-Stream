@@ -65,8 +65,15 @@ static void set_key(ps_config_t *cfg, const char *key, const char *value)
         cfg->bench = v;
     else if (!strcmp(key, "input"))
         cfg->input = v;
-    else if (!strcmp(key, "transport"))
-        cfg->udp = strcmp(value, "tcp") != 0;
+    else if (!strcmp(key, "transport")) {
+        if (!strcmp(value, "usb"))
+            cfg->transport = TRANSPORT_USB;
+        else if (!strcmp(value, "tcp"))
+            cfg->transport = TRANSPORT_TCP;
+        else
+            cfg->transport = TRANSPORT_UDP;
+        cfg->udp = (cfg->transport == TRANSPORT_UDP);
+    }
     else if (!strcmp(key, "early_kb"))
         cfg->early_kb = !strcmp(value, "auto") ? -1 : v;
     else if (!strcmp(key, "rxwait"))
@@ -98,6 +105,7 @@ int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen)
     cfg->overlay = 1;
     cfg->rcvbuf_kb = 64;
     cfg->input = 1;
+    cfg->transport = TRANSPORT_UDP;
     cfg->udp = 1; /* medido no PSP-3000: UDP sem travadas, TCP com várias */
     cfg->early_kb = -1; /* auto; valores fixos de 6-14 KB (JPEG, PSP-3000) pediam cedo demais */
     cfg->h264 = 1;
@@ -138,7 +146,7 @@ int config_load(ps_config_t *cfg, const char *dir, char *err, int errlen)
     fclose(f);
     ps_lang_pt = cfg->lang_pt;
 
-    if (!cfg->host[0]) {
+    if (!cfg->host[0] && cfg->transport != TRANSPORT_USB) {
         snprintf(err, errlen, T("%s has no PC IP", "%s nao tem o IP do PC"), path);
         return -1;
     }
@@ -180,7 +188,7 @@ int config_save(const ps_config_t *cfg, const char *dir, char *err, int errlen)
     else
         fprintf(f, "%s:%d\n", cfg->host, cfg->port);
     fprintf(f, "wifi_profile=%d\n", cfg->wifi_profile);
-    fprintf(f, "transport=%s\n", cfg->udp ? "udp" : "tcp");
+    fprintf(f, "transport=%s\n", cfg->transport == TRANSPORT_USB ? "usb" : cfg->transport == TRANSPORT_UDP ? "udp" : "tcp");
     fprintf(f, "h264=%s\n", onoff(cfg->h264));
     fprintf(f, "h264p=%s\n", onoff(cfg->h264p));
     fprintf(f, "decoder=%s\n", cfg->decoder == DEC_HW ? "hw" : cfg->decoder == DEC_SW ? "sw" : "auto");

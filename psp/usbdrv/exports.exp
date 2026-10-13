@@ -1,0 +1,32 @@
+# Exports for pspstream_usb.prx
+PSP_BEGIN_EXPORTS
+
+PSP_EXPORT_START(syslib, 0, 0x8000)
+PSP_EXPORT_FUNC(module_start)
+PSP_EXPORT_FUNC(module_stop)
+PSP_EXPORT_VAR(module_info)
+PSP_EXPORT_END
+
+PSP_EXPORT_START(PSPStreamUSB_driver, 0, 0x0001)
+PSP_EXPORT_FUNC(pspusb_start)
+PSP_EXPORT_FUNC(pspusb_stop)
+PSP_EXPORT_FUNC(pspusb_is_attached)
+PSP_EXPORT_FUNC(pspusb_wait_attached)
+PSP_EXPORT_FUNC(pspusb_write)
+PSP_EXPORT_FUNC(pspusb_read)
+PSP_EXPORT_FUNC(pspusb_abort)
+PSP_EXPORT_FUNC(pspusb_clear_buffers)
+PSP_EXPORT_END
+
+PSP_EXPORT_START(PSPStreamUSB, 0, 0x4001)
+PSP_EXPORT_FUNC(pspusb_start)
+PSP_EXPORT_FUNC(pspusb_stop)
+PSP_EXPORT_FUNC(pspusb_is_attached)
+PSP_EXPORT_FUNC(pspusb_wait_attached)
+PSP_EXPORT_FUNC(pspusb_write)
+PSP_EXPORT_FUNC(pspusb_read)
+PSP_EXPORT_FUNC(pspusb_abort)
+PSP_EXPORT_FUNC(pspusb_clear_buffers)
+PSP_EXPORT_END
+
+PSP_END_EXPORTS

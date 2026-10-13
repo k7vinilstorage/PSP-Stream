@@ -23,6 +23,9 @@ UINPUT_RULE = """echo uinput | sudo tee /etc/modules-load.d/uinput.conf
 printf '%s\\n' 'KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"' \\
   | sudo tee /etc/udev/rules.d/60-pspstream-uinput.rules
 sudo modprobe uinput && sudo udevadm control --reload-rules && sudo udevadm trigger"""
+USB_RULE = """printf '%s\\n' 'SUBSYSTEM=="usb", ATTR{idVendor}=="054c", ATTR{idProduct}=="02d2", MODE="0666", TAG+="uaccess"' \\
+  | sudo tee /etc/udev/rules.d/61-pspstream-usb.rules
+sudo udevadm control --reload-rules && sudo udevadm trigger"""
 PORTAL_BACKENDS = (  # XDG_CURRENT_DESKTOP -> backend do portal
     ("gnome", "xdg-desktop-portal-gnome"), ("unity", "xdg-desktop-portal-gnome"),
     ("kde", "xdg-desktop-portal-kde"), ("hyprland", "xdg-desktop-portal-hyprland"),
@@ -234,6 +237,21 @@ def check_network(items, port):
         items.append(Item("Network", "ok", tr("no known firewall active (ufw, firewalld)")))
 
 
+def check_usb(items):
+    import usb_link
+    has_pyusb = usb_link.is_available()
+    rule_path = Path("/etc/udev/rules.d/61-pspstream-usb.rules")
+    has_rule = rule_path.exists()
+    if has_pyusb and has_rule:
+        items.append(Item("Network", "ok", tr("USB transport: pyusb and udev rule installed (054C:02D2)")))
+    elif has_pyusb:
+        items.append(Item("Network", "info", tr("USB transport: pyusb installed (udev rule optional for non-root USB)"),
+                          fix=USB_RULE))
+    else:
+        items.append(Item("Network", "info", tr("USB transport: pyusb not installed (pip install pyusb or package)"),
+                          ("pyusb",), fix=USB_RULE))
+
+
 def run_checks(port: int = 5123) -> list:
     items = []
     check_system(items)
@@ -244,6 +262,7 @@ def run_checks(port: int = 5123) -> list:
     check_input(items)
     check_audio(items)
     check_network(items, port)
+    check_usb(items)
     return items
 
 
@@ -302,9 +321,12 @@ def plan(items, fam: str) -> list:
                 f"make -C {ROOT / 'tools' / 'kms'}", f"make -C {ROOT / 'tools' / 'kms'} cap"]
         steps.append((tr("KMS capture (optional: 60 fps on GNOME 50+; gives the helper permission to read the "
                          "screen)"), cmds))
-    fw = next((i for i in items if i.group == "Network" and i.fix), None)
+    fw = next((i for i in items if i.group == "Network" and i.fix and i.fix != USB_RULE), None)
     if fw is not None:
         steps.append((tr("Open the port in the firewall"), [fw.fix]))
+    usb_item = next((i for i in items if i.fix == USB_RULE), None)
+    if usb_item is not None and not Path("/etc/udev/rules.d/61-pspstream-usb.rules").exists():
+        steps.append((tr("Install udev rule for USB streaming (054C:02D2)"), usb_item.fix.replace("\\\n", "").splitlines()))
     return steps
 
 

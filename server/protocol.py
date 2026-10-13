@@ -147,7 +147,7 @@ def unpack_chunk(data: bytes):
 def pack_audio(seq: int, pos: int, rate: int, channels: int, samples: int, block: bytes,
                codec: int = CODEC_IMA_ADPCM) -> bytes:
     return AUDIO_HDR_STRUCT.pack(MAGIC_AUDIO, seq & 0xFFFFFFFF, pos & 0xFFFFFFFF, rate, channels, codec,
-                                 samples, 0) + block
+                                 samples, len(block) & 0xFFFF) + block
 
 
 def unpack_audio(data: bytes):

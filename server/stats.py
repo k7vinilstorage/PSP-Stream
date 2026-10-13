@@ -89,6 +89,7 @@ class Window:
         return {
             "fps": self.frames / elapsed,
             "source_fps": source_fps,
+            "transport": getattr(self.transport, "name", "wifi"),
             "keepalive": self.keepalive,
             "resent_pct": resent_pct,
             "kb_per_frame": self.bytes / self.frames / 1024 if self.frames else 0.0,
@@ -154,6 +155,8 @@ def format_summary(s: dict) -> str:
         causes = ", ".join(f"{n} {tr(HITCH_TEXT.get(c, c))}" for c, n in s["hitch_causes"].items())
         line += tr(" | hitches {n} (worst {ms:.0f} ms: {causes})").format(n=s["hitches"], ms=s["hitch_max_ms"],
                                                                         causes=causes)
+    if s.get("transport") == "usb":
+        line = line.replace("Wi-Fi", "USB")
     return line
 
 

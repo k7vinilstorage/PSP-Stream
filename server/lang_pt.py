@@ -1202,4 +1202,36 @@ PT = {
         'o controle não ganhou um número no XInput',
     'XInput did not see the button press (controller {index})':
         'o XInput não viu o botão apertado (controle {index})',
+    # USB streaming
+    'stream over USB when PSP is connected via USB cable (default %(default)s)':
+        'transmitir via USB quando o PSP estiver conectado por cabo USB (padrão %(default)s)',
+    'do not monitor or stream over USB':
+        'não monitorar nem transmitir via USB',
+    'USB streaming disabled: pyusb not installed (run: pip install pyusb)':
+        'streaming via USB desativado: pyusb não instalado (rode: pip install pyusb)',
+    'USB reading ended: %s':
+        'leitura USB encerrada: %s',
+    'pyusb is not installed. Run: pip install pyusb':
+        'o pyusb não está instalado. Rode: pip install pyusb',
+    'USB monitor active: plug your PSP with USB cable (transport=usb)':
+        'monitor USB ativo: conecte seu PSP com cabo USB (transport=usb)',
+    'PSP USB endpoints not found (expected 0x81 and 0x02)':
+        'endpoints USB do PSP não encontrados (esperados 0x81 e 0x02)',
+    'USB streaming disabled (pyusb not installed). Run: pip install pyusb':
+        'streaming via USB desativado (pyusb não instalado). Rode: pip install pyusb',
+    'PSP USB device found, but permission denied. Install packaging/files/61-pspstream-usb.rules into /etc/udev/rules.d/':
+        'dispositivo PSP USB encontrado, mas sem permissão de acesso. Instale packaging/files/61-pspstream-usb.rules em /etc/udev/rules.d/',
+    'PSP connected via USB (054C:02D2)! Starting USB session...':
+        'PSP conectado via USB (054C:02D2)! Iniciando sessão USB...',
+    'PSP USB permission denied. Check udev rules.':
+        'permissão negada no PSP USB. Verifique as regras do udev.',
+    'USB transport: pyusb and udev rule installed (054C:02D2)':
+        'transporte USB: pyusb e regra do udev instalados (054C:02D2)',
+    'USB transport: pyusb installed (udev rule optional for non-root USB)':
+        'transporte USB: pyusb instalado (regra do udev recomendada para acesso sem root)',
+    'USB transport: pyusb not installed (pip install pyusb or package)':
+        'transporte USB: pyusb não instalado (pip install pyusb ou pacote)',
+    'Install udev rule for USB streaming (054C:02D2)':
+        'Instalar regra do udev para streaming via USB (054C:02D2)',
 }
+

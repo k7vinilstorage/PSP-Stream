@@ -25,8 +25,9 @@ from protocol import REQ_FRAME, REQ_HELLO, Request
 import settings
 from stats import SessionStats, Window, format_summary, now_ms
 import transports
+import usb_link
 import wolf_api
-from transports import DSCP, TcpTransport, UdpTransport, parse_datagram, set_dscp
+from transports import DSCP, TcpTransport, UdpTransport, UsbTransport, parse_datagram, set_dscp
 import i18n
 from i18n import N_, tr
 
@@ -642,6 +643,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-input", action="store_true", help=tr("do not inject the PSP controls on the PC"))
     p.add_argument("--input-dry-run", action="store_true",
                    help=tr("only show in the log the keys/movements that would be injected"))
+    p.add_argument("--usb", dest="usb", action="store_true", default=True,
+                   help=tr("stream over USB when PSP is connected via USB cable (default %(default)s)"))
+    p.add_argument("--no-usb", dest="usb", action="store_false",
+                   help=tr("do not monitor or stream over USB"))
     p.add_argument("--keymap", default=str(here / "keymap.json"), help=tr("mapping file (default keymap.json)"))
     p.add_argument("--profile", default=os.environ.get("PSPSTREAM_PROFILE") or "game",
                    help=tr("keymap profile: game, desktop, arrows (keyboard and mouse); xbox, xbox-camera, "
@@ -826,6 +831,13 @@ def main(argv=None) -> int:
     udp.bind((args.bind, args.port))
     server = Server(source, args, injector, audio)
     threading.Thread(target=server.serve_udp, args=(udp,), name="udp", daemon=True).start()
+    usb_mon = None
+    if getattr(args, "usb", True):
+        if usb_link.is_available():
+            usb_mon = usb_link.UsbMonitor(server)
+            usb_mon.start()
+        else:
+            log.info(tr("USB streaming disabled: pyusb not installed (run: pip install pyusb)"))
     log.info(tr("PSPStream %s: waiting for the PSP at %s:%d, TCP and UDP (on the PSP: 'Find the PC on the network', "
                 "or this IP in server.txt)"), VERSION, local_ip(), args.port)
 
@@ -878,6 +890,8 @@ def main(argv=None) -> int:
     except KeyboardInterrupt:
         log.info(tr("shutting down"))
     finally:
+        if usb_mon is not None:
+            usb_mon.stop()
         if web is not None:
             web.close()
         server.close()

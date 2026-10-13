@@ -57,6 +57,7 @@
 #include "config.h"
 #include "net.h"
 #include "protocol.h"
+#include "usb.h"
 
 #include <malloc.h>
 #include <netinet/in.h>
@@ -118,6 +119,7 @@ static unsigned dropped, lost, nacks, completed, retries, req_dups;
 static SceUID lock_sema = -1, ready_sema = -1, want_sema = -1, send_sema = -1;
 static SceUID net_thid = -1;
 static int g_sock = -1;
+static int g_transport;
 static int g_udp;
 static struct sockaddr_in g_dest;
 static volatile int g_prefetch; /* 1, 0 ou PREFETCH_AUTO */
@@ -230,7 +232,8 @@ static int send_req(uint16_t flags, const ps_nack_t *nack)
     r->early_b = clamp_u16(early_cur);
     r->signal = wifi_signal;
     r->wflags = wifi_flags | (rx_poll ? PS_WIFI_RX_POLL : 0) | (cap_h264 ? PS_CAP_H264 : 0) |
-                (cap_h264 && cap_h264p ? PS_CAP_H264P : 0) | (cap_audio && g_udp ? PS_CAP_AUDIO : 0);
+                (cap_h264 && cap_h264p ? PS_CAP_H264P : 0) |
+                (cap_audio && (g_udp || g_transport == TRANSPORT_USB) ? PS_CAP_AUDIO : 0);
     r->lost = lost > 0xFFFF ? 0xFFFF : lost;
     r->hdr_have = hdr_have;
     r->ping_select = clamp_u16(ping_sel_us / 100);
@@ -244,7 +247,8 @@ static int send_req(uint16_t flags, const ps_nack_t *nack)
     }
 
     sceKernelWaitSema(send_sema, 1, NULL);
-    int rc = g_udp ? net_sendto(g_sock, &g_dest, &msg, len) : net_send_all(g_sock, &msg, len);
+    int rc = (g_transport == TRANSPORT_USB) ? usb_send_all(&msg, len) :
+             g_udp ? net_sendto(g_sock, &g_dest, &msg, len) : net_send_all(g_sock, &msg, len);
     sceKernelSignalSema(send_sema, 1);
     return rc;
 }
@@ -265,16 +269,16 @@ static int send_upto_req(uint32_t upto)
 static int send_new_req(uint32_t *want)
 {
     *want = 0;
-    if (!pmode || !g_udp) /* o TCP lê só o pedido, sem NACK */
+    if (!pmode || (!g_udp && g_transport != TRANSPORT_USB)) /* o TCP lê só o pedido, sem NACK */
         return send_req(PS_REQ_FRAME, NULL);
     *want = (seen_max > req_max ? seen_max : req_max) + 1;
     return send_upto_req(*want);
 }
 
-/* Frames P com prefetch=auto no UDP: a janela (P_WINDOW). */
+/* Frames P com prefetch=auto no UDP ou USB: a janela (P_WINDOW). */
 static int window_mode(void)
 {
-    return pmode && g_udp && g_prefetch == PREFETCH_AUTO;
+    return pmode && (g_udp || g_transport == TRANSPORT_USB) && g_prefetch == PREFETCH_AUTO;
 }
 
 static int prefetch_on(void)
@@ -438,6 +442,104 @@ static int net_thread_tcp(void)
         t_req = now_us();
         if (send_req(PS_REQ_FRAME, NULL) < 0)
             return -1;
+    }
+    return 0;
+}
+
+static int stream_thread_usb(void)
+{
+    unsigned t_req = now_us();
+    int deferred = 0;
+    static uint8_t audio_buf[2048];
+
+    usb_clear();
+    if (send_req(PS_REQ_HELLO | PS_REQ_FRAME, NULL) < 0)
+        return -1;
+
+    while (*g_running && !stopping) {
+        uint32_t magic = 0;
+        if (usb_recv_all(&magic, sizeof(magic)) < 0)
+            return -1;
+
+        if (magic == PS_MAGIC_AUDIO) {
+            ps_audio_hdr_t *ah = (ps_audio_hdr_t *)audio_buf;
+            ah->magic = magic;
+            if (usb_recv_all(&audio_buf[4], sizeof(ps_audio_hdr_t) - 4) < 0)
+                return -1;
+            int block_len = ah->reserved;
+            if (block_len <= 0 || block_len > (int)(sizeof(audio_buf) - sizeof(ps_audio_hdr_t))) {
+                block_len = 4 * ah->channels + (ah->samples - 1) / 2 * ah->channels;
+            }
+            if (block_len > 0 && block_len <= (int)(sizeof(audio_buf) - sizeof(ps_audio_hdr_t))) {
+                if (usb_recv_all(audio_buf + sizeof(ps_audio_hdr_t), block_len) < 0)
+                    return -1;
+                audio_packet(audio_buf, sizeof(ps_audio_hdr_t) + block_len);
+            }
+            continue;
+        }
+
+        if (magic == PS_MAGIC_PONG) {
+            uint32_t token = 0;
+            if (usb_recv_all(&token, sizeof(token)) < 0)
+                return -1;
+            unsigned rtt = (now_us() - token) & ~LIVE_PING_TAG;
+            live_avg_us = live_avg_us ? (live_avg_us * 3 + rtt) / 4 : rtt;
+            continue;
+        }
+
+        if (magic != PS_MAGIC_FRAME) {
+            return -2;
+        }
+
+        int idx = claim_slot();
+        if (idx < 0)
+            return -3;
+
+        ps_frame_hdr_t hdr;
+        hdr.magic = magic;
+        if (usb_recv_all(((uint8_t *)&hdr) + 4, sizeof(hdr) - 4) < 0) {
+            free_slot(idx);
+            return -1;
+        }
+
+        unsigned t_first = now_us();
+        if (deferred)
+            t_req = dec_ask_t;
+
+        if (hdr.size == 0 || hdr.size > PS_MAX_JPEG) {
+            free_slot(idx);
+            return -2;
+        }
+
+        ps_frame_t *f = &slots[idx];
+        if (usb_recv_all(f->data, hdr.size) < 0) {
+            free_slot(idx);
+            return -1;
+        }
+
+        f->size = hdr.size;
+        f->frame_no = hdr.frame_no;
+        if (hdr.frame_no > seen_max)
+            seen_max = hdr.frame_no;
+        f->send_ts = hdr.send_ts;
+        f->t_req = t_req;
+        f->t_first = t_first;
+        f->t_recv = now_us();
+        f->idle_t = PS_IDLE_NONE;
+        pmode = is_aud(f->data, f->size);
+        publish_slot(idx);
+
+        if (!prefetch_on())
+            wait_want();
+        else if (window_mode()) {
+            /* quem pede é a thread de decode, ao pegar cada frame (P_WINDOW) */
+        } else if ((deferred = defer_ask()))
+            continue;
+        else {
+            t_req = now_us();
+            if (send_req(PS_REQ_FRAME, NULL) < 0)
+                return -1;
+        }
     }
     return 0;
 }
@@ -1126,18 +1228,26 @@ static int net_thread_udp(void)
 
 static int net_thread(SceSize args, void *argp)
 {
-    int r = g_udp ? net_thread_udp() : net_thread_tcp();
+    int r;
+    if (g_transport == TRANSPORT_USB)
+        r = stream_thread_usb();
+    else if (g_udp)
+        r = net_thread_udp();
+    else
+        r = net_thread_tcp();
+
     if (r < 0 && !net_error)
         net_error = r;
     sceKernelSignalSema(ready_sema, 1); /* acorda a thread de decode */
     return 0;
 }
 
-int stream_start(int sock, int udp, const struct sockaddr_in *dest, int prefetch, int early_bytes, int rxwait,
+int stream_start(int sock, int transport, const struct sockaddr_in *dest, int prefetch, int early_bytes, int rxwait,
                  volatile int *running)
 {
     g_sock = sock;
-    g_udp = udp;
+    g_transport = transport;
+    g_udp = (transport == TRANSPORT_UDP);
     g_early = early_bytes;
     early_cur = early_bytes > 0 ? early_bytes : 0;
     g_rxwait = rxwait;
@@ -1145,7 +1255,7 @@ int stream_start(int sock, int udp, const struct sockaddr_in *dest, int prefetch
     ping_sel_us = ping_poll_us = 0;
     live_avg_us = live_min_us = 0;
     live_n = 0;
-    if (udp)
+    if (g_udp && dest)
         g_dest = *dest;
     g_prefetch = prefetch;
     g_running = running;
@@ -1367,7 +1477,9 @@ unsigned stream_completed(void)
 void stream_stop(void)
 {
     stopping = 1;
-    if (!g_udp)
+    if (g_transport == TRANSPORT_USB)
+        usb_abort();
+    else if (!g_udp)
         net_abort(g_sock); /* desbloqueia o recv(); no UDP o select() volta sozinho em <= 200 ms */
     if (net_thid >= 0) {
         SceUInt timeout = 2 * 1000 * 1000;
