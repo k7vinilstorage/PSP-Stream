@@ -300,7 +300,7 @@ static void draw_overlay(const ui_t *ui, const stats_t *s)
         display_text(0, 1, 0xFF00FF00, T("dec %4.1f ms (%s) net %4.1f ms %s drop %u", "dec %4.1f ms (%s) rede %4.1f ms %s drop %u"),
                      s->dec_ms, decoder_name(),
                      s->net_ms, ui->transport == TRANSPORT_USB ? "usb" : ui->udp ? "udp" : "tcp", stream_dropped());
-        if (ui->udp || ui->transport == TRANSPORT_USB) {
+        if (ui->udp) { /* a ida e volta só é medida no UDP */
             unsigned sel, poll, live, live_min;
             int polling;
             stream_ping(&sel, &poll, &polling, &live, &live_min);
@@ -442,8 +442,8 @@ static int run_stream(int sock, const struct sockaddr_in *dest, const ps_config_
                 waiting_msg = 1;
             } else if (ui->transport == TRANSPORT_USB && !stream_completed() && now_us() - t_start > 3 * 1000 * 1000 && !waiting_msg) {
                 status(T("No answer from the PC over USB. Server running?", "Sem resposta do PC via USB. Servidor rodando?"));
-                status(T("USB cable connected? Run on PC: pspstream --usb",
-                         "Cabo USB conectado? Rode no PC: pspstream --usb"));
+                status(T("USB cable plugged in? On the PC: pspstream --check",
+                         "Cabo USB conectado? No PC: pspstream --check"));
                 status(T("SELECT + START + R: settings screen",
                          "SELECT + START + R: tela de configuracao"));
                 waiting_msg = 1;
@@ -704,6 +704,14 @@ int main(int argc, char *argv[])
             } else if (g_running) {
                 display_console(T("USB Stream ended (%d). Reconnecting...", "Transmissao USB encerrada (%d). Reconectando..."), e);
             }
+            continue;
+        }
+        /* Fora do USB, o driver sai do cabo: ativo, o PC continuaria vendo o PSP lá. */
+        usb_term();
+        if (!cfg.host[0]) { /* transport=usb sem IP, e o atalho L trocou para o Wi-Fi */
+            menu_msg = T("Set the PC IP (or 'Find the PC on the network')",
+                         "Defina o IP do PC (ou 'Procurar o PC na rede')");
+            need_menu = 1;
             continue;
         }
         if ((r = wifi_ensure(cfg.wifi_profile)) < 0) {

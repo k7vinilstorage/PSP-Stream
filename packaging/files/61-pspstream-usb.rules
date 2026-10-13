@@ -1,3 +1,3 @@
-# PSPStream: streaming via USB sem Wi-Fi (PSP Stream driver 054C:02D2).
-# "uaccess" dá permissão ao usuário ativo do console, sem precisar de sudo.
-SUBSYSTEM=="usb", ATTR{idVendor}=="054c", ATTR{idProduct}=="02d2", MODE="0666", TAG+="uaccess"
+# PSPStream: o PSP pelo cabo USB (transport=usb; o driver do EBOOT aparece como 054C:02D2).
+# "uaccess" dá acesso só a quem está na sessão ativa (sentado no PC), como a regra do uinput.
+SUBSYSTEM=="usb", ATTR{idVendor}=="054c", ATTR{idProduct}=="02d2", TAG+="uaccess"

@@ -485,7 +485,8 @@ int menu_run(ps_config_t *cfg, const char *dir, int countdown_s, const char *sta
             continue;
         }
         int oct[4];
-        if (!cfg->host[0] || (parse_ip(cfg->host, oct) == 0 && !oct[0])) {
+        /* pelo USB não precisa do IP */
+        if (cfg->transport != TRANSPORT_USB && (!cfg->host[0] || (parse_ip(cfg->host, oct) == 0 && !oct[0]))) {
             snprintf(status, sizeof(status), "%s", T("PC IP missing: edit it or use Find the PC on the network",
                                                    "Falta o IP do PC: edite ou use Procurar o PC na rede"));
             status_color = C_BAD;

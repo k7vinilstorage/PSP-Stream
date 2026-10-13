@@ -1,4 +1,4 @@
-"""Transportes do PSPStream: TCP e UDP, ambos no modelo pull.
+"""Transportes do PSPStream: TCP, UDP e USB, todos no modelo pull.
 
 O transporte só entrega pedidos à sessão (`session.on_request`) e envia frames
 (`send_frame`). Pull, estatísticas, controles e benchmark ficam na sessão.
@@ -98,10 +98,44 @@ class TcpTransport:
         self.conn.close()
 
 
+def usb_read(ep_in, timeout_ms: int = 500):
+    """Lê o que o PSP mandou pelo USB; None se nada chegou no tempo (o pyusb sinaliza com uma exceção)."""
+    try:
+        return ep_in.read(4096, timeout=timeout_ms)
+    except Exception as exc:
+        if getattr(exc, "errno", None) in (110, 60, -7) or "timed out" in str(exc).lower() \
+                or "timeout" in str(exc).lower():
+            return None
+        raise
+
+
+def parse_usb_requests(buf: bytearray) -> list:
+    """Tira de buf os pedidos completos do PSP: 52 bytes, mais o NACK (36) com REQ_NACK. Pelo USB o
+    NACK só vem com REQ_FRAME (frames P: aceita até o frame dele), já que nada se perde no cabo."""
+    reqs = []
+    size = protocol.REQ_STRUCT.size
+    while len(buf) >= size:
+        req = protocol.Request.unpack(bytes(buf[:size]))
+        used = size
+        if req.flags & protocol.REQ_NACK:
+            if len(buf) < size + protocol.NACK_STRUCT.size:
+                break
+            nack = protocol.unpack_nack(bytes(buf[size:size + protocol.NACK_STRUCT.size]))
+            used += protocol.NACK_STRUCT.size
+            if req.flags & protocol.REQ_FRAME:
+                req.want_frame = nack[0]
+        del buf[:used]
+        reqs.append(req)
+    return reqs
+
+
 class UsbTransport:
+    """O PSP pelo cabo USB (usb_link.UsbMonitor abre o aparelho): uma corrente de bytes nos dois
+    sentidos, como no TCP, com o som junto (pacotes MAGIC_AUDIO entre os frames)."""
     name = "usb"
 
-    def __init__(self, dev, ep_in, ep_out):
+    def __init__(self, dev, ep_in, ep_out, pending=(), buf=None):
+        """pending: pedidos já lidos pelo UsbMonitor (o HELLO que abriu a sessão); buf: o que sobrou."""
         self.dev = dev
         self.ep_in = ep_in
         self.ep_out = ep_out
@@ -111,62 +145,71 @@ class UsbTransport:
         self.session = None
         self.write_lock = threading.Lock()
         self.alive = True
+        self.started = False
+        self.pending = list(pending)
+        self.buf = buf if buf is not None else bytearray()
+        self.last_seen = time.monotonic()
+        self.maxp = getattr(ep_out, "wMaxPacketSize", 512) or 512
 
     def start(self, session) -> None:
         self.session = session
+        self.started = True
         threading.Thread(target=self._reader, args=(session,), name="usb-reader", daemon=True).start()
 
-    def _reader(self, session) -> None:
-        buf = bytearray()
-        try:
-            while self.alive and session.alive:
-                while True:
-                    if len(buf) < protocol.REQ_STRUCT.size:
-                        break
-                    req = protocol.Request.unpack(bytes(buf[:protocol.REQ_STRUCT.size]))
-                    consumed = protocol.REQ_STRUCT.size
-                    if req.flags & protocol.REQ_NACK:
-                        if len(buf) < consumed + protocol.NACK_STRUCT.size:
-                            break
-                        nack = protocol.unpack_nack(bytes(buf[consumed:consumed + protocol.NACK_STRUCT.size]))
-                        consumed += protocol.NACK_STRUCT.size
-                        if req.flags & protocol.REQ_FRAME and nack is not None:
-                            req.want_frame = nack[0]
-                    buf = buf[consumed:]
-                    if req.flags & protocol.REQ_PING:
-                        self.send_pong(req.echo_ts)
-                    session.on_request(req)
+    def _deliver(self, session, req) -> None:
+        if req.flags & protocol.REQ_PING:  # como no UDP: responde já, sem passar pela sessão
+            self.send_pong(req.echo_ts)
+            return
+        session.on_request(req)
 
-                try:
-                    data = self.ep_in.read(4096, timeout=500)
-                except Exception as exc:
-                    err_str = str(exc).lower()
-                    if getattr(exc, "errno", None) in (110, 60, -7) or "timeout" in err_str or "timed out" in err_str:
-                        continue
-                    raise
+    def _reader(self, session) -> None:
+        try:
+            for req in self.pending:
+                self._deliver(session, req)
+            self.pending = []
+            while self.alive and session.alive:
+                for req in parse_usb_requests(self.buf):
+                    self._deliver(session, req)
+                data = usb_read(self.ep_in)
                 if data:
-                    buf.extend(data)
+                    self.buf.extend(data)
+                    self.last_seen = time.monotonic()
+                elif time.monotonic() - self.last_seen > IDLE_TIMEOUT_S:
+                    # o PSP parou (tela de configuração, trocou de transporte) sem sair do USB
+                    log.info(tr("the PSP did not answer for %.0f s"), IDLE_TIMEOUT_S)
+                    break
         except Exception as exc:
-            if session.alive:
+            if session.alive and self.alive:
                 log.info(tr("USB reading ended: %s"), exc)
         finally:
             self.alive = False
             session.close()
+            self._dispose()
+
+    def _dispose(self) -> None:
+        with self.write_lock:  # não no meio de uma escrita
+            dev, self.dev = self.dev, None
+        if dev is not None:
+            import usb_link
+            usb_link.dispose(dev)
 
     def _write_all(self, data: bytes, timeout_ms: int = 3000) -> None:
         with self.write_lock:
-            if not self.alive:
+            if not self.alive or self.dev is None:
                 return
             view = memoryview(data)
             while len(view) > 0 and self.alive:
                 n = self.ep_out.write(view, timeout=timeout_ms)
                 if n <= 0:
-                    raise OSError("USB write returned <= 0")
+                    raise OSError(tr("USB write returned {n}").format(n=n))
                 view = view[n:]
+            if data and len(data) % self.maxp == 0 and self.alive:
+                # Sem um pacote curto no fim, o PSP não sabe que a transferência acabou: o pedido de
+                # leitura dele (32 KB) ficaria esperando os próximos bytes, e o frame, preso.
+                self.ep_out.write(b"", timeout=timeout_ms)
 
     def send_frame(self, frame_no: int, jpeg: bytes, send_ms: int, redundant: bool = False) -> int:
-        hdr = protocol.pack_frame_header(frame_no, len(jpeg), send_ms)
-        self._write_all(hdr + jpeg)
+        self._write_all(protocol.pack_frame_header(frame_no, len(jpeg), send_ms) + jpeg)
         self.sent_chunks += 1
         return len(jpeg)
 
@@ -175,20 +218,17 @@ class UsbTransport:
         return len(datagram)
 
     def send_pong(self, token: int) -> None:
-        pong = protocol.pack_pong(token)
         try:
-            self._write_all(pong, timeout_ms=500)
+            self._write_all(protocol.pack_pong(token), timeout_ms=500)
         except Exception:
             pass
 
     def close(self) -> None:
         self.alive = False
-        if self.dev is not None:
-            try:
-                import usb.util
-                usb.util.dispose_resources(self.dev)
-            except Exception:
-                pass
+        if not self.started:
+            self._dispose()
+        # Senão a thread de leitura solta o aparelho ao sair (em até 0,5 s): fechar o aparelho com uma
+        # leitura em andamento em outra thread é usar memória já liberada no libusb.
 
 
 class UdpTransport:

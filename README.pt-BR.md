@@ -50,7 +50,8 @@ continuam valendo.
 - **Som do PC** no PSP: IMA ADPCM a 44,1 kHz estéreo, ~46 KB/s.
 - **Controles**: um controle de Xbox 360 virtual, como no Sunshine, ou
   teclado e mouse.
-- **UDP com recuperação de perdas** e qualidade adaptativa à vazão do Wi-Fi.
+- **UDP com recuperação de perdas** e qualidade adaptativa à vazão do Wi-Fi,
+  ou o **cabo USB** (firmware customizado, servidor no Linux).
 - **Tela de configuração no PSP**, com "Procurar o PC na rede".
 - **Interface web** no PC para mudar as configurações com o PSP conectado.
 - **Wolf (Games on Whales)**: o lobby do Wolf no PSP, com som e controles,
@@ -156,7 +157,7 @@ Segure **SELECT + START** e aperte:
 | triângulo | liga/desliga o overlay (FPS, KB por frame, tempos) |
 | cima | liga/desliga o som |
 | R | abre a tela de configuração |
-| L | troca o transporte TCP/UDP |
+| L | troca o transporte UDP/USB/TCP |
 
 Os outros atalhos e o overlay estão em
 [Using the PSP](https://github.com/k7vinilstorage/PSP-Stream/wiki/Using-the-PSP).

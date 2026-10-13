@@ -34,7 +34,7 @@ DIST_DIR = dist/PSP/GAME/PSPStream
 
 all: usbdrv/pspstream_usb.prx
 
-usbdrv/pspstream_usb.prx:
+usbdrv/pspstream_usb.prx: $(wildcard usbdrv/*.c usbdrv/*.h usbdrv/*.exp) usbdrv/Makefile
 	$(MAKE) -C usbdrv
 
 .PHONY: dist clean-usbdrv

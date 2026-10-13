@@ -22,6 +22,7 @@ be changed in the [Web Interface](Web-Interface), with the PSP connected.
 | `--input-dry-run` | only show in the log what would be injected |
 | `--dscp ef` | marks the packets for the Wi-Fi voice queue (WMM); `0` turns it off |
 | `--p-redundancy-ms 6` | P frames: the last chunk of each frame goes again after this, and losing it does not stall the stream; `0` turns it off |
+| `--no-usb` | does not open the PSP on the USB cable (`transport=usb`; Linux, needs pyusb) |
 | `--no-audio` | no audio (the PSP also turns it off with `audio=0` or SELECT + START + up) |
 | `--audio-device NAME` | audio source: `monitor` (default, what goes out to the speakers), `test` (440 Hz tone) or a source from `pactl list short sources` |
 | `--audio-rate 44100`, `--audio-mono` | rate (22050, 32000, 44100 or 48000 Hz; 44100 is the PSP's) and mono: ~46 KB/s at 44.1 kHz stereo, ~34 at 32 kHz, half in mono |

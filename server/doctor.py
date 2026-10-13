@@ -23,9 +23,12 @@ UINPUT_RULE = """echo uinput | sudo tee /etc/modules-load.d/uinput.conf
 printf '%s\\n' 'KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"' \\
   | sudo tee /etc/udev/rules.d/60-pspstream-uinput.rules
 sudo modprobe uinput && sudo udevadm control --reload-rules && sudo udevadm trigger"""
-USB_RULE = """printf '%s\\n' 'SUBSYSTEM=="usb", ATTR{idVendor}=="054c", ATTR{idProduct}=="02d2", MODE="0666", TAG+="uaccess"' \\
+USB_RULE = """printf '%s\\n' 'SUBSYSTEM=="usb", ATTR{idVendor}=="054c", ATTR{idProduct}=="02d2", TAG+="uaccess"' \\
   | sudo tee /etc/udev/rules.d/61-pspstream-usb.rules
 sudo udevadm control --reload-rules && sudo udevadm trigger"""
+# a regra do PSP no USB: a do pacote (.deb/.rpm) ou a que o --setup instala
+USB_RULE_PATHS = tuple(Path(d) / "61-pspstream-usb.rules"
+                       for d in ("/etc/udev/rules.d", "/usr/lib/udev/rules.d", "/lib/udev/rules.d"))
 PORTAL_BACKENDS = (  # XDG_CURRENT_DESKTOP -> backend do portal
     ("gnome", "xdg-desktop-portal-gnome"), ("unity", "xdg-desktop-portal-gnome"),
     ("kde", "xdg-desktop-portal-kde"), ("hyprland", "xdg-desktop-portal-hyprland"),
@@ -238,18 +241,16 @@ def check_network(items, port):
 
 
 def check_usb(items):
+    """O transporte USB (transport=usb no PSP): opcional, então só "info"."""
     import usb_link
-    has_pyusb = usb_link.is_available()
-    rule_path = Path("/etc/udev/rules.d/61-pspstream-usb.rules")
-    has_rule = rule_path.exists()
-    if has_pyusb and has_rule:
-        items.append(Item("Network", "ok", tr("USB transport: pyusb and udev rule installed (054C:02D2)")))
-    elif has_pyusb:
-        items.append(Item("Network", "info", tr("USB transport: pyusb installed (udev rule optional for non-root USB)"),
-                          fix=USB_RULE))
+    if not usb_link.is_available():
+        items.append(Item("Network", "info", tr("USB transport: off, pyusb is not installed (optional: streaming "
+                                                "over the USB cable, transport=usb on the PSP)"), ("pyusb",)))
+    elif any(path.exists() for path in USB_RULE_PATHS):
+        items.append(Item("Network", "ok", tr("USB transport: ready (pyusb and the udev rule for the PSP, 054C:02D2)")))
     else:
-        items.append(Item("Network", "info", tr("USB transport: pyusb not installed (pip install pyusb or package)"),
-                          ("pyusb",), fix=USB_RULE))
+        items.append(Item("Network", "info", tr("USB transport: the udev rule for the PSP is missing (without it, only "
+                                                "root opens the PSP over USB)"), fix=USB_RULE))
 
 
 def run_checks(port: int = 5123) -> list:
@@ -324,9 +325,11 @@ def plan(items, fam: str) -> list:
     fw = next((i for i in items if i.group == "Network" and i.fix and i.fix != USB_RULE), None)
     if fw is not None:
         steps.append((tr("Open the port in the firewall"), [fw.fix]))
+    # só com o pyusb instalado (quem quer o USB): o item sem a regra traz o comando
     usb_item = next((i for i in items if i.fix == USB_RULE), None)
-    if usb_item is not None and not Path("/etc/udev/rules.d/61-pspstream-usb.rules").exists():
-        steps.append((tr("Install udev rule for USB streaming (054C:02D2)"), usb_item.fix.replace("\\\n", "").splitlines()))
+    if usb_item is not None:
+        steps.append((tr("Let the PSP be opened over USB without root (udev rule)"),
+                      usb_item.fix.replace("\\\n", "").splitlines()))
     return steps
 
 

@@ -462,19 +462,28 @@ static int stream_thread_usb(void)
             return -1;
 
         if (magic == PS_MAGIC_AUDIO) {
+            const int room = (int)(sizeof(audio_buf) - sizeof(ps_audio_hdr_t));
             ps_audio_hdr_t *ah = (ps_audio_hdr_t *)audio_buf;
             ah->magic = magic;
             if (usb_recv_all(&audio_buf[4], sizeof(ps_audio_hdr_t) - 4) < 0)
                 return -1;
-            int block_len = ah->reserved;
-            if (block_len <= 0 || block_len > (int)(sizeof(audio_buf) - sizeof(ps_audio_hdr_t))) {
+            int block_len = ah->block_len;
+            if (block_len == 0) /* sem o tamanho: o de um bloco IMA do WAV */
                 block_len = 4 * ah->channels + (ah->samples - 1) / 2 * ah->channels;
+            if (block_len <= 0)
+                return -2;
+            if (block_len > room) { /* não cabe: lê e descarta, para não perder o passo da corrente */
+                while (block_len > 0) {
+                    int n = block_len > room ? room : block_len;
+                    if (usb_recv_all(audio_buf + sizeof(ps_audio_hdr_t), n) < 0)
+                        return -1;
+                    block_len -= n;
+                }
+                continue;
             }
-            if (block_len > 0 && block_len <= (int)(sizeof(audio_buf) - sizeof(ps_audio_hdr_t))) {
-                if (usb_recv_all(audio_buf + sizeof(ps_audio_hdr_t), block_len) < 0)
-                    return -1;
-                audio_packet(audio_buf, sizeof(ps_audio_hdr_t) + block_len);
-            }
+            if (usb_recv_all(audio_buf + sizeof(ps_audio_hdr_t), block_len) < 0)
+                return -1;
+            audio_packet(audio_buf, sizeof(ps_audio_hdr_t) + block_len);
             continue;
         }
 
@@ -1476,6 +1485,7 @@ unsigned stream_completed(void)
 
 void stream_stop(void)
 {
+    int failed = net_error; /* antes do usb_abort, que faz a leitura da thread de rede falhar */
     stopping = 1;
     if (g_transport == TRANSPORT_USB)
         usb_abort();
@@ -1491,6 +1501,10 @@ void stream_stop(void)
     /* Depois da thread de rede parar, para nenhum pedido sair depois do BYE. */
     if (g_udp && send_sema >= 0)
         send_req(PS_REQ_BYE, NULL); /* o servidor solta as teclas e encerra já */
+    else if (g_transport == TRANSPORT_USB && send_sema >= 0 && !failed) {
+        usb_clear(); /* o usb_abort acima recusa escritas */
+        send_req(PS_REQ_BYE, NULL);
+    }
     SceUID *semas[] = {&lock_sema, &ready_sema, &want_sema, &send_sema};
     for (unsigned i = 0; i < sizeof(semas) / sizeof(semas[0]); i++) {
         if (*semas[i] >= 0)

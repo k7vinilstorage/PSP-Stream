@@ -5,9 +5,10 @@
  *   EP 1 (0x81) Bulk IN:  PSP -> PC (requests, controls, 52 bytes)
  *   EP 2 (0x02) Bulk OUT: PC -> PSP (video frames, audio packets)
  *
- * Implements a thread-context bulk receive pipeline feeding a 128 KB kernel ring buffer.
+ * Implements a thread-context bulk receive pipeline feeding a 256 KB kernel ring buffer.
  * Callbacks in interrupt context only signal event flags to ensure zero kernel panics.
  */
+#include <pspkerror.h>
 #include <pspkernel.h>
 #include <pspsdk.h>
 #include <pspusb.h>
@@ -319,15 +320,32 @@ static int usb_rx_thread(SceSize size, void *argp)
             continue;
         }
 
-        /* Wait for completion, abort, or detach */
+        /* Wait for completion, abort, or detach. A timeout alone does NOT cancel the request: the
+         * PC may be in the middle of sending a frame (keepalive frames come every ~1 s), and
+         * the bytes already received by a cancelled request would be lost, desyncing the stream.
+         * g_aborted/g_connected are checked too, since another waiter may consume the ABORT bit. */
         u32 result = 0;
-        SceUInt wait_time = 1000 * 1000; /* 1 second timeout */
-        r = sceKernelWaitEventFlag(g_transevent,
-                                   USB_TRANSEVENT_BULKOUT_DONE | USB_TRANSEVENT_ABORT | USB_TRANSEVENT_DETACH,
-                                   PSP_EVENT_WAITOR | PSP_EVENT_WAITCLEAR,
-                                   &result, &wait_time);
-
-        if (r < 0 || (result & (USB_TRANSEVENT_ABORT | USB_TRANSEVENT_DETACH))) {
+        int cancel = 0;
+        for (;;) {
+            SceUInt wait_time = 100 * 1000; /* 100 ms */
+            result = 0;
+            r = sceKernelWaitEventFlag(g_transevent,
+                                       USB_TRANSEVENT_BULKOUT_DONE | USB_TRANSEVENT_ABORT | USB_TRANSEVENT_DETACH,
+                                       PSP_EVENT_WAITOR | PSP_EVENT_WAITCLEAR,
+                                       &result, &wait_time);
+            if (r >= 0 && (result & USB_TRANSEVENT_BULKOUT_DONE))
+                break;
+            if ((r >= 0 && (result & (USB_TRANSEVENT_ABORT | USB_TRANSEVENT_DETACH))) ||
+                !g_driver_started || !g_connected || g_aborted) {
+                cancel = 1;
+                break;
+            }
+            if (r < 0 && r != (int)SCE_KERNEL_ERROR_WAIT_TIMEOUT) {
+                cancel = 1;
+                break;
+            }
+        }
+        if (cancel) {
             sceUsbbdReqCancelAll(&endp[2]);
             continue;
         }
@@ -502,6 +520,15 @@ int module_stop(SceSize args, void *argp)
  * Public API (Exported to user-mode)
  */
 
+/* A user-mode caller (k1 = 0x80000000 inside the syscall) may only pass user memory: with k1 set
+ * to 0 below, a kernel address would let any user-mode code read or write kernel memory through
+ * pspusb_write/pspusb_read. Kernel callers (k1 = 0) pass any address. */
+static int user_buf_ok(u32 k1, const void *buf, int len)
+{
+    u32 addr = (u32)buf;
+    return len >= 0 && (int)((addr | (addr + (u32)len) | (u32)len) & k1) >= 0;
+}
+
 int pspusb_start(void)
 {
     int k1 = pspSdkSetK1(0);
@@ -579,7 +606,7 @@ void pspusb_clear_buffers(void)
     sceUsbbdClearFIFO(&endp[1]);
     sceUsbbdClearFIFO(&endp[2]);
     if (g_transevent >= 0) {
-        sceKernelClearEventFlag(g_transevent, ~0);
+        sceKernelClearEventFlag(g_transevent, 0); /* clears with AND: 0 clears every bit */
         sceKernelSetEventFlag(g_transevent, USB_TRANSEVENT_SPACE_AVAIL);
     }
     pspSdkSetK1(k1);
@@ -593,6 +620,10 @@ int pspusb_write(const void *data, int len, unsigned int timeout_us)
         return 0;
 
     int k1 = pspSdkSetK1(0);
+    if (!user_buf_ok(k1, data, len)) {
+        pspSdkSetK1(k1);
+        return -1;
+    }
     if (g_sendsema >= 0 && sceKernelWaitSema(g_sendsema, 1, NULL) < 0) {
         pspSdkSetK1(k1);
         return -1;
@@ -661,6 +692,10 @@ int pspusb_read(void *data, int len, unsigned int timeout_us)
     int remaining = len;
     unsigned int t0 = sceKernelGetSystemTimeLow();
     int k1 = pspSdkSetK1(0);
+    if (!user_buf_ok(k1, data, len)) {
+        pspSdkSetK1(k1);
+        return -1;
+    }
 
     if (g_recvsema >= 0 && sceKernelWaitSema(g_recvsema, 1, NULL) < 0) {
         pspSdkSetK1(k1);

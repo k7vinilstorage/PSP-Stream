@@ -34,7 +34,8 @@ The full documentation is in the **[wiki](https://github.com/k7vinilstorage/PSP-
 - **PC audio** on the PSP: IMA ADPCM at 44.1 kHz stereo, ~46 KB/s.
 - **Controls**: a virtual Xbox 360 controller, as in Sunshine, or keyboard
   and mouse.
-- **UDP with loss recovery** and quality adapted to the Wi-Fi throughput.
+- **UDP with loss recovery** and quality adapted to the Wi-Fi throughput,
+  or the **USB cable** (custom firmware, Linux server).
 - **Settings screen on the PSP**, with "Find the PC on the network".
 - **Web interface** on the PC to change the settings with the PSP connected.
 - **Wolf (Games on Whales)**: the Wolf lobby on the PSP, with audio and
@@ -150,7 +151,7 @@ Hold **SELECT + START** and press:
 | triangle | overlay on/off (FPS, KB per frame, timings) |
 | up | audio on/off |
 | R | opens the settings screen |
-| L | switches the transport TCP/UDP |
+| L | switches the transport UDP/USB/TCP |
 
 The other shortcuts and the overlay are in
 [Using the PSP](https://github.com/k7vinilstorage/PSP-Stream/wiki/Using-the-PSP).

@@ -65,7 +65,7 @@ typedef struct __attribute__((packed)) {
 #define PS_WIFI_RX_POLL 0x02    /* esperando pacotes por consulta, não select() */
 #define PS_CAP_H264 0x04        /* decodifica H.264 (todo frame IDR) pelo hardware */
 #define PS_CAP_H264P 0x08       /* ... e frames P: pacote AUD + frame + 2 cópias (server/h264.py) */
-#define PS_CAP_AUDIO 0x10       /* UDP: toca o som (pacotes PS_MAGIC_AUDIO); sem este bit, o PC não manda */
+#define PS_CAP_AUDIO 0x10       /* UDP e USB: toca o som (pacotes PS_MAGIC_AUDIO); sem este bit, o PC não manda */
 
 #define PS_IDLE_NONE (-0x8000) /* idle_t: não medido (TCP) */
 
@@ -102,7 +102,7 @@ typedef struct __attribute__((packed)) {
     uint32_t token; /* echo_ts do ping */
 } ps_pong_t;
 
-/* PC -> PSP, UDP (20 bytes), seguido de um bloco IMA ADPCM do WAV (server/audio.py).
+/* PC -> PSP, UDP ou USB (20 bytes), seguido de um bloco IMA ADPCM do WAV (server/audio.py).
  * O PC manda um a cada ~20 ms enquanto o PSP pede som (PS_CAP_AUDIO). */
 typedef struct __attribute__((packed)) {
     uint32_t magic;    /* PS_MAGIC_AUDIO */
@@ -112,7 +112,8 @@ typedef struct __attribute__((packed)) {
     uint8_t channels;  /* 1 ou 2 */
     uint8_t codec;     /* PS_AUDIO_IMA */
     uint16_t samples;  /* amostras por canal no bloco */
-    uint16_t reserved;
+    uint16_t block_len; /* bytes do bloco: no USB, onde o pacote acaba (no UDP é o datagrama;
+                           servidores antes da 1.12 mandam 0) */
 } ps_audio_hdr_t;
 
 #define PS_AUDIO_IMA 1

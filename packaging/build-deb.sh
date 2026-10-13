@@ -33,14 +33,15 @@ Installed-Size: $(du -sk "$stage" | cut -f1)
 Depends: python3 (>= 3.10), python3-gi, gir1.2-gstreamer-1.0, gir1.2-gst-plugins-base-1.0,
  gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-pipewire,
  gstreamer1.0-gl, python3-evdev, libc6 (>= 2.34), libdrm2
-Recommends: libopenh264-7 | libopenh264-6 | libopenh264-8, pulseaudio-utils, xdg-desktop-portal
+Recommends: libopenh264-7 | libopenh264-6 | libopenh264-8, pulseaudio-utils, xdg-desktop-portal, python3-usb
 Suggests: libcap2-bin
 Section: video
 Priority: optional
 Homepage: https://github.com/k7vinilstorage/PSP-Stream
 Description: PC screen and audio on the PSP (PSPStream server)
  Streams the PC screen and audio to a PSP running the PSPStream EBOOT over
- Wi-Fi (H.264 with P frames, decoded by the PSP hardware, and IMA ADPCM),
+ Wi-Fi or the USB cable (H.264 with P frames, decoded by the PSP hardware, and
+ IMA ADPCM),
  and sends the PSP buttons back as keyboard and mouse or as a virtual Xbox
  controller.
  .

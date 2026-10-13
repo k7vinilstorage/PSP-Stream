@@ -4,6 +4,21 @@ The EBOOT and server versions move together. The protocol has its own
 version (`PSC5` = v5) and only changes when the message format changes; an
 EBOOT with another protocol version is refused with a warning in the log.
 
+## 1.12
+
+- **USB transport.** `transport=usb` in `server.txt` (or on the settings
+  screen; SELECT + START + L now cycles UDP -> USB -> TCP) streams over the
+  USB cable, without Wi-Fi: no 802.11b limit, no router and no firewall,
+  with audio too. The EBOOT loads `pspstream_usb.prx`, a kernel driver that
+  comes in the zip (it needs a custom firmware with kubridge: ARK-4, PRO or
+  ME), and the PSP shows up on the PC as `054C:02D2`. The Linux server opens
+  it with pyusb (recommended by the `.deb` and `.rpm`; `--no-usb` turns it
+  off); the packages bring a udev rule so it works without root, and
+  `--check`/`--setup` cover both. Not on Windows, a PS Vita or PPSSPP.
+- The audio packet header now carries the block length (the field was
+  reserved and 0), so the PSP knows where a packet ends on the cable. Older
+  EBOOTs ignore it over UDP.
+
 ## 1.11
 
 - **Windows: virtual Xbox 360 controller.** The `xbox`, `xbox-camera` and

@@ -8,7 +8,9 @@
   controller needs the ViGEmBus driver. Wolf, KMS capture and the portal are
   Linux-only.
 - **No microphone**: audio only goes from the PC to the PSP.
-- **Audio only goes over UDP** (the default).
+- **Audio only goes over UDP** (the default) **and USB**.
+- **USB needs a custom firmware** (kubridge, to load the driver) and the
+  server on Linux (pyusb); not on Windows, a PS Vita or PPSSPP.
 - **Fixed 480x272 for H.264**; smaller resolutions (JPEG only) show up
   centered, without scaling.
 - **KMS capture does not show the mouse cursor.**

@@ -1,5 +1,6 @@
 TCP **or** UDP, default port **5123** (the server serves both at the same
-time; the PSP picks with `transport=` in `server.txt`). All integers are
+time; the PSP picks with `transport=` in `server.txt`), or the **USB cable**
+([below](#usb-v112)), with the same messages. All integers are
 **little-endian** (the PSP and x86 PCs are LE, so there is no byte-order
 conversion). Definitions in `psp/src/protocol.h` and `server/protocol.py`,
 which must stay in sync.
@@ -50,7 +51,7 @@ PSP                                   PC
 | 28 | u16 | first_t | 0.1 ms: request -> first chunk/byte of the frame (round trip + server reaction) |
 | 30 | u16 | burst_t | 0.1 ms: first -> last chunk (gives the real link throughput) |
 | 32 | u8 | signal | PSP Wi-Fi signal, % |
-| 33 | u8 | wflags | `0x1` = "WLAN Power Save" on in the XMB; `0x2` = waiting for packets by polling, not `select()`; `0x4` = decodes H.264; `0x8` = accepts P frames (v0.9); `0x10` = plays audio (v1.1, UDP only; below) |
+| 33 | u8 | wflags | `0x1` = "WLAN Power Save" on in the XMB; `0x2` = waiting for packets by polling, not `select()`; `0x4` = decodes H.264; `0x8` = accepts P frames (v0.9); `0x10` = plays audio (v1.1 over UDP, v1.12 over USB; below) |
 | 34 | u16 | lost | UDP: frames abandoned incomplete since the start of the stream |
 | 36 | u32 | hdr_have | UDP: id of the JPEG header kept on the PSP (0 = none) |
 | 40 | u16 | ping_select | 0.1 ms: pure round trip measured at the start, waiting with `select()` |
@@ -277,11 +278,11 @@ PSP's IP:port.
 sample). While something is held, the state is restated every ~100 ms, over
 TCP and UDP.
 
-## Audio (UDP, v1.1)
+## Audio (UDP v1.1, USB v1.12)
 
 Audio does not follow the pull model: while the PSP's latest request has
 `wflags & 0x10`, the server **pushes** a packet every ~20 ms to the UDP
-session address. Without the bit (`audio=0` in `server.txt`, or turned off
+session address (over USB, between the frames). Without the bit (`audio=0` in `server.txt`, or turned off
 with SELECT + START + up), no audio packet goes out, and an old EBOOT never
 gets audio.
 
@@ -294,7 +295,7 @@ gets audio.
 | 14 | u8 | channels | 1 or 2 |
 | 15 | u8 | codec | `1` = IMA ADPCM, WAV block (GStreamer's `adpcmenc`, dvi layout) |
 | 16 | u16 | samples | samples per channel in the block (881 at 44.1 kHz: 1 + 8 x 110) |
-| 18 | u16 | reserved | 0 |
+| 18 | u16 | block_len | bytes of the block (v1.12; over USB it says where the packet ends, over UDP the EBOOT uses the datagram size; older servers send 0) |
 | 20 | | block | per channel, 4 bytes (1st sample int16, step index, 0); then groups of 4 bytes (8 samples) alternating the channels, low nibble first |
 
 Each block decodes on its own. The PSP decodes into a ring and plays
@@ -306,6 +307,29 @@ packet (up to 5 in a row) becomes silence of the same length; a bigger gap,
 or `seq` going back (server restarted), restarts the ring. Audio above the
 target + 40 ms is dropped down to the target, so the delay does not grow
 (bursts after a delay, or the PC clock slightly faster than the PSP's).
+
+## USB (v1.12)
+
+With `transport=usb`, the EBOOT loads `pspstream_usb.prx` (a kernel module,
+through the CFW's kubridge) and the PSP shows up on the PC as a USB device
+`054C:02D2` with one vendor-specific interface and two bulk endpoints: `0x81`
+IN (PSP -> PC: the same 52-byte requests, with the 36-byte NACK after a
+`REQ_NACK`, used only for "up to frame F" with P frames) and `0x02` OUT
+(PC -> PSP: frames with the 16-byte header, as over TCP, and audio packets).
+Both directions are byte streams: the PSP reads the magic (`PSF1`, `PSA1`
+or `PSO1`) and then the rest of that message. Nothing is lost on the cable,
+so there are no chunks, NACK resends or pings.
+
+- The server (`server/usb_link.py`, Linux, pyusb) opens the device when it
+  shows up, but, as over UDP, only a `HELLO` (or any request with no session
+  active) opens the session: the PSP's driver stays on the cable after
+  switching to Wi-Fi only until the EBOOT turns it off, and late requests of
+  a finished USB stream must not drop a Wi-Fi session.
+- A write whose size is a multiple of the endpoint's packet size (512 bytes)
+  ends with a zero-length packet: the PSP's 32 KB read only completes on a
+  short packet, and without it the frame would wait for the next bytes.
+- The PSP sends `BYE` when the stream stops (settings screen, transport
+  switch); with no request for 10 s, the server ends the session too.
 
 ## Connection
 
