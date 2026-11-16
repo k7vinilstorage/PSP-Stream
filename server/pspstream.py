@@ -34,6 +34,7 @@ from i18n import N_, tr
 log = logging.getLogger("pspstream")
 
 WINDOWS = sys.platform == "win32"
+MACOS = sys.platform == "darwin"
 
 # Sem frame novo por este tempo, reenvia o último para a conexão não morrer
 # (no Wayland o compositor só manda frames quando a tela muda).
@@ -522,8 +523,8 @@ def parse_lang(text: str) -> str:
 
 
 def linux_only(text: str) -> str:
-    """Ajuda de uma opção que só faz sentido no Linux: no Windows, some do --help."""
-    return argparse.SUPPRESS if WINDOWS else text
+    """Ajuda de uma opção que só faz sentido no Linux: no Windows e no macOS, some do --help."""
+    return argparse.SUPPRESS if (WINDOWS or MACOS) else text
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -556,8 +557,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--bind", default="0.0.0.0", help=tr("local address (default %(default)s)"))
     if WINDOWS:
         p.add_argument("--source", choices=["screen", "test", "gst", "static"], default="screen",
-                       help=tr("screen = the monitor through Desktop Duplication (default); test = animated "
-                               "pattern; gst = your own GStreamer elements (--gst-src); static = an image"))
+                       help=tr("screen = the monitor through Desktop Duplication (default); test = animated pattern; "
+                               "gst = your own GStreamer elements (--gst-src); static = an image"))
+    elif MACOS:
+        p.add_argument("--source", choices=["screen", "avf", "test", "gst", "static"], default="screen",
+                       help=tr("screen = the monitor through ScreenCaptureKit with AVFoundation fallback (default); "
+                               "avf = the monitor through GStreamer AVFoundation; test = animated pattern; "
+                               "gst = your own GStreamer elements (--gst-src); static = an image"))
     else:
         p.add_argument("--source", choices=["portal", "kms", "test", "x11", "gst", "static", "wolf"], default="portal",
                        help=tr("portal = screen on Wayland (default); kms = straight from the graphics card, without "
@@ -566,7 +572,7 @@ def build_parser() -> argparse.ArgumentParser:
                                "pipeline (--gst-src); static = an image; wolf = what runs in Wolf (Games on Whales), "
                                "through its API (PSPStream wiki, Wolf page)"))
     p.add_argument("--monitor", type=int, default=0, metavar="N",
-                   help=tr("screen: which monitor (0 = the main one)") if WINDOWS else argparse.SUPPRESS)
+                   help=tr("screen: which monitor (0 = the main one)") if (WINDOWS or MACOS) else argparse.SUPPRESS)
     p.add_argument("--kms-monitor", type=int, default=0, metavar="N",
                    help=linux_only(tr("kms: which connected monitor (0 = the first; the log shows how many there are)")))
     p.add_argument("--kms-card", metavar="/dev/dri/cardN",
@@ -630,13 +636,16 @@ def build_parser() -> argparse.ArgumentParser:
                                       "to 480x272 in OpenGL; only the small image comes to the CPU. If it does not "
                                       "work, it falls back to the normal mode on its own")))
     p.add_argument("--no-cursor", action="store_true",
-                   help=tr("screen: do not draw the cursor") if WINDOWS else tr("portal: do not draw the cursor"))
+                   help=tr("screen: do not draw the cursor") if (WINDOWS or MACOS) else tr("portal: do not draw the cursor"))
     p.add_argument("--forget", action="store_true",
                    help=linux_only(tr("portal: do not reuse/save the screen choice")))
     p.add_argument("--no-audio", action="store_true", help=tr("do not capture or send the audio"))
     p.add_argument("--audio-device", default="monitor", metavar=tr("NAME"),
                    help=tr("audio: monitor (default) = what plays on the speakers (WASAPI loopback); test = 440 Hz "
                            "tone") if WINDOWS else
+                   tr("audio: monitor (default) = speaker loopback via ScreenCaptureKit (or default input); "
+                      "osx = GStreamer default input (BlackHole 2ch / microphone); test = 440 Hz tone; "
+                      "or a CoreAudio device index") if MACOS else
                    tr("audio: PipeWire/PulseAudio source (pactl list short sources); monitor (default) = what "
                       "plays on the speakers (with --source wolf, the target's audio in Wolf); wolf = Wolf's "
                       "audio; test = 440 Hz tone"))
@@ -679,11 +688,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--check", action="store_true",
                    help=tr("check this machine (GStreamer, openh264, firewall) without starting the server")
                    if WINDOWS else
+                   tr("check this machine (GStreamer, openh264, permissions, firewall) without starting the server")
+                   if MACOS else
                    tr("check this machine's dependencies and show the command to install what is missing (apt, "
                       "dnf, pacman or zypper), without starting the server"))
     p.add_argument("--setup", action="store_true",
                    help=tr("prepare this machine: firewall rule and the openh264 library, asking before each step")
                    if WINDOWS else
+                   tr("prepare this machine: GStreamer, openh264 and macOS permissions, asking before each step")
+                   if MACOS else
                    tr("prepare this machine: installs what --check points out (packages, uinput, firewall, KMS "
                       "capture), showing each command and asking before"))
     p.add_argument("-v", "--verbose", action="store_true")
@@ -760,6 +773,8 @@ def main(argv=None) -> int:
     if args.check or args.setup:
         if WINDOWS:
             import win_doctor as doctor
+        elif MACOS:
+            import mac_doctor as doctor
         else:
             import doctor
         return (doctor.setup if args.setup else doctor.main)(args.port, VERSION)
@@ -839,8 +854,12 @@ def main(argv=None) -> int:
             usb_mon = usb_link.UsbMonitor(server)
             usb_mon.start()
         else:
-            import distro
-            log.info(tr("USB transport off: pyusb is not installed (%s)"), distro.hint("pyusb"))
+            if MACOS:
+                hint = "brew install libusb && pip3 install pyusb"
+            else:
+                import distro
+                hint = distro.hint("pyusb")
+            log.info(tr("USB transport off: pyusb is not installed (%s)"), hint)
     log.info(tr("PSPStream %s: waiting for the PSP at %s:%d, TCP and UDP (on the PSP: 'Find the PC on the network', "
                 "or this IP in server.txt)"), VERSION, local_ip(), args.port)
 

@@ -24,6 +24,7 @@ __pycache__/
 /tmp/
 *.log
 tools/kms/pspstream-kms
+tools/sck/pspstream-sck
 
 # pacotes (packaging/)
 dist/

@@ -14,19 +14,23 @@ mesmo com tune=zerolatency (medido), e numa tela parada isso esconderia a
 última mudança.
 """
 import logging
+import sys
 import threading
 import time
 
 from i18n import tr
 
-try:  # sem o PyGObject (servidor de Windows): só a libopenh264 direto
-    import gi
-    gi.require_version("Gst", "1.0")
-    gi.require_version("GstVideo", "1.0")
-    from gi.repository import Gst, GstVideo
-    Gst.init(None)
-except (ImportError, ValueError):
+if sys.platform in ("win32", "darwin"):  # Windows e macOS usam a libopenh264 direto (openh264.py)
     Gst = GstVideo = None
+else:
+    try:
+        import gi
+        gi.require_version("Gst", "1.0")
+        gi.require_version("GstVideo", "1.0")
+        from gi.repository import Gst, GstVideo
+        Gst.init(None)
+    except (ImportError, ValueError):
+        Gst = GstVideo = None
 
 ENCODER = "openh264enc"
 

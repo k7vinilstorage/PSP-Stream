@@ -22,17 +22,32 @@ de 20 ms: com 10 ms seriam 100 pacotes/s, e no 802.11b cada pacote custa
 import logging
 import shutil
 import subprocess
+import sys
 import threading
 
 from i18n import tr
 
-try:  # sem o PyGObject (servidor de Windows): os blocos e a referência do IMA servem; a captura é a do gst_pipe
-    import gi
-    gi.require_version("Gst", "1.0")
-    from gi.repository import Gst
-    Gst.init(None)
-except (ImportError, ValueError):
-    Gst = None
+Gst = None
+_gst_loaded = False
+
+
+def _load_gst():
+    global Gst, _gst_loaded
+    if not _gst_loaded:
+        _gst_loaded = True
+        try:
+            import gi
+            gi.require_version("Gst", "1.0")
+            from gi.repository import Gst as _Gst
+            _Gst.init(None)
+            Gst = _Gst
+        except (ImportError, ValueError):
+            Gst = None
+    return Gst
+
+
+if sys.platform not in ("win32", "darwin"):
+    _load_gst()
 
 log = logging.getLogger("pspstream.audio")
 
@@ -111,6 +126,7 @@ def default_monitor() -> str:
 
 def available(pulse: bool = True) -> bool:
     """pulse=False: o som do Wolf, que chega por TCP (sem o pulsesrc)."""
+    _load_gst()
     if Gst is None:
         return False
     need = ("pulsesrc", "adpcmenc", "audioresample") if pulse else ("adpcmenc", "audioresample", "tcpserversrc")
@@ -144,6 +160,9 @@ class AudioCapture:
         self.align = block_align(self.samples, channels)
         if self.align > MAX_BLOCK:
             raise ValueError(tr("a {size}-byte block does not fit in a packet: lower --audio-ms").format(size=self.align))
+        _load_gst()
+        if Gst is None:
+            raise RuntimeError(tr("GStreamer's pulsesrc and adpcmenc are missing ({hint})").format(hint="PyGObject"))
         self.pipeline = Gst.parse_launch(build_pipeline(self.device, rate, channels, self.align, src))
         self.pipeline.get_by_name("sink").connect("new-sample", self._on_sample)
         self.listeners = []

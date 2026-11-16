@@ -263,8 +263,8 @@ class WindowsOptionsTest(unittest.TestCase):
         self.assertEqual(got["kind"], "virtual Xbox 360 controller")
 
     def test_linux_keeps_its_options(self):
-        if WINDOWS:
-            self.skipTest("no Windows")
+        if WINDOWS or sys.platform == "darwin":
+            self.skipTest("só no Linux")
         import settings
         self.assertEqual(settings.BY_KEY["source"].choices[0], "portal")
         self.assertNotIn("monitor", settings.BY_KEY)

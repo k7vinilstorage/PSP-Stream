@@ -10,12 +10,26 @@ preinst/%pre a guarda e o postinst/%post a devolve).
 """
 import os
 import struct
+import sys
 from pathlib import Path
 from i18n import tr
 
 ROOT = Path(__file__).resolve().parent.parent
 REPO_KMS_HELPER = ROOT / "tools" / "kms" / "pspstream-kms"
+REPO_SCK_HELPER = ROOT / "tools" / "sck" / "pspstream-sck"
 SYSTEM_KMS_HELPERS = (Path("/usr/libexec/pspstream/pspstream-kms"), Path("/usr/lib/pspstream/pspstream-kms"))
+
+
+def sck_helper() -> Path:
+    """Auxiliar ScreenCaptureKit (macOS 13+): PSPSTREAM_SCK_HELPER, ao lado do executável ou no repositório."""
+    env = os.environ.get("PSPSTREAM_SCK_HELPER")
+    if env:
+        return Path(env)
+    if getattr(sys, "frozen", False):
+        bundled = Path(sys.executable).resolve().parent / "pspstream-sck"
+        if bundled.exists():
+            return bundled
+    return REPO_SCK_HELPER
 
 
 def installed() -> bool:
@@ -43,6 +57,8 @@ VFS_CAP_FLAGS_EFFECTIVE = 0x1
 def has_cap_sys_admin(path) -> bool:
     """O arquivo tem cap_sys_admin+ep? Lê o atributo security.capability (o
     mesmo do getcap), sem depender do getcap instalado."""
+    if not hasattr(os, "getxattr"):
+        return False
     try:
         data = os.getxattr(path, "security.capability")
     except OSError:

@@ -1227,5 +1227,68 @@ PT = {
         'transporte USB: falta a regra do udev para o PSP (sem ela, só o root abre o PSP pelo USB)',
     'Let the PSP be opened over USB without root (udev rule)':
         'Deixar abrir o PSP pelo USB sem root (regra do udev)',
+    # macOS (mac_input.py, mac_doctor.py, gst_pipe.py, capture.py, settings.py, pspstream.py)
+    'macOS does not support a virtual Xbox controller without a signed DriverKit extension; use a keyboard and mouse profile (--profile game, desktop or arrows)':
+        'o macOS não aceita controle de Xbox virtual sem uma extensão DriverKit assinada; use um perfil de teclado e mouse (--profile game, desktop ou arrows)',
+    'on macOS, the audio source is monitor (ScreenCaptureKit speaker loopback or default input), osx (GStreamer default input / BlackHole), a device ID number or test':
+        'no macOS, a fonte do som é monitor (retorno das caixas pelo ScreenCaptureKit ou entrada padrão), osx (entrada padrão do GStreamer / BlackHole), o número de id de um dispositivo ou test',
+    'GStreamer not found: install it with Homebrew (brew install gstreamer) or from gstreamer.freedesktop.org':
+        'GStreamer não encontrado: instale pelo Homebrew (brew install gstreamer) ou de gstreamer.freedesktop.org',
+    'screen capture (AVFoundation)':
+        'captura da tela (AVFoundation)',
+    'audio (CoreAudio, IMA ADPCM)':
+        'som (CoreAudio, IMA ADPCM)',
+    'Request macOS Screen Recording permission (opens System Settings if needed)':
+        'Pedir a permissão de Gravação de Tela do macOS (abre Ajustes do Sistema se precisar)',
+    'Request macOS Accessibility permission for keyboard and mouse controls':
+        'Pedir a permissão de Acessibilidade do macOS para controles de teclado e mouse',
+    'Homebrew not found (optional, recommended for GStreamer, openh264 and libusb)':
+        'Homebrew não encontrado (opcional, recomendado para GStreamer, openh264 e libusb)',
+    'Screen Recording permission granted':
+        'permissão de Gravação de Tela concedida',
+    'Screen Recording permission is off: macOS shows only the wallpaper or a black screen until granted in System Settings > Privacy & Security > Screen Recording':
+        'permissão de Gravação de Tela desligada: o macOS mostra só o papel de parede ou tela preta até você liberar em Ajustes do Sistema > Privacidade e Segurança > Gravação de Tela',
+    'Quartz Event Services: keyboard and mouse (Accessibility permission granted)':
+        'Quartz Event Services: teclado e mouse (permissão de Acessibilidade concedida)',
+    'Accessibility permission is off: macOS blocks keyboard and mouse injection until granted in System Settings > Privacy & Security > Accessibility':
+        'permissão de Acessibilidade desligada: o macOS bloqueia teclado e mouse até você liberar em Ajustes do Sistema > Privacidade e Segurança > Acessibilidade',
+    'macOS firewall active: allow incoming connections for Python/PSPStream if the PSP does not find the Mac':
+        'firewall do macOS ativo: libere conexões de entrada para Python/PSPStream se o PSP não achar o Mac',
+    'macOS firewall disabled':
+        'firewall do macOS desativado',
+    'USB transport: ready (pyusb and libusb; no udev rule or root needed on macOS)':
+        'transporte USB: pronto (pyusb e libusb; sem regra do udev nem root no macOS)',
+    'USB transport: off, pyusb/libusb is not installed (optional: streaming over the USB cable, transport=usb on the PSP)':
+        'transporte USB: desligado, pyusb/libusb não está instalado (opcional: transmitir pelo cabo USB, transport=usb no PSP)',
+    'libopenh264 not found: without it the server sends JPEG (~10x more bytes per frame). Install with Homebrew (brew install openh264) or run pspstream --setup':
+        'libopenh264 não encontrada: sem ela o servidor manda JPEG (~10x mais bytes por frame). Instale pelo Homebrew (brew install openh264) ou rode pspstream --setup',
+    'Install GStreamer':
+        'Instalar o GStreamer',
+    'Install Homebrew (https://brew.sh) and run: brew install gstreamer':
+        'Instale o Homebrew (https://brew.sh) e rode: brew install gstreamer',
+    'Install openh264 (H.264 with P frames)':
+        'Instalar o openh264 (H.264 com frames P)',
+    'controls: macOS Accessibility permission is off; grant it to your terminal in System Settings > Privacy & Security > Accessibility (or run pspstream --setup)':
+        'controles: permissão de Acessibilidade do macOS desligada; libere para o seu terminal em Ajustes do Sistema > Privacidade e Segurança > Acessibilidade (ou rode pspstream --setup)',
+    'screen = the monitor through ScreenCaptureKit with AVFoundation fallback (default); avf = the monitor through GStreamer AVFoundation; test = animated pattern; gst = your own GStreamer elements (--gst-src); static = an image':
+        'screen = o monitor pelo ScreenCaptureKit com fallback no AVFoundation (padrão); avf = o monitor pelo GStreamer AVFoundation; test = padrão animado; gst = elementos do GStreamer próprios (--gst-src); static = uma imagem',
+    'audio: monitor (default) = speaker loopback via ScreenCaptureKit (or default input); osx = GStreamer default input (BlackHole 2ch / microphone); test = 440 Hz tone; or a CoreAudio device index':
+        'som: monitor (padrão) = retorno das caixas pelo ScreenCaptureKit (ou entrada padrão); osx = entrada padrão do GStreamer (BlackHole 2ch / microfone); test = tom de 440 Hz; ou o índice de um dispositivo CoreAudio',
+    'check this machine (GStreamer, openh264, permissions, firewall) without starting the server':
+        'confere esta máquina (GStreamer, openh264, permissões, firewall) sem iniciar o servidor',
+    'prepare this machine: GStreamer, openh264 and macOS permissions, asking before each step':
+        'prepara esta máquina: GStreamer, openh264 e permissões do macOS, perguntando antes de cada passo',
+    'screen: the monitor through ScreenCaptureKit (or AVFoundation fallback). avf: the monitor through GStreamer AVFoundation. test: animated pattern. static: still image.':
+        'screen: o monitor pelo ScreenCaptureKit (ou AVFoundation de reserva). avf: o monitor pelo GStreamer AVFoundation. test: padrão animado. static: imagem fixa.',
+    'monitor = speaker loopback via ScreenCaptureKit (or default input); osx = GStreamer default input (BlackHole 2ch / microphone); test = 440 Hz tone; or a CoreAudio device index.':
+        'monitor = retorno das caixas pelo ScreenCaptureKit (ou entrada padrão); osx = entrada padrão do GStreamer (BlackHole 2ch / microfone); test = tom de 440 Hz; ou o índice de um dispositivo CoreAudio.',
+    'Keyboard and mouse through Quartz Event Services (needs Accessibility permission in System Settings); use the game, desktop or arrows profile.':
+        'Teclado e mouse pelo Quartz Event Services (precisa de permissão de Acessibilidade nos Ajustes do Sistema); use o perfil game, desktop ou arrows.',
+    'ScreenCaptureKit helper ready (60 fps screen and speaker audio loopback without extra drivers)':
+        'Utilitário ScreenCaptureKit pronto (tela a 60 fps e retorno do áudio do sistema sem drivers extras)',
+    'ScreenCaptureKit helper not built (optional: native 60 fps screen and speaker audio without BlackHole)':
+        'Utilitário ScreenCaptureKit não compilado (opcional: tela a 60 fps e áudio do sistema nativos sem BlackHole)',
+    'Build the ScreenCaptureKit helper (native screen and speaker audio capture)':
+        'Compilar o utilitário ScreenCaptureKit (captura nativa de tela e áudio do sistema)',
 }
 

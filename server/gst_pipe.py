@@ -27,6 +27,7 @@ import collections
 import functools
 import logging
 import os
+import platform
 import shlex
 import shutil
 import socket
@@ -41,10 +42,12 @@ from pathlib import Path
 from framerate import CaptureMeter, RateLimiter
 from sources import FrameSource
 from i18n import tr
+import paths
 
 log = logging.getLogger("pspstream.pipe")
 
 WINDOWS = sys.platform == "win32"
+MACOS = sys.platform == "darwin"
 EXE = ".exe" if WINDOWS else ""
 FIRST_FRAME_S = 8.0      # cada pipeline candidato tem esse tempo para mandar o primeiro frame
 CONNECT_S = 20.0         # o gst-launch conecta depois de montar o pipeline (o 1º uso monta o registro)
@@ -113,6 +116,10 @@ def _from_root(root: Path, where: str):
     scanner = root / "libexec" / "gstreamer-1.0" / f"gst-plugin-scanner{EXE}"
     if scanner.is_file():
         env["GST_PLUGIN_SCANNER_1_0"] = str(scanner)
+    if MACOS and (root / "lib").is_dir():
+        for var in ("DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH"):
+            cur_dyld = env.get(var, "")
+            env[var] = f"{root / 'lib'}:{cur_dyld}" if cur_dyld else str(root / "lib")
     if WINDOWS:
         cache = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "PSPStream"
         try:
@@ -135,6 +142,10 @@ def candidate_roots():
                 yield Path(os.environ[var]), var
         for base in (os.environ.get("ProgramFiles", r"C:\Program Files"), "C:\\"):
             yield Path(base) / "gstreamer" / "1.0" / "msvc_x86_64", tr("official installer")
+    elif MACOS:
+        yield Path("/Library/Frameworks/GStreamer.framework/Versions/1.0"), tr("official installer")
+        yield Path("/opt/homebrew"), "Homebrew"
+        yield Path("/usr/local"), "Homebrew"
 
 
 @functools.lru_cache(maxsize=1)
@@ -155,6 +166,9 @@ def find_gstreamer():
 def need_gstreamer() -> GStreamer:
     gst = find_gstreamer()
     if gst is None:
+        if MACOS:
+            raise RuntimeError(tr("GStreamer not found: install it with Homebrew (brew install gstreamer) "
+                                  "or from gstreamer.freedesktop.org"))
         raise RuntimeError(tr("GStreamer not found: install the GStreamer runtime (MSVC 64-bit) from "
                               "gstreamer.freedesktop.org, or use the PSPStream build that bundles it"))
     return gst
@@ -244,25 +258,44 @@ def quick_ack(sock: socket.socket) -> None:
             pass
 
 
-class Pipe:
-    """Um gst-launch-1.0 mandando registros de tamanho fixo por TCP local."""
+def _macos_major() -> int:
+    ver = platform.mac_ver()[0]
+    if not ver:
+        return 13
+    try:
+        return int(ver.split(".")[0])
+    except ValueError:
+        return 13
 
-    def __init__(self, gst: GStreamer, elements: str, record: int):
+
+def sck_available() -> bool:
+    return MACOS and _macos_major() >= 13 and paths.sck_helper().is_file()
+
+
+class Pipe:
+    """Um processo filho (gst-launch-1.0 ou auxiliar nativo) mandando registros de tamanho fixo por TCP local."""
+
+    def __init__(self, gst: GStreamer, elements, record: int):
         self.gst = gst
         self.record = record
         self.listener = socket.create_server(("127.0.0.1", 0))
         self.port = self.listener.getsockname()[1]
-        self.desc = f"{elements} ! tcpclientsink host=127.0.0.1 port={self.port} sync=false"
+        if isinstance(elements, (list, tuple)):
+            self.cmd = [str(arg).replace("{port}", str(self.port)) for arg in elements]
+            self.desc = " ".join(self.cmd)
+            self.env = None
+        else:
+            self.desc = f"{elements} ! tcpclientsink host=127.0.0.1 port={self.port} sync=false"
+            self.cmd = [str(self.gst.launch), "-q", *shlex.split(self.desc)]
+            self.env = self.gst.env
         self.stderr = collections.deque(maxlen=STDERR_LINES)
         self.conn = None
         self.proc = None
 
     def start(self) -> None:
-        log.debug("gst-launch: %s", self.desc)
-        # Um elemento por argumento, como no terminal: o gst-launch junta e escapa cada um.
-        self.proc = subprocess.Popen([str(self.gst.launch), "-q", *shlex.split(self.desc)], stdin=subprocess.DEVNULL,
-                                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=self.gst.env,
-                                     **_child_flags())
+        log.debug("pipe: %s", self.desc)
+        self.proc = subprocess.Popen(self.cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.PIPE, env=self.env, **_child_flags())
         job = _job()
         if job is not None:
             job.add(self.proc)
@@ -279,6 +312,7 @@ class Pipe:
                     raise RuntimeError(reason)
         self.listener.close()
         self.conn.setblocking(True)
+        self.conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.conn.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, max(1 << 20, 4 * self.record))
         quick_ack(self.conn)
 
@@ -318,12 +352,18 @@ class Pipe:
                     s.close()
                 except OSError:
                     pass
-        if self.proc is not None and self.proc.poll() is None:
-            self.proc.kill()
-            try:
-                self.proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                pass
+        if self.proc is not None:
+            if self.proc.poll() is None:
+                self.proc.kill()
+                try:
+                    self.proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    pass
+            if self.proc.stderr is not None:
+                try:
+                    self.proc.stderr.close()
+                except OSError:
+                    pass
 
 
 def cpu_tail(width: int, height: int, scale: str, keep_aspect: bool) -> str:
@@ -335,9 +375,21 @@ def cpu_tail(width: int, height: int, scale: str, keep_aspect: bool) -> str:
 
 
 def screen_candidates(monitor: int, cursor: bool, fps: int, width: int, height: int, scale: str,
-                      keep_aspect: bool):
-    """Windows: a tela pelo Desktop Duplication (d3d11screencapturesrc). Primeiro a
-    redução na GPU (só 480x272 vem para a CPU), depois na CPU."""
+                      keep_aspect: bool, allow_sck: bool = True):
+    """Windows (DXGI) e macOS (ScreenCaptureKit + fallback AVFoundation). Primeiro a redução na GPU, depois na CPU."""
+    if MACOS:
+        out = []
+        if allow_sck and sck_available():
+            out.append(("ScreenCaptureKit", [
+                str(paths.sck_helper()), "video", "127.0.0.1", "{port}", str(monitor), str(width), str(height),
+                str(fps), "1" if cursor else "0", "1" if keep_aspect else "0",
+            ]))
+        if find_gstreamer() is not None or not out:
+            cur = "true" if cursor else "false"
+            src = f"avfvideosrc capture-screen=true capture-screen-cursor={cur} device-index={monitor}"
+            cpu = f"{src} ! video/x-raw,framerate={fps}/1 ! {cpu_tail(width, height, scale, keep_aspect)}"
+            out.append(("avfvideosrc", cpu))
+        return out
     src = f"d3d11screencapturesrc monitor-index={monitor} show-cursor={'true' if cursor else 'false'}"
     borders = "true" if keep_aspect else "false"
     gpu = (f"{src} ! video/x-raw(memory:D3D11Memory),framerate={fps}/1 "
@@ -367,8 +419,8 @@ class PipeSource(FrameSource):
     def __init__(self, candidates, width: int, height: int, fps: int, quality: int, codec: str = "h264p",
                  gst: GStreamer = None, label: str = ""):
         super().__init__()
-        self.gst = gst or need_gstreamer()
         self.candidates = list(candidates)
+        self.gst = gst or (need_gstreamer() if any(isinstance(e, str) for _, e in self.candidates) else None)
         self.width, self.height = width, height
         self.frame_size = width * height * 3 // 2
         self.fps = fps
@@ -502,13 +554,20 @@ class PipeSource(FrameSource):
 
 
 def audio_src(device: str) -> str:
-    """A fonte do som no gst-launch. Windows: monitor = o que sai nas caixas (WASAPI loopback)."""
+    """A fonte do som no gst-launch. Windows: monitor = WASAPI loopback; macOS: osxaudiosrc."""
     if device == "test":
         return "audiotestsrc is-live=true wave=sine freq=440 volume=0.3"
     if WINDOWS:
         if device != "monitor":
             raise RuntimeError(tr("on Windows, the audio source is monitor (what plays on the speakers) or test"))
         return "wasapi2src loopback=true low-latency=true"
+    if MACOS:
+        if device in ("monitor", "osx"):
+            return "osxaudiosrc buffer-time=40000 latency-time=10000"
+        if device.isdigit():
+            return f"osxaudiosrc device={int(device)} buffer-time=40000 latency-time=10000"
+        raise RuntimeError(tr("on macOS, the audio source is monitor (ScreenCaptureKit speaker loopback or default "
+                              "input), osx (GStreamer default input / BlackHole), a device ID number or test"))
     from audio import default_monitor
     name = default_monitor() if device == "monitor" else device
     return f'pulsesrc device="{name}" client-name=PSPStream buffer-time=40000 latency-time=10000'
@@ -521,16 +580,23 @@ class PipeAudioCapture:
     def __init__(self, device: str = "monitor", rate: int = 44100, channels: int = 2, packet_ms: float = 20,
                  gst: GStreamer = None):
         from audio import MAX_BLOCK, block_align, block_samples
-        self.gst = gst or need_gstreamer()
         self.device = device
         self.rate, self.channels = rate, channels
         self.samples = block_samples(rate, packet_ms)
         self.align = block_align(self.samples, channels)
         if self.align > MAX_BLOCK:
             raise ValueError(tr("a {size}-byte block does not fit in a packet: lower --audio-ms").format(size=self.align))
-        self.desc = (f"{audio_src(device)} ! audioconvert ! audioresample "
-                     f"! audio/x-raw,format=S16LE,layout=interleaved,rate={rate},channels={channels} "
-                     f"! adpcmenc layout=dvi blockalign={self.align}")
+        if MACOS and device in ("monitor", "sck") and sck_available():
+            self.gst = gst
+            self.desc = [
+                str(paths.sck_helper()), "audio", "127.0.0.1", "{port}",
+                str(rate), str(channels), str(self.samples),
+            ]
+        else:
+            self.gst = gst or need_gstreamer()
+            self.desc = (f"{audio_src(device)} ! audioconvert ! audioresample "
+                         f"! audio/x-raw,format=S16LE,layout=interleaved,rate={rate},channels={channels} "
+                         f"! adpcmenc layout=dvi blockalign={self.align}")
         self.listeners = []
         self.lock = threading.Lock()
         self.seq = 0
@@ -591,9 +657,11 @@ class PipeAudioCapture:
 
 
 def audio_available(gst: GStreamer = None) -> bool:
+    if MACOS and sck_available():
+        return True
     gst = gst or find_gstreamer()
     if gst is None:
         return False
     need = ["adpcmenc", "audioresample", "audioconvert", "tcpclientsink"]
-    need.append("wasapi2src" if WINDOWS else "pulsesrc")
+    need.append("wasapi2src" if WINDOWS else "osxaudiosrc" if MACOS else "pulsesrc")
     return all(gst.has(e) for e in need)

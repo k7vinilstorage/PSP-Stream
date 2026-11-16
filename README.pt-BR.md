@@ -85,8 +85,9 @@ da wiki.
 
 É preciso:
 - um PSP com firmware customizado;
-- um PC com Linux (Fedora, Ubuntu, Debian, Arch, openSUSE), ou Windows
-  10/11 (experimental, [Windows](https://github.com/k7vinilstorage/PSP-Stream/wiki/Windows));
+- um PC com Linux (Fedora, Ubuntu, Debian, Arch, openSUSE), Windows
+  10/11 (experimental, [Windows](https://github.com/k7vinilstorage/PSP-Stream/wiki/Windows))
+  ou macOS (experimental, [macOS](https://github.com/k7vinilstorage/PSP-Stream/wiki/macOS));
 - um roteador com Wi-Fi 2,4 GHz em modo misto b/g/n, porque o PSP só fala
   802.11b.
 
@@ -179,6 +180,7 @@ As páginas da wiki, em inglês:
 | [Troubleshooting](https://github.com/k7vinilstorage/PSP-Stream/wiki/Troubleshooting) | sintoma e o que fazer |
 | [Performance](https://github.com/k7vinilstorage/PSP-Stream/wiki/Performance) | FPS, latência e banda medidos no PSP-3000 |
 | [Windows](https://github.com/k7vinilstorage/PSP-Stream/wiki/Windows) | o servidor no Windows (experimental) |
+| [macOS](https://github.com/k7vinilstorage/PSP-Stream/wiki/macOS) | o servidor no macOS via Homebrew (experimental) |
 | [Development](https://github.com/k7vinilstorage/PSP-Stream/wiki/Development) | builds, releases, testes, traduções, estrutura do código |
 
 Todas as páginas, inclusive o protocolo, as medições e as limitações, estão

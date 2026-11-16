@@ -429,6 +429,7 @@ class WolfStatusTest(WolfCase):
         self.assertFalse(st["warn"])
 
 
+@unittest.skipUnless(sys.platform.startswith("linux"), "só no Linux")
 class WebSuggestionsTest(WolfCase):
     def test_lobby_names(self):
         import control
@@ -513,6 +514,7 @@ class WolfAudioTest(WolfCase):
         hub.start()
         self.assertTrue(self.wolf.wait_for(lambda: len(got) >= 3, 15))
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "só no Linux")
     def test_open_audio(self):
         import capture
         import pspstream
@@ -714,6 +716,7 @@ class WolfInputTest(WolfCase):
         self.assertTrue(self.wolf.wait_for(self.joined, 15))
         self.assertEqual(self.wolf.bodies("/lobbies/join")[0]["pin"], [4, 2, 4, 2])
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "só no Linux")
     def test_open_injector(self):
         import capture
         import pspstream
@@ -748,6 +751,7 @@ class SeveralLobbiesTest(WolfCase):
         self.assertIn(f"listen-to={LOBBY2}_video", self.video_started()[0][2])
 
 
+@unittest.skipUnless(sys.platform.startswith("linux"), "só no Linux")
 @unittest.skipIf(wolf_source is None, "sem GStreamer")
 class WolfOptionsTest(unittest.TestCase):
     def test_cli_and_build(self):

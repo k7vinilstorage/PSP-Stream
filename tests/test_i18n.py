@@ -186,7 +186,8 @@ class CommandLineTest(unittest.TestCase):
         import doctor
         import pspstream
         seen = []
-        with mock.patch.object(doctor, "main", side_effect=lambda *a: seen.append(i18n.language()) or 0):
+        with mock.patch.multiple(pspstream, create=True, WINDOWS=False, MACOS=False), \
+                mock.patch.object(doctor, "main", side_effect=lambda *a: seen.append(i18n.language()) or 0):
             self.assertEqual(pspstream.main(["--check", "--lang", "pt"]), 0)
         self.assertEqual(seen, ["pt"])
 

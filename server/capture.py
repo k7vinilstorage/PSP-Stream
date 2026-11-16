@@ -16,14 +16,14 @@ from i18n import tr
 log = logging.getLogger("pspstream.capture")
 
 WINDOWS = sys.platform == "win32"
-# Fontes que o gst-launch captura num processo à parte (gst_pipe.py): no Windows, sempre.
-PIPE_SOURCES = ("screen", "test", "gst")
+MACOS = sys.platform == "darwin"
+# Fontes que o gst-launch captura num processo à parte (gst_pipe.py): no Windows e no macOS, sempre.
+PIPE_SOURCES = ("screen", "avf", "test", "gst")
 
 
 def use_pipe() -> bool:
-    """Captura pelo gst-launch (gst_pipe) em vez do PyGObject: o servidor de Windows. No Linux,
-    PSPSTREAM_CAPTURE=pipe faz o mesmo (testes do caminho de Windows)."""
-    return WINDOWS or os.environ.get("PSPSTREAM_CAPTURE") == "pipe"
+    """Captura pelo gst-launch (gst_pipe) em vez do PyGObject: Windows, macOS ou PSPSTREAM_CAPTURE=pipe."""
+    return WINDOWS or MACOS or os.environ.get("PSPSTREAM_CAPTURE") == "pipe"
 
 
 def resolve_codec(args):
@@ -41,14 +41,15 @@ def resolve_codec(args):
                 ok = ok or openh264.available()  # a libopenh264 direto basta (h264.H264Encoder e H264PEncoder)
         except (ImportError, ValueError):
             ok = False
+    hint = "pspstream --setup" if (WINDOWS or MACOS) else distro.hint("openh264")
     if want == "auto":
         args.codec = "h264p" if ok and tuple(args.size) == (480, 272) else "jpeg"
         if args.codec == "jpeg":
-            log.info(tr("codec: JPEG (%s)"), tr("no openh264: {hint}").format(hint=distro.hint("openh264"))
+            log.info(tr("codec: JPEG (%s)"), tr("no openh264: {hint}").format(hint=hint)
                      if not ok else tr("--size other than 480x272"))
     if args.codec in ("h264", "h264p"):
         if not ok:
-            return tr("--codec {codec} needs openh264: {hint}").format(codec=args.codec, hint=distro.hint("openh264"))
+            return tr("--codec {codec} needs openh264: {hint}").format(codec=args.codec, hint=hint)
         if tuple(args.size) != (480, 272):
             return tr("--codec {codec} only works at 480x272 (the PSP decoder writes the whole screen)").format(
                 codec=args.codec)
@@ -70,6 +71,9 @@ def open_injector(args):
     if args.source == "wolf":
         return open_wolf_injector(args, profile)
     if profile.get("type") == "gamepad":
+        if MACOS and not args.input_dry_run:
+            raise RuntimeError(tr("macOS does not support a virtual Xbox controller without a signed DriverKit "
+                                  "extension; use a keyboard and mouse profile (--profile game, desktop or arrows)"))
         from gamepad import GamepadInjector
         out = None
         if WINDOWS and not args.input_dry_run:
@@ -155,6 +159,9 @@ def build_source(args, portal=None):
         keep = not args.stretch
         if args.source == "screen":
             candidates = gst_pipe.screen_candidates(args.monitor, not args.no_cursor, args.fps, w, h, args.scale, keep)
+        elif args.source == "avf":
+            candidates = gst_pipe.screen_candidates(args.monitor, not args.no_cursor, args.fps, w, h, args.scale, keep,
+                                                    allow_sck=False)
         elif args.source == "test":
             candidates = gst_pipe.test_candidates(args.fps, w, h, args.scale, keep)
         else:

@@ -30,11 +30,15 @@ from i18n import N_, tr
 log = logging.getLogger("pspstream.settings")
 
 WINDOWS = sys.platform == "win32"
-# Fontes de cada sistema (o servidor de Windows captura pelo gst-launch: gst_pipe.py).
-SOURCES = ("screen", "test", "static") if WINDOWS else ("portal", "kms", "x11", "test", "static", "wolf")
+MACOS = sys.platform == "darwin"
+PIPE_OS = WINDOWS or MACOS
+# Fontes de cada sistema (Windows e macOS capturam pelo gst-launch: gst_pipe.py).
+SOURCES = ("screen", "avf", "test", "static") if MACOS else ("screen", "test", "static") if WINDOWS else ("portal", "kms", "x11", "test", "static", "wolf")
 SOURCE_HELP = (
     N_("screen: the monitor through Desktop Duplication (DXGI), with the scaling on the GPU when it can. test: "
        "animated pattern. static: still image.") if WINDOWS else
+    N_("screen: the monitor through ScreenCaptureKit (or AVFoundation fallback). avf: the monitor through GStreamer "
+       "AVFoundation. test: animated pattern. static: still image.") if MACOS else
     N_("portal: the screen through the Wayland portal (asks for permission the first time). kms: straight "
        "from the graphics card, 60 fps on GNOME 50 (the helper needs permission to read the screen: "
        "--setup gives it). x11: X11 session. test: animated pattern. static: still image. wolf: what runs "
@@ -87,7 +91,7 @@ SETTINGS = (
             flag="--source"),
     Setting("monitor", "monitor", "int", N_("Capture"), N_("Monitor"),
             N_("0 = the main monitor, 1 = the second one, and so on."), "capture", min=0, max=15,
-            flag="--monitor", show_if=("source", ("screen",))),
+            flag="--monitor", show_if=("source", ("screen", "avf") if MACOS else ("screen",))),
     Setting("kms_monitor", "kms_monitor", "int", N_("Capture"), N_("Monitor (KMS)"),
             N_("0 = the first connected monitor; the log says how many there are."), "capture", min=0, max=15,
             flag="--kms-monitor", show_if=("source", ("kms",))),
@@ -95,7 +99,8 @@ SETTINGS = (
             N_("The portal asks for a window instead of a monitor."), "capture", flag="--window",
             show_if=("source", ("portal",))),
     Setting("no_cursor", "no_cursor", "bool", N_("Capture"), N_("Hide the cursor"), "", "capture",
-            flag="--no-cursor", show_if=("source", ("screen",) if WINDOWS else ("portal",))),
+            flag="--no-cursor",
+            show_if=("source", ("screen", "avf") if MACOS else ("screen",) if WINDOWS else ("portal",))),
     Setting("wolf_target", "wolf_target", "text", N_("Capture"), N_("Target in Wolf"),
             N_("Lobby id or name, or session id. Empty = the only open lobby (with several, the log lists the "
                "options)."), "capture", flag="--wolf-target", show_if=("source", ("wolf",))),
@@ -135,6 +140,8 @@ SETTINGS = (
             flag="--no-audio"),
     Setting("audio_device", "audio_device", "text", N_("Audio"), N_("Audio source"),
             N_("monitor = what plays on the speakers (WASAPI loopback); test = 440 Hz tone.") if WINDOWS else
+            N_("monitor = speaker loopback via ScreenCaptureKit (or default input); osx = GStreamer default input "
+               "(BlackHole 2ch / microphone); test = 440 Hz tone; or a CoreAudio device index.") if MACOS else
             N_("monitor = what plays on the speakers (with the wolf source, Wolf's audio); test = 440 Hz tone; or "
                "a PipeWire source."), "audio",
             flag="--audio-device", show_if=("audio", (True,))),
@@ -146,7 +153,10 @@ SETTINGS = (
     # Controles
     Setting("input", "no_input", "bool", N_("Controls"), N_("PSP controls on the PC"),
             N_("Keyboard and mouse through SendInput; the xbox profiles need the ViGEmBus driver (pspstream --setup).")
-            if WINDOWS else N_("Needs access to /dev/uinput (PSPStream wiki, Installation)."), "input", invert=True,
+            if WINDOWS else
+            N_("Keyboard and mouse through Quartz Event Services (needs Accessibility permission in System Settings); "
+               "use the game, desktop or arrows profile.") if MACOS else
+            N_("Needs access to /dev/uinput (PSPStream wiki, Installation)."), "input", invert=True,
             flag="--no-input"),
     Setting("profile", "profile", "choice", N_("Controls"), N_("Profile"),
             N_("game, desktop, arrows: keyboard and mouse. xbox*: virtual Xbox 360 controller."), "input",
@@ -165,7 +175,7 @@ SETTINGS = (
             "restart", min=1024, max=65535, flag="--port"),
 )
 
-SETTINGS = tuple(s for s in SETTINGS if s.key not in (LINUX_ONLY if WINDOWS else WINDOWS_ONLY))
+SETTINGS = tuple(s for s in SETTINGS if s.key not in (LINUX_ONLY if PIPE_OS else WINDOWS_ONLY))
 
 BY_KEY = {s.key: s for s in SETTINGS}
 BY_DEST = {s.dest: s for s in SETTINGS}
@@ -256,6 +266,8 @@ def explicit_dests(parser: argparse.ArgumentParser, argv) -> set:
 def default_path() -> Path:
     if sys.platform == "win32":
         base = Path(os.environ.get("APPDATA") or Path.home()) / "PSPStream"
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support" / "PSPStream"
     else:
         base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "pspstream"
     return base / "server.json"

@@ -390,7 +390,7 @@ class ControllerTest(unittest.TestCase):
         old = self.server.source
         with mock.patch.object(capture, "start_source", side_effect=RuntimeError("sem monitor")):
             with self.assertLogs("pspstream.control", "WARNING"):
-                r = ctl.apply({"source": "kms", "quality": 70})
+                r = ctl.apply({"source": "test", "quality": 70})
         self.assertFalse(r["ok"])
         self.assertIn("sem monitor", r["errors"]["source"])
         self.assertEqual(r["applied"], ["quality"])  # o resto vale
@@ -401,7 +401,7 @@ class ControllerTest(unittest.TestCase):
         broken = StubSource("c", failed="erro no pipeline")
         with mock.patch.object(capture, "start_source", return_value=broken):
             with self.assertLogs("pspstream.control", "WARNING"):
-                r = ctl.apply({"source": "x11"})
+                r = ctl.apply({"source": "screen"} if "screen" in settings.BY_KEY["source"].choices else {"source": "x11"})
         self.assertIn("erro no pipeline", r["errors"]["source"])
         self.assertTrue(broken.stopped)
         self.assertIs(self.server.source, old)
