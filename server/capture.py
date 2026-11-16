@@ -16,14 +16,14 @@ from i18n import tr
 log = logging.getLogger("pspstream.capture")
 
 WINDOWS = sys.platform == "win32"
-# Fontes que o gst-launch captura num processo à parte (gst_pipe.py): no Windows, sempre.
-PIPE_SOURCES = ("screen", "test", "gst")
+MACOS = sys.platform == "darwin"
+# Fontes que o gst-launch captura num processo à parte (gst_pipe.py): no Windows e no macOS, sempre.
+PIPE_SOURCES = ("screen", "avf", "test", "gst")
 
 
 def use_pipe() -> bool:
-    """Captura pelo gst-launch (gst_pipe) em vez do PyGObject: o servidor de Windows. No Linux,
-    PSPSTREAM_CAPTURE=pipe faz o mesmo (testes do caminho de Windows)."""
-    return WINDOWS or os.environ.get("PSPSTREAM_CAPTURE") == "pipe"
+    """Captura pelo gst-launch (gst_pipe) em vez do PyGObject: Windows, macOS ou PSPSTREAM_CAPTURE=pipe."""
+    return WINDOWS or MACOS or os.environ.get("PSPSTREAM_CAPTURE") == "pipe"
 
 
 def resolve_codec(args):
@@ -41,14 +41,15 @@ def resolve_codec(args):
                 ok = ok or openh264.available()  # a libopenh264 direto basta (h264.H264Encoder e H264PEncoder)
         except (ImportError, ValueError):
             ok = False
+    hint = "pspstream --setup" if (WINDOWS or MACOS) else distro.hint("openh264")
     if want == "auto":
         args.codec = "h264p" if ok and tuple(args.size) == (480, 272) else "jpeg"
         if args.codec == "jpeg":
-            log.info(tr("codec: JPEG (%s)"), tr("no openh264: {hint}").format(hint=distro.hint("openh264"))
+            log.info(tr("codec: JPEG (%s)"), tr("no openh264: {hint}").format(hint=hint)
                      if not ok else tr("--size other than 480x272"))
     if args.codec in ("h264", "h264p"):
         if not ok:
-            return tr("--codec {codec} needs openh264: {hint}").format(codec=args.codec, hint=distro.hint("openh264"))
+            return tr("--codec {codec} needs openh264: {hint}").format(codec=args.codec, hint=hint)
         if tuple(args.size) != (480, 272):
             return tr("--codec {codec} only works at 480x272 (the PSP decoder writes the whole screen)").format(
                 codec=args.codec)
@@ -72,11 +73,22 @@ def open_injector(args):
     if profile.get("type") == "gamepad":
         from gamepad import GamepadInjector
         out = None
-        if WINDOWS and not args.input_dry_run:
+        if MACOS and not args.input_dry_run:
+            import mac_gamepad
+            import usb_link
+            if not usb_link.is_available() and not mac_gamepad.crossover_installed():
+                raise RuntimeError(
+                    tr("gamepad profile on macOS requires CrossOver or pyusb and libusb: run pspstream --setup")
+                )
+            out = mac_gamepad.UsbHidPad()
+            kind = tr("USB HID gamepad (through the PSP on the USB cable)")
+        elif WINDOWS and not args.input_dry_run:
             import win_gamepad
             out = win_gamepad.ViGEmPad()  # RuntimeError sem o driver ViGEmBus
+            kind = tr("virtual Xbox 360 controller")
+        else:
+            kind = tr("virtual Xbox 360 controller")
         injector = GamepadInjector(profile, args.input_dry_run, args.input_timeout, out=out)
-        kind = tr("virtual Xbox 360 controller")
     else:
         injector = Injector(profile, args.input_dry_run, args.mouse_speed, args.input_timeout)
         kind = tr("keyboard and mouse")
@@ -155,6 +167,9 @@ def build_source(args, portal=None):
         keep = not args.stretch
         if args.source == "screen":
             candidates = gst_pipe.screen_candidates(args.monitor, not args.no_cursor, args.fps, w, h, args.scale, keep)
+        elif args.source == "avf":
+            candidates = gst_pipe.screen_candidates(args.monitor, not args.no_cursor, args.fps, w, h, args.scale, keep,
+                                                    allow_sck=False)
         elif args.source == "test":
             candidates = gst_pipe.test_candidates(args.fps, w, h, args.scale, keep)
         else:

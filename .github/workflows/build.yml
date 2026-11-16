@@ -223,10 +223,40 @@ jobs:
             dist/PSPStream-Setup-x64.exe
           if-no-files-found: error
 
+  macos:
+    name: macOS bundle
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install runtime and build dependencies
+        run: |
+          brew install gstreamer openh264 libusb
+          python3 -m pip install --upgrade pip pillow pyusb pyinstaller
+      - name: Build native helpers
+        run: |
+          make -C tools/sck
+          make -C tools/crossover
+      - name: Run macOS unit tests
+        run: python3 -m unittest -v tests.test_macos tests.test_docs tests.test_i18n tests.test_usb
+      - name: Build bundle
+        run: python3 packaging/macos/build.py --out dist
+      - name: Smoke test bundle
+        run: python3 packaging/macos/smoke.py dist/PSPStream
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pspstream-macos
+          path: dist/PSPStream-macOS-*.zip
+          if-no-files-found: error
+
   release:
     name: publish
     if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
-    needs: [eboot, tests, deb, rpm, windows]
+    needs: [eboot, tests, deb, rpm, windows, macos]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -241,7 +271,7 @@ jobs:
         run: |
           mkdir -p out
           (cd artifacts/PSPStream-EBOOT && zip -qr ../../out/PSPStream-EBOOT.zip PSP)
-          cp artifacts/pspstream-deb/*.deb artifacts/pspstream-rpm/*.rpm artifacts/pspstream-windows/*.zip artifacts/pspstream-windows/*.exe out/
+          cp artifacts/pspstream-deb/*.deb artifacts/pspstream-rpm/*.rpm artifacts/pspstream-windows/*.zip artifacts/pspstream-windows/*.exe artifacts/pspstream-macos/*.zip out/
           ls -l out
       - name: stable release (tag)
         if: startsWith(github.ref, 'refs/tags/v')
@@ -273,6 +303,7 @@ jobs:
           - **.rpm** (Fedora): \`sudo dnf install ./pspstream-*.rpm\`
           - **PSPStream-Setup-x64.exe** (Windows 10/11, experimental): the installer (firewall, Xbox controller driver, Start menu)
           - **PSPStream-Windows-x64.zip**: the same, portable: unzip and run \`pspstream.exe\`
+          - **PSPStream-macOS-arm64.zip**: macOS bundle (\`pspstream\` + \`pspstream-sck\`; install GStreamer, OpenH264 and libusb with \`pspstream --setup\` or Homebrew)
           NOTES
           gh release create nightly out/* --prerelease --target "$GITHUB_SHA" \
             --title "Development (main, ${GITHUB_SHA::7})" --notes-file notes.md

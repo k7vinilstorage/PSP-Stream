@@ -22,6 +22,7 @@ from pathlib import Path
 from i18n import tr
 
 WINDOWS = sys.platform == "win32"
+MACOS = sys.platform == "darwin"
 
 log = logging.getLogger("pspstream.input")
 
@@ -102,10 +103,13 @@ class _UInput:
 
 
 def _output(codes):
-    """Teclado e mouse virtuais: uinput no Linux, SendInput no Windows."""
+    """Teclado e mouse virtuais: uinput no Linux, SendInput no Windows, Quartz no macOS."""
     if WINDOWS:
         from win_input import SendInputOutput
         return SendInputOutput(codes)
+    if MACOS:
+        from mac_input import QuartzInputOutput
+        return QuartzInputOutput(codes)
     return _UInput(codes)
 
 
@@ -144,6 +148,12 @@ class Injector:
         if WINDOWS:
             import win_input
             bad = [c for c in codes if not win_input.known(c)]
+            if bad:
+                raise SystemExit(tr("unknown codes in the keymap: {codes}").format(codes=", ".join(bad)))
+            return
+        if MACOS:
+            import mac_input
+            bad = [c for c in codes if not mac_input.known(c)]
             if bad:
                 raise SystemExit(tr("unknown codes in the keymap: {codes}").format(codes=", ".join(bad)))
             return

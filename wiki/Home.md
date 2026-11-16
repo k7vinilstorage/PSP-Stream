@@ -23,6 +23,8 @@ web interface, installer and the PSP screens): see [Language](Server-Options#lan
   installer, compose, Portainer, lobbies and troubleshooting.
 - [Windows](Windows): the server on Windows 10/11 (experimental): download,
   setup, what works and troubleshooting.
+- [macOS](macOS): the server on macOS (experimental): Homebrew installation,
+  permissions, audio loopback and troubleshooting.
 
 ## Reference
 
@@ -42,5 +44,7 @@ web interface, installer and the PSP screens): see [Language](Server-Options#lan
   to edit this wiki.
 - [Windows Server Plan](Windows-Server-Plan): the plan behind the Windows
   server, and what of it is done.
+- [macOS Server Plan](macOS-Server-Plan): the plan behind the macOS server,
+  and what of it is done.
 - [PC Client Plan](PC-Client-Plan): a receiver for Linux and Windows PCs
   (a plan, nothing implemented).

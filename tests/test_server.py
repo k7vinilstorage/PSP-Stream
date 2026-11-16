@@ -405,6 +405,7 @@ class CaptureRateTest(unittest.TestCase):
         self.assertIn("queue name=q", desc)
 
 
+@unittest.skipUnless(sys.platform == "linux", "só no Linux")
 class DmabufCaptureTest(unittest.TestCase):
     """--dmabuf: redução no OpenGL. Sem GPU aqui, o teste usa EGL sem tela
     (llvmpipe) e uma fonte em memória comum no lugar do DMA-BUF do portal."""
@@ -478,6 +479,7 @@ class DmabufCaptureTest(unittest.TestCase):
         self.assertIn("--dmabuf did not work", logs.output[0])
 
 
+@unittest.skipUnless(sys.platform == "linux", "só no Linux")
 class KmsCaptureTest(unittest.TestCase):
     """--source kms. Sem placa de vídeo aqui: o auxiliar de verdade é testado no
     caminho de erro, e o protocolo e os buffers com um auxiliar falso (memfd)."""

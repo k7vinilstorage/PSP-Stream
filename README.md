@@ -72,8 +72,9 @@ pages.
 
 You need:
 - a PSP with custom firmware;
-- a Linux PC (Fedora, Ubuntu, Debian, Arch, openSUSE), or Windows 10/11
-  (experimental, [Windows](https://github.com/k7vinilstorage/PSP-Stream/wiki/Windows));
+- a Linux PC (Fedora, Ubuntu, Debian, Arch, openSUSE), Windows 10/11
+  (experimental, [Windows](https://github.com/k7vinilstorage/PSP-Stream/wiki/Windows)),
+  or macOS (experimental, [macOS](https://github.com/k7vinilstorage/PSP-Stream/wiki/macOS));
 - a router with 2.4 GHz Wi-Fi in b/g/n mixed mode, because the PSP only
   speaks 802.11b.
 
@@ -171,6 +172,7 @@ The Xbox controller buttons are in
 | [Troubleshooting](https://github.com/k7vinilstorage/PSP-Stream/wiki/Troubleshooting) | symptom and what to do |
 | [Performance](https://github.com/k7vinilstorage/PSP-Stream/wiki/Performance) | FPS, latency and bandwidth measured on the PSP-3000 |
 | [Windows](https://github.com/k7vinilstorage/PSP-Stream/wiki/Windows) | the server on Windows (experimental) |
+| [macOS](https://github.com/k7vinilstorage/PSP-Stream/wiki/macOS) | the server on macOS via Homebrew (experimental) |
 | [Development](https://github.com/k7vinilstorage/PSP-Stream/wiki/Development) | builds, releases, tests, translations, code layout |
 
 All the pages, including the protocol, the measurements and the

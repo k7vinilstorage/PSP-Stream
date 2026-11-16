@@ -1,7 +1,8 @@
 What you need, the ready-made downloads and installing from source. On
 Ubuntu there is a [step-by-step guide](Ubuntu-Guide). To use it with Wolf
 (Games on Whales), on a server with Docker, see the [Wolf](Wolf) page. For
-the server on Windows, see [Windows](Windows).
+the server on Windows, see [Windows](Windows). For the server on macOS
+(Homebrew), see [macOS](macOS).
 
 ## Requirements
 

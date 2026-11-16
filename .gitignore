@@ -24,6 +24,8 @@ __pycache__/
 /tmp/
 *.log
 tools/kms/pspstream-kms
+tools/sck/pspstream-sck
+tools/crossover/libSDL2-2.0.0.dylib
 
 # pacotes (packaging/)
 dist/

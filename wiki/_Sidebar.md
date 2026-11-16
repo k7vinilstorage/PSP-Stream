@@ -8,6 +8,7 @@
 - [Web Interface](Web-Interface)
 - [Wolf](Wolf)
 - [Windows](Windows)
+- [macOS](macOS)
 
 **Reference**
 - [Server Options](Server-Options)
@@ -22,6 +23,7 @@
 - [Wolf Internals](Wolf-Internals)
 - [Development](Development)
 - [Windows Server Plan](Windows-Server-Plan)
+- [macOS Server Plan](macOS-Server-Plan)
 - [PC Client Plan](PC-Client-Plan)
 
 [Repository](https://github.com/k7vinilstorage/PSP-Stream) ·

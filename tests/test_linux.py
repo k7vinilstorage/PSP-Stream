@@ -122,7 +122,8 @@ class DoctorTest(unittest.TestCase):
 
     def test_check_option(self):
         import pspstream
-        with mock.patch.object(doctor, "main", return_value=0) as check:
+        with mock.patch.multiple(pspstream, create=True, WINDOWS=False, MACOS=False), \
+                mock.patch.object(doctor, "main", return_value=0) as check:
             self.assertEqual(pspstream.main(["--check", "--port", "6000"]), 0)
         check.assert_called_once_with(6000, pspstream.VERSION)
 
@@ -180,7 +181,7 @@ class KmsPermissionTest(unittest.TestCase):
         return struct.pack("<IIIII", magic, permitted, 0, 0, 0)
 
     def has(self, data):
-        with mock.patch("os.getxattr", return_value=data):
+        with mock.patch("os.getxattr", return_value=data, create=True):
             return paths.has_cap_sys_admin(self.PKG)
 
     def test_reads_the_capability(self):
@@ -188,7 +189,7 @@ class KmsPermissionTest(unittest.TestCase):
         self.assertFalse(self.has(self.xattr(0x02000000, 1 << 21)))    # só +p: não vale ao rodar
         self.assertFalse(self.has(self.xattr(0x02000001, 1 << 13)))    # outra (cap_net_raw)
         self.assertFalse(self.has(b"\x01"))
-        with mock.patch("os.getxattr", side_effect=OSError(61, "sem atributo")):
+        with mock.patch("os.getxattr", side_effect=OSError(61, "sem atributo"), create=True):
             self.assertFalse(paths.has_cap_sys_admin(self.PKG))
 
     def test_fix_for_repo_and_package(self):
@@ -216,6 +217,7 @@ class KmsPermissionTest(unittest.TestCase):
                     mock.patch.object(paths, "no_new_privs", return_value=False):
                 self.assertIn("has the permission", paths.kms_permission_problem(self.PKG))
 
+    @unittest.skipUnless(sys.platform == "linux", "só no Linux")
     def test_no_new_privs_here(self):
         status = Path("/proc/self/status").read_text()
         self.assertEqual(paths.no_new_privs(), "NoNewPrivs:\t1" in status)
@@ -242,7 +244,8 @@ class OpenH264SearchTest(unittest.TestCase):
             d = Path(tmp)
             for name in ("libopenh264-2.4.1-linux64.7.so", "libopenh264-2.4.1-linux64.7.so.bz2", "outra.so"):
                 (d / name).write_bytes(b"")
-            with mock.patch.object(openh264, "LIB_DIRS", (d, d / "nao-existe")), \
+            with mock.patch.multiple(openh264, create=True, WINDOWS=False, MACOS=False, PATTERN="libopenh264*.so*",
+                                     LIB_DIRS=(d, d / "nao-existe")), \
                     mock.patch.dict(os.environ, {"PSPSTREAM_OPENH264": "/opt/x/libopenh264.so"}):
                 got = list(openh264.lib_candidates())
         self.assertEqual(got[0], "/opt/x/libopenh264.so")  # a variável vem primeiro

@@ -32,25 +32,41 @@ from i18n import tr
 log = logging.getLogger("pspstream.openh264")
 
 WINDOWS = sys.platform == "win32"
-LIB_NAMES = () if WINDOWS else ("libopenh264.so.8", "libopenh264.so.7", "libopenh264.so.6", "libopenh264.so.5",
-                                "libopenh264.so")
+MACOS = sys.platform == "darwin"
+LIB_NAMES = (() if WINDOWS else
+             ("libopenh264.8.dylib", "libopenh264.7.dylib", "libopenh264.6.dylib",
+              "libopenh264.5.dylib", "libopenh264.dylib") if MACOS else
+             ("libopenh264.so.8", "libopenh264.so.7", "libopenh264.so.6", "libopenh264.so.5",
+              "libopenh264.so"))
 # Sem o pacote da distribuição: a biblioteca do Cisco (github.com/cisco/openh264/releases) em
 # ~/.local/lib ou em lib/ do projeto, ou o caminho em PSPSTREAM_OPENH264.
 LIB_DIRS = (Path.home() / ".local" / "lib", Path(__file__).resolve().parent.parent / "lib")
-PATTERN = "*openh264*.dll" if WINDOWS else "libopenh264*.so*"
+PATTERN = "*openh264*.dll" if WINDOWS else "*openh264*.dylib" if MACOS else "libopenh264*.so*"
 
 
 def user_lib_dir() -> Path:
-    """Windows: onde o --setup grava a DLL do Cisco (%LOCALAPPDATA%\\PSPStream\\lib)."""
+    """Onde o --setup grava a biblioteca do Cisco (Windows e macOS)."""
+    if MACOS:
+        return Path.home() / "Library" / "Application Support" / "PSPStream" / "lib"
     return Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "PSPStream" / "lib"
 
 
 def lib_dirs():
-    """Pastas onde procurar. No Windows: ao lado do pspstream.exe, a do --setup e a do GStreamer
-    (o runtime oficial traz a openh264-7.dll do plugin openh264)."""
-    if not WINDOWS:
+    """Pastas onde procurar. No Windows e no macOS: ao lado do executável, a do --setup,
+    Homebrew (macOS) e a do GStreamer."""
+    if not WINDOWS and not MACOS:
         return LIB_DIRS
     app = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else LIB_DIRS[1].parent
+    if MACOS:
+        dirs = [app, app / "lib", user_lib_dir(), Path("/opt/homebrew/lib"), Path("/usr/local/lib"), *LIB_DIRS]
+        try:
+            import gst_pipe
+            gst = gst_pipe.find_gstreamer()
+            if gst is not None:
+                dirs.append(gst.bin.parent / "lib")
+        except Exception:
+            pass
+        return dirs
     dirs = [app, app / "lib", user_lib_dir()]
     try:
         import gst_pipe

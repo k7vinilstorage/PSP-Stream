@@ -4,6 +4,7 @@ import os
 import re
 import socket
 import subprocess
+import sys
 from i18n import tr
 
 log = logging.getLogger("pspstream.netcheck")
@@ -60,6 +61,50 @@ def band_advice(freq, iface: str):
                "nmcli connection modify <network> 802-11-wireless.band a").format(iface=iface, channel=ch or "?"))
 
 
+def _darwin_wifi(ip: str):
+    """(iface, freq_mhz) no macOS via route + networksetup + CoreWLAN, ou (None, None)."""
+    try:
+        out = subprocess.run(["route", "-n", "get", ip if ip != "127.0.0.1" else "10.255.255.255"],
+                             capture_output=True, text=True, timeout=2).stdout
+        m = re.search(r"interface:\s*(\S+)", out)
+        iface = m.group(1) if m else None
+        if not iface:
+            return None, None
+        ports = subprocess.run(["networksetup", "-listallhardwareports"], capture_output=True, text=True,
+                               timeout=2).stdout
+        blocks = ports.split("Hardware Port:")
+        is_wifi = any(("Wi-Fi" in b or "AirPort" in b) and f"Device: {iface}" in b for b in blocks)
+        if not is_wifi:
+            return None, None
+    except (OSError, subprocess.SubprocessError):
+        return None, None
+    try:
+        import ctypes
+        ctypes.CDLL("/System/Library/Frameworks/CoreWLAN.framework/CoreWLAN")
+        objc = ctypes.CDLL("/usr/lib/libobjc.A.dylib")
+        objc.objc_getClass.restype = ctypes.c_void_p
+        objc.sel_registerName.restype = ctypes.c_void_p
+        msg = objc.objc_msgSend
+        msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        msg.restype = ctypes.c_void_p
+        client = msg(objc.objc_getClass(b"CWWiFiClient"), objc.sel_registerName(b"sharedWiFiClient"))
+        cw_iface = msg(client, objc.sel_registerName(b"interface"))
+        chan = msg(cw_iface, objc.sel_registerName(b"wlanChannel")) if cw_iface else None
+        if chan:
+            msg_int = ctypes.CFUNCTYPE(ctypes.c_ssize_t, ctypes.c_void_p, ctypes.c_void_p)(("objc_msgSend", objc))
+            num = int(msg_int(chan, objc.sel_registerName(b"channelNumber")))
+            band = int(msg_int(chan, objc.sel_registerName(b"channelBand")))
+            if band == 1:
+                return iface, 2484.0 if num == 14 else 2407.0 + 5 * num
+            if band == 2:
+                return iface, 5000.0 + 5 * num
+            if band == 3:
+                return iface, 5950.0 + 5 * num
+    except (OSError, AttributeError):
+        pass
+    return iface, None
+
+
 def check_pc_wifi(ip: str) -> None:
     """Avisa se o PC fala com o PSP pelo Wi-Fi, e se o power save do Wi-Fi está ligado.
 
@@ -68,6 +113,13 @@ def check_pc_wifi(ip: str) -> None:
     muitos notebooks): o roteador segura os pacotes até a placa acordar, e cada
     pedido do PSP chega ao servidor com dezenas de ms de atraso.
     """
+    if sys.platform == "darwin":
+        iface, freq = _darwin_wifi(ip)
+        if not iface:
+            return
+        level, msg = band_advice(freq, iface)
+        log.log(level, "%s", msg)
+        return
     iface = _iface_for(ip)
     if not iface or not os.path.exists(f"/sys/class/net/{iface}/wireless"):
         return
