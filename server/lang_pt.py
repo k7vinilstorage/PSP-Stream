@@ -1227,5 +1227,11 @@ PT = {
         'transporte USB: falta a regra do udev para o PSP (sem ela, só o root abre o PSP pelo USB)',
     'Let the PSP be opened over USB without root (udev rule)':
         'Deixar abrir o PSP pelo USB sem root (regra do udev)',
+    'gamepad profile on macOS requires pyusb and libusb: run pspstream --setup':
+        'perfil de controle no macOS precisa de pyusb e libusb: rode pspstream --setup',
+    'USB HID gamepad (through the PSP on the USB cable)':
+        'controle USB HID (pelo PSP no cabo USB)',
+    'USB HID gamepad waiting for the PSP on the USB cable (transport=usb)':
+        'controle USB HID aguardando o PSP no cabo USB (transport=usb)',
 }
 

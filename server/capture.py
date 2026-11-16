@@ -16,6 +16,7 @@ from i18n import tr
 log = logging.getLogger("pspstream.capture")
 
 WINDOWS = sys.platform == "win32"
+MACOS = sys.platform == "darwin"
 # Fontes que o gst-launch captura num processo à parte (gst_pipe.py): no Windows, sempre.
 PIPE_SOURCES = ("screen", "test", "gst")
 
@@ -72,11 +73,20 @@ def open_injector(args):
     if profile.get("type") == "gamepad":
         from gamepad import GamepadInjector
         out = None
-        if WINDOWS and not args.input_dry_run:
+        if MACOS and not args.input_dry_run:
+            import usb_link
+            if not usb_link.is_available():
+                raise RuntimeError(tr("gamepad profile on macOS requires pyusb and libusb: run pspstream --setup"))
+            import mac_gamepad
+            out = mac_gamepad.UsbHidPad()
+            kind = tr("USB HID gamepad (through the PSP on the USB cable)")
+        elif WINDOWS and not args.input_dry_run:
             import win_gamepad
             out = win_gamepad.ViGEmPad()  # RuntimeError sem o driver ViGEmBus
+            kind = tr("virtual Xbox 360 controller")
+        else:
+            kind = tr("virtual Xbox 360 controller")
         injector = GamepadInjector(profile, args.input_dry_run, args.input_timeout, out=out)
-        kind = tr("virtual Xbox 360 controller")
     else:
         injector = Injector(profile, args.input_dry_run, args.mouse_speed, args.input_timeout)
         kind = tr("keyboard and mouse")

@@ -400,5 +400,87 @@ class AudioHeaderTest(unittest.TestCase):
         self.assertEqual(protocol.unpack_audio(pkt)[-1], block)
 
 
+class UsbHidGamepadTest(unittest.TestCase):
+    def test_report_layout(self):
+        import struct
+        import mac_gamepad
+
+        pkt = mac_gamepad.report({})
+        self.assertEqual(pkt, mac_gamepad.NEUTRAL_REPORT)
+        self.assertEqual(struct.unpack("<HBBBBBB", pkt), (0xF000, 128, 128, 128, 128, 0, 0))
+
+        for code, bit in mac_gamepad.BUTTONS.items():
+            bh, *_ = struct.unpack("<HBBBBBB", mac_gamepad.report({("key", code): 1}))
+            self.assertEqual(bh & 0x0FFF, 1 << bit)
+            self.assertEqual(bh >> 12, 0xF)
+
+        for (hx, hy), expected_hat in mac_gamepad.HAT_MAP.items():
+            bh, *_ = struct.unpack("<HBBBBBB", mac_gamepad.report({("abs", "ABS_HAT0X"): hx, ("abs", "ABS_HAT0Y"): hy}))
+            self.assertEqual(bh >> 12, expected_hat)
+
+        _, lx, ly, rx, ry, lt, rt = struct.unpack(
+            "<HBBBBBB",
+            mac_gamepad.report({
+                ("abs", "ABS_X"): -32768,
+                ("abs", "ABS_Y"): 32767,
+                ("abs", "ABS_RX"): 0,
+                ("abs", "ABS_RY"): 32767,
+                ("abs", "ABS_Z"): 255,
+                ("abs", "ABS_RZ"): 128,
+            }),
+        )
+        self.assertEqual((lx, ly, rx, ry, lt, rt), (0, 255, 128, 255, 255, 128))
+
+    def test_injector_to_usb_hid(self):
+        import gamepad
+        import inject
+        import mac_gamepad
+
+        profile = inject.load_profile(str(ROOT / "server" / "keymap.json"), "xbox")
+        dev = MagicMock()
+        usb_link.set_active(dev)
+        self.addCleanup(usb_link.set_active, None)
+        with patch.object(usb_link, "HAVE_PYUSB", True):
+            inj = gamepad.GamepadInjector(profile, timeout=0, out=mac_gamepad.UsbHidPad())
+            try:
+                inj.update(inject.PSP_BUTTONS["CROSS"] | inject.PSP_BUTTONS["L"], 255, 128)
+                calls = [c.args for c in dev.ctrl_transfer.call_args_list[-2:]]
+                self.assertEqual(calls[0][:3], (0x40, 0x10, 0xF001))
+                self.assertEqual(calls[0][3] & 0xFF, 255)
+                self.assertEqual(calls[1][:4], (0x40, 0x11, (128 << 8) | 128, 255))
+            finally:
+                inj.close()
+        tail = [c.args for c in dev.ctrl_transfer.call_args_list[-2:]]
+        self.assertEqual(tail[0][:4], (0x40, 0x10, 0xF000, (128 << 8) | 128))
+        self.assertEqual(tail[1][:4], (0x40, 0x11, (128 << 8) | 128, 0))
+
+    def test_open_injector_on_macos(self):
+        import argparse
+        import capture
+        import gamepad
+        import mac_gamepad
+
+        args = argparse.Namespace(
+            keymap=str(ROOT / "server" / "keymap.json"),
+            profile="xbox",
+            source="test",
+            input_dry_run=False,
+            input_timeout=0.5,
+        )
+        with patch.multiple(capture, MACOS=True, WINDOWS=False):
+            with patch.object(usb_link, "is_available", return_value=True):
+                inj, kind = capture.open_injector(args)
+                try:
+                    self.assertIsInstance(inj, gamepad.GamepadInjector)
+                    self.assertIsInstance(inj.out, mac_gamepad.UsbHidPad)
+                    self.assertIn("USB HID", kind)
+                finally:
+                    inj.close()
+            with patch.object(usb_link, "is_available", return_value=False):
+                with self.assertRaises(RuntimeError) as ctx:
+                    capture.open_injector(args)
+                self.assertIn("pyusb", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

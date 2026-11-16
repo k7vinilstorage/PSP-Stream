@@ -10,6 +10,7 @@ a sessão de Wi-Fi a cada volta do monitor.
 """
 import errno
 import logging
+import struct
 import threading
 import time
 from typing import Optional
@@ -50,12 +51,45 @@ def find_psp_usb():
         return None
 
 
+_active_lock = threading.Lock()
+_active_dev = None
+
+
+def set_active(dev) -> None:
+    """Registra o dispositivo PSP atualmente aberto para comandos EP0 (gamepad HID)."""
+    global _active_dev
+    with _active_lock:
+        _active_dev = dev
+
+
+def send_hid_report(report: bytes) -> bool:
+    """Envia um relatório HID de 8 bytes (<HBBBBBB) para o PSP ativo no cabo USB."""
+    if len(report) != 8:
+        raise ValueError(f"expected 8-byte HID report, got {len(report)}")
+    buttons_hat, lx, ly, rx, ry, lt, rt = struct.unpack("<HBBBBBB", report)
+    with _active_lock:
+        dev = _active_dev
+        if dev is None or not HAVE_PYUSB:
+            return False
+        try:
+            dev.ctrl_transfer(0x40, 0x10, buttons_hat, lx | (ly << 8), None, timeout=100)
+            dev.ctrl_transfer(0x40, 0x11, rx | (ry << 8), lt | (rt << 8), None, timeout=100)
+            return True
+        except Exception as exc:
+            log.debug("usb_link.send_hid_report: %s", exc)
+            return False
+
+
 def dispose(dev) -> None:
     """Solta a interface e fecha o aparelho (sem erro se o PSP já saiu do cabo)."""
-    try:
-        usb.util.dispose_resources(dev)
-    except Exception:
-        pass
+    global _active_dev
+    with _active_lock:
+        if _active_dev is dev:
+            _active_dev = None
+        try:
+            usb.util.dispose_resources(dev)
+        except Exception:
+            pass
 
 
 def open_device(dev=None):
@@ -87,6 +121,7 @@ def open_device(dev=None):
         ep_out = next((ep for ep in intf if ep.bEndpointAddress == EP_OUT_ADDR), None)
         if ep_in is None or ep_out is None:
             raise ValueError(tr("PSP USB endpoints not found (expected 0x81 and 0x02)"))
+        set_active(dev)
         return dev, ep_in, ep_out
     except Exception:
         dispose(dev)

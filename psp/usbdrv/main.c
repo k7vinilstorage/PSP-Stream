@@ -1,12 +1,16 @@
 /*
  * PSPStream USB Kernel Driver
  *
- * Exposes a custom USB device (VID 0x054C, PID 0x02D2) with 2 bulk endpoints:
- *   EP 1 (0x81) Bulk IN:  PSP -> PC (requests, controls, 52 bytes)
- *   EP 2 (0x02) Bulk OUT: PC -> PSP (video frames, audio packets)
+ * Exposes a 2-interface USB Composite Device (VID 0x054C, PID 0x02D2):
+ *   Interface 0 (0xFF Vendor): Video / audio / control stream
+ *     EP 1 (0x81) Bulk IN:       PSP -> PC (requests, controls, 52 bytes)
+ *     EP 2 (0x02) Bulk OUT:      PC -> PSP (video frames, audio packets)
+ *   Interface 1 (0x03 HID):    Native USB Gamepad (works on macOS without drivers)
+ *     EP 3 (0x83) Interrupt IN:  PSP -> PC (8-byte PspHidReport)
  *
- * Implements a thread-context bulk receive pipeline feeding a 256 KB kernel ring buffer.
- * Callbacks in interrupt context only signal event flags to ensure zero kernel panics.
+ * Implements a thread-context bulk receive pipeline feeding a 256 KB kernel ring buffer
+ * and a dedicated thread for non-blocking HID interrupt IN reports.
+ * Callbacks in interrupt context only copy short state / signal event flags.
  */
 #include <pspkerror.h>
 #include <pspkernel.h>
@@ -17,11 +21,49 @@
 
 #include "pspstream_usb.h"
 
-PSP_MODULE_INFO("PSPStreamUSB", PSP_MODULE_KERNEL, 1, 1);
+PSP_MODULE_INFO("PSPStreamUSB", PSP_MODULE_KERNEL, 1, 2);
 
 #define USB_RX_BUF_SIZE (32 * 1024)
 #define USB_TX_BUF_SIZE (16 * 1024)
 #define RX_RING_SIZE    (256 * 1024)
+
+/* USB Request constants */
+#define USB_DT_HID              0x21
+#define USB_DT_REPORT           0x22
+#define USB_REQ_GET_DESCRIPTOR  0x06
+#define HID_REQ_GET_REPORT      0x01
+#define HID_REQ_SET_IDLE        0x0A
+#define HID_REQ_SET_PROTOCOL    0x0B
+
+/* Vendor EP0 commands sent by server/usb_link.py for full mapped Xbox/gamepad state */
+#define PSP_HID_SET_LOW         0x10 /* wValue = buttons_hat, wIndex = lx | (ly << 8) */
+#define PSP_HID_SET_HIGH_COMMIT 0x11 /* wValue = rx | (ry << 8), wIndex = lt | (rt << 8) */
+
+/* PSP controller bit masks (from pspctrl.h / server/inject.py) */
+#define PSP_BTN_SELECT   0x0001
+#define PSP_BTN_START    0x0008
+#define PSP_BTN_UP       0x0010
+#define PSP_BTN_RIGHT    0x0020
+#define PSP_BTN_DOWN     0x0040
+#define PSP_BTN_LEFT     0x0080
+#define PSP_BTN_L        0x0100
+#define PSP_BTN_R        0x0200
+#define PSP_BTN_TRIANGLE 0x1000
+#define PSP_BTN_CIRCLE   0x2000
+#define PSP_BTN_CROSS    0x4000
+#define PSP_BTN_SQUARE   0x8000
+
+struct PspHidReport {
+    uint16_t buttons_hat; /* bits 0..10: A,B,X,Y,LB,RB,BACK,START,GUIDE,L3,R3; bit 11: pad; bits 12..15: hat */
+    uint8_t lx;
+    uint8_t ly;
+    uint8_t rx;
+    uint8_t ry;
+    uint8_t lt;
+    uint8_t rt;
+} __attribute__((packed));
+
+_Static_assert(sizeof(struct PspHidReport) == 8, "PspHidReport must be 8 bytes");
 
 enum UsbEvents {
     USB_EVENT_ATTACH   = 0x01,
@@ -38,16 +80,89 @@ enum UsbTransEvents {
     USB_TRANSEVENT_DETACH       = 0x20,
 };
 
+enum UsbHidEvents {
+    USB_HIDEVENT_SEND   = 0x01,
+    USB_HIDEVENT_DONE   = 0x02,
+    USB_HIDEVENT_DETACH = 0x04,
+    USB_HIDEVENT_EXIT   = 0x08,
+};
+
+/* Kernel sceUsbbd configuration / interface / endpoint descriptor layout */
+struct UsbEpEntry {
+    struct EndpointDescriptor desc;
+    uint8_t pad;
+    const void *extra;
+    int extraLength;
+} __attribute__((packed, aligned(4)));
+
+struct UsbIfEntry {
+    struct InterfaceDescriptor desc;
+    uint8_t pad[3];
+    struct UsbEpEntry *endpoints;
+    const void *extra;
+    int extraLength;
+} __attribute__((packed, aligned(4)));
+
+struct UsbIfSettings {
+    struct UsbIfEntry *descriptors;
+    unsigned int alternateSetting;
+    unsigned int numDescriptors;
+};
+
+struct UsbCfgEntry {
+    struct ConfigDescriptor desc;
+    uint8_t pad[3];
+    struct UsbIfSettings *settings;
+    const void *extra;
+    int extraLength;
+} __attribute__((packed, aligned(4)));
+
+struct UsbConfBundle {
+    struct UsbCfgEntry *pconfdesc;
+    struct UsbIfSettings *pinterfaces;
+    struct UsbIfEntry *pinterdesc;
+    struct UsbEpEntry *pendp;
+};
+
+struct UsbDevEntry {
+    struct DeviceDescriptor desc;
+    uint8_t pad[2];
+} __attribute__((packed, aligned(4)));
+
+_Static_assert(sizeof(struct UsbEpEntry) == 16, "UsbEpEntry size");
+_Static_assert(sizeof(struct UsbIfEntry) == 24, "UsbIfEntry size");
+_Static_assert(sizeof(struct UsbIfSettings) == 12, "UsbIfSettings size");
+_Static_assert(sizeof(struct UsbCfgEntry) == 24, "UsbCfgEntry size");
+_Static_assert(sizeof(struct UsbConfBundle) == 16, "UsbConfBundle size");
+_Static_assert(sizeof(struct UsbDevEntry) == 20, "UsbDevEntry size");
+
 static SceUID g_main_thid = -1;
 static SceUID g_rx_thid = -1;
+static SceUID g_hid_thid = -1;
 static SceUID g_mainevent = -1;
 static SceUID g_transevent = -1;
+static SceUID g_hidevent = -1;
 static SceUID g_sendsema = -1;
 static SceUID g_recvsema = -1;
 
 static volatile int g_connected = 0;
 static volatile int g_aborted = 0;
 static volatile int g_driver_started = 0;
+
+/* HID state & EP0 buffers (64-byte aligned for DMA & cache lines) */
+static struct PspHidReport g_hid_cur = { 0xF000, 128, 128, 128, 128, 0, 0 };
+static volatile uint16_t g_host_buttons_hat = 0xF000;
+static volatile uint8_t g_host_lx = 128;
+static volatile uint8_t g_host_ly = 128;
+static volatile uint32_t g_hid_host_ts = 0;
+static volatile int g_hid_has_host = 0;
+static volatile int g_hid_dirty = 0;
+static volatile int g_hid_busy = 0;
+
+static uint8_t usb_hid_tx_buf[64] __attribute__((aligned(64)));
+static uint8_t usb_hid_ep0_buf[64] __attribute__((aligned(64)));
+static struct UsbdDeviceReq g_ep0_req;
+static struct UsbdDeviceReq g_hid_req;
 
 /* Static bulk requests */
 static struct UsbdDeviceReq g_bulkin_req;
@@ -62,130 +177,165 @@ static uint8_t rx_ring[RX_RING_SIZE];
 static volatile unsigned int rx_wr = 0;
 static volatile unsigned int rx_rd = 0;
 
-/* Hi-Speed device descriptor */
-static struct DeviceDescriptor devdesc_hi = {
-    .bLength = 18,
-    .bDescriptorType = 0x01,
-    .bcdUSB = 0x200,
-    .bDeviceClass = 0,
-    .bDeviceSubClass = 0,
-    .bDeviceProtocol = 0,
-    .bMaxPacketSize = 64,
-    .idVendor = PSPSTREAM_USB_VID,
-    .idProduct = PSPSTREAM_USB_PID,
-    .bcdDevice = 0x100,
-    .iManufacturer = 0,
-    .iProduct = 1,
-    .iSerialNumber = 0,
-    .bNumConfigurations = 1
+/* Standard USB HID Gamepad Report Descriptor (matches 8-byte PspHidReport) */
+static const uint8_t hid_report_descriptor_src[] = {
+    0x05, 0x01,       /* Usage Page (Generic Desktop Ctrls) */
+    0x09, 0x05,       /* Usage (Game Pad) */
+    0xA1, 0x01,       /* Collection (Application) */
+    0x05, 0x09,       /*   Usage Page (Button) */
+    0x19, 0x01,       /*   Usage Minimum (0x01) */
+    0x29, 0x0B,       /*   Usage Maximum (0x0B) - 11 buttons */
+    0x15, 0x00,       /*   Logical Minimum (0) */
+    0x25, 0x01,       /*   Logical Maximum (1) */
+    0x75, 0x01,       /*   Report Size (1) */
+    0x95, 0x0B,       /*   Report Count (11) */
+    0x81, 0x02,       /*   Input (Data,Var,Abs) */
+    0x75, 0x01,       /*   Report Size (1) */
+    0x95, 0x01,       /*   Report Count (1) - 1 bit padding */
+    0x81, 0x03,       /*   Input (Const,Var,Abs) */
+    0x05, 0x01,       /*   Usage Page (Generic Desktop Ctrls) */
+    0x09, 0x39,       /*   Usage (Hat switch) */
+    0x15, 0x00,       /*   Logical Minimum (0) */
+    0x25, 0x07,       /*   Logical Maximum (7) */
+    0x35, 0x00,       /*   Physical Minimum (0) */
+    0x46, 0x3B, 0x01, /*   Physical Maximum (315) */
+    0x65, 0x14,       /*   Unit (Degrees) */
+    0x75, 0x04,       /*   Report Size (4) */
+    0x95, 0x01,       /*   Report Count (1) */
+    0x81, 0x42,       /*   Input (Data,Var,Abs,Null State) */
+    0x35, 0x00,       /*   Physical Minimum (0) */
+    0x45, 0x00,       /*   Physical Maximum (0) */
+    0x65, 0x00,       /*   Unit (None) */
+    0x09, 0x30,       /*   Usage (X)  - Left Stick X */
+    0x09, 0x31,       /*   Usage (Y)  - Left Stick Y */
+    0x09, 0x33,       /*   Usage (Rx) - Right Stick X */
+    0x09, 0x34,       /*   Usage (Ry) - Right Stick Y */
+    0x09, 0x32,       /*   Usage (Z)  - Left Trigger */
+    0x09, 0x35,       /*   Usage (Rz) - Right Trigger */
+    0x15, 0x00,       /*   Logical Minimum (0) */
+    0x26, 0xFF, 0x00, /*   Logical Maximum (255) */
+    0x75, 0x08,       /*   Report Size (8) */
+    0x95, 0x06,       /*   Report Count (6) */
+    0x81, 0x02,       /*   Input (Data,Var,Abs) */
+    0xC0              /* End Collection */
 };
 
-/* Hi-Speed configuration descriptor */
-static struct ConfigDescriptor confdesc_hi = {
-    .bLength = 9,
-    .bDescriptorType = 2,
-    .wTotalLength = (9 + 9 + (2 * 7)),
-    .bNumInterfaces = 1,
-    .bConfigurationValue = 1,
-    .iConfiguration = 0,
-    .bmAttributes = 0xC0,
-    .bMaxPower = 0
+/* Padded to multiple of 64 bytes for DMA cache writeback */
+static uint8_t usb_hid_report_desc_buf[128] __attribute__((aligned(64)));
+
+/* 9-byte USB HID class descriptor */
+static uint8_t usb_hid_class_desc[64] __attribute__((aligned(64))) = {
+    0x09,                         /* bLength */
+    USB_DT_HID,                   /* bDescriptorType = 0x21 */
+    0x11, 0x01,                   /* bcdHID = 1.11 */
+    0x00,                         /* bCountryCode */
+    0x01,                         /* bNumDescriptors */
+    USB_DT_REPORT,                /* bDescriptorType = 0x22 */
+    sizeof(hid_report_descriptor_src) & 0xFF,
+    (sizeof(hid_report_descriptor_src) >> 8) & 0xFF,
 };
 
-/* Hi-Speed interface descriptor */
-static struct InterfaceDescriptor interdesc_hi = {
-    .bLength = 9,
-    .bDescriptorType = 4,
-    .bInterfaceNumber = 0,
-    .bAlternateSetting = 0,
-    .bNumEndpoints = 2,
-    .bInterfaceClass = 0xFF,
-    .bInterfaceSubClass = 0x01,
-    .bInterfaceProtocol = 0xFF,
-    .iInterface = 1
-};
+#define HID_DESC_LEN 9
+#define TOTAL_CONFIG_LEN (9 + 9 + 7 + 7 + 9 + HID_DESC_LEN + 7) /* 57 bytes */
 
-/* Hi-Speed endpoint descriptors (EP1 IN 512B, EP2 OUT 512B) */
-static struct EndpointDescriptor endpdesc_hi[2] = {
-    {
-        .bLength = 7,
-        .bDescriptorType = 5,
-        .bEndpointAddress = 0x81, /* EP1 IN */
-        .bmAttributes = 2,        /* Bulk */
-        .wMaxPacketSize = 512,
-        .bInterval = 0
-    },
-    {
-        .bLength = 7,
-        .bDescriptorType = 5,
-        .bEndpointAddress = 0x02, /* EP2 OUT */
-        .bmAttributes = 2,        /* Bulk */
-        .wMaxPacketSize = 512,
-        .bInterval = 0
+/* Hi-Speed descriptors */
+static struct UsbDevEntry devdesc_hi = {
+    .desc = {
+        .bLength = 18,
+        .bDescriptorType = 0x01,
+        .bcdUSB = 0x200,
+        .bDeviceClass = 0,
+        .bDeviceSubClass = 0,
+        .bDeviceProtocol = 0,
+        .bMaxPacketSize = 64,
+        .idVendor = PSPSTREAM_USB_VID,
+        .idProduct = PSPSTREAM_USB_PID,
+        .bcdDevice = 0x101,
+        .iManufacturer = 0,
+        .iProduct = 1,
+        .iSerialNumber = 0,
+        .bNumConfigurations = 1
     }
 };
 
-/* Full-Speed device descriptor */
-static struct DeviceDescriptor devdesc_full = {
-    .bLength = 18,
-    .bDescriptorType = 0x01,
-    .bcdUSB = 0x200,
-    .bDeviceClass = 0,
-    .bDeviceSubClass = 0,
-    .bDeviceProtocol = 0,
-    .bMaxPacketSize = 64,
-    .idVendor = PSPSTREAM_USB_VID,
-    .idProduct = PSPSTREAM_USB_PID,
-    .bcdDevice = 0x100,
-    .iManufacturer = 0,
-    .iProduct = 1,
-    .iSerialNumber = 0,
-    .bNumConfigurations = 1
+static struct UsbEpEntry endps_hi[3] = {
+    { { 7, 5, 0x81, 2, 512, 0 }, 0, NULL, 0 }, /* EP1 Bulk IN */
+    { { 7, 5, 0x02, 2, 512, 0 }, 0, NULL, 0 }, /* EP2 Bulk OUT */
+    { { 7, 5, 0x83, 3,  64, 4 }, 0, NULL, 0 }, /* EP3 Interrupt IN (1 ms) */
 };
 
-/* Full-Speed configuration descriptor */
-static struct ConfigDescriptor confdesc_full = {
-    .bLength = 9,
-    .bDescriptorType = 2,
-    .wTotalLength = (9 + 9 + (2 * 7)),
-    .bNumInterfaces = 1,
-    .bConfigurationValue = 1,
-    .iConfiguration = 0,
-    .bmAttributes = 0xC0,
-    .bMaxPower = 0
+static struct UsbIfEntry ifaces_hi[2] = {
+    { { 9, 4, 0, 0, 2, 0xFF, 0x01, 0xFF, 1 }, { 0 }, &endps_hi[0], NULL, 0 },
+    { { 9, 4, 1, 0, 1, 0x03, 0x00, 0x00, 1 }, { 0 }, &endps_hi[2], usb_hid_class_desc, HID_DESC_LEN },
 };
 
-/* Full-Speed interface descriptor */
-static struct InterfaceDescriptor interdesc_full = {
-    .bLength = 9,
-    .bDescriptorType = 4,
-    .bInterfaceNumber = 0,
-    .bAlternateSetting = 0,
-    .bNumEndpoints = 2,
-    .bInterfaceClass = 0xFF,
-    .bInterfaceSubClass = 0x01,
-    .bInterfaceProtocol = 0xFF,
-    .iInterface = 1
+static struct UsbIfSettings settings_hi[2] = {
+    { &ifaces_hi[0], 0, 1 },
+    { &ifaces_hi[1], 0, 1 },
 };
 
-/* Full-Speed endpoint descriptors (64 bytes each) */
-static struct EndpointDescriptor endpdesc_full[2] = {
-    {
-        .bLength = 7,
-        .bDescriptorType = 5,
-        .bEndpointAddress = 0x81,
-        .bmAttributes = 2,
-        .wMaxPacketSize = 64,
-        .bInterval = 0
-    },
-    {
-        .bLength = 7,
-        .bDescriptorType = 5,
-        .bEndpointAddress = 0x02,
-        .bmAttributes = 2,
-        .wMaxPacketSize = 64,
-        .bInterval = 0
+static struct UsbCfgEntry confdesc_hi = {
+    .desc = { 9, 2, TOTAL_CONFIG_LEN, 2, 1, 0, 0xC0, 0 },
+    .settings = settings_hi,
+    .extra = NULL,
+    .extraLength = 0
+};
+
+static struct UsbConfBundle bundle_hi = {
+    &confdesc_hi,
+    settings_hi,
+    ifaces_hi,
+    endps_hi
+};
+
+/* Full-Speed descriptors */
+static struct UsbDevEntry devdesc_full = {
+    .desc = {
+        .bLength = 18,
+        .bDescriptorType = 0x01,
+        .bcdUSB = 0x200,
+        .bDeviceClass = 0,
+        .bDeviceSubClass = 0,
+        .bDeviceProtocol = 0,
+        .bMaxPacketSize = 64,
+        .idVendor = PSPSTREAM_USB_VID,
+        .idProduct = PSPSTREAM_USB_PID,
+        .bcdDevice = 0x101,
+        .iManufacturer = 0,
+        .iProduct = 1,
+        .iSerialNumber = 0,
+        .bNumConfigurations = 1
     }
+};
+
+static struct UsbEpEntry endps_full[3] = {
+    { { 7, 5, 0x81, 2, 64, 0 }, 0, NULL, 0 }, /* EP1 Bulk IN */
+    { { 7, 5, 0x02, 2, 64, 0 }, 0, NULL, 0 }, /* EP2 Bulk OUT */
+    { { 7, 5, 0x83, 3, 64, 8 }, 0, NULL, 0 }, /* EP3 Interrupt IN (8 ms) */
+};
+
+static struct UsbIfEntry ifaces_full[2] = {
+    { { 9, 4, 0, 0, 2, 0xFF, 0x01, 0xFF, 1 }, { 0 }, &endps_full[0], NULL, 0 },
+    { { 9, 4, 1, 0, 1, 0x03, 0x00, 0x00, 1 }, { 0 }, &endps_full[2], usb_hid_class_desc, HID_DESC_LEN },
+};
+
+static struct UsbIfSettings settings_full[2] = {
+    { &ifaces_full[0], 0, 1 },
+    { &ifaces_full[1], 0, 1 },
+};
+
+static struct UsbCfgEntry confdesc_full = {
+    .desc = { 9, 2, TOTAL_CONFIG_LEN, 2, 1, 0, 0xC0, 0 },
+    .settings = settings_full,
+    .extra = NULL,
+    .extraLength = 0
+};
+
+static struct UsbConfBundle bundle_full = {
+    &confdesc_full,
+    settings_full,
+    ifaces_full,
+    endps_full
 };
 
 /* UTF-16LE String descriptor for "PSPStream" */
@@ -194,26 +344,105 @@ static unsigned char strp[] = {
     'P', 0, 'S', 0, 'P', 0, 'S', 0, 't', 0, 'r', 0, 'e', 0, 'a', 0, 'm', 0
 };
 
-/* Endpoint blocks (0: control, 1: EP1 IN, 2: EP2 OUT) */
-static struct UsbEndpoint endp[3] = {
+/* Endpoint blocks (0: control, 1: EP1 Bulk IN, 2: EP2 Bulk OUT, 3: EP3 Interrupt IN) */
+static struct UsbEndpoint endp[4] = {
     { 0, 0, 0 },
     { 1, 0, 0 },
     { 2, 0, 0 },
+    { 3, 0, 0 },
 };
 
-/* Interface block */
+/* Expect 2 interfaces (0: vendor bulk, 1: HID gamepad) assigned by sceUsbbd */
 static struct UsbInterface intp = {
-    0xFFFFFFFF, 0, 1
+    -1, 0, 2
 };
-
-/* Data structures for sceUsbbd */
-static struct UsbData usbdata[2];
 
 /* Forward declaration */
 extern struct UsbDriver g_driver;
 
+static int ep0_send(const void *buf, int len, int req_max)
+{
+    int n = (req_max > 0 && req_max < len) ? req_max : len;
+    if (n <= 0)
+        return 0;
+    sceKernelDcacheWritebackRange((void *)buf, n);
+    memset(&g_ep0_req, 0, sizeof(g_ep0_req));
+    g_ep0_req.endp = &endp[0];
+    g_ep0_req.data = (void *)buf;
+    g_ep0_req.size = n;
+    return sceUsbbdReqSend(&g_ep0_req);
+}
+
+static uint16_t raw_psp_buttons_hat(uint32_t b)
+{
+    uint16_t out = 0;
+    if (b & PSP_BTN_CROSS)    out |= 1 << 0; /* A */
+    if (b & PSP_BTN_CIRCLE)   out |= 1 << 1; /* B */
+    if (b & PSP_BTN_SQUARE)   out |= 1 << 2; /* X */
+    if (b & PSP_BTN_TRIANGLE) out |= 1 << 3; /* Y */
+    if (b & PSP_BTN_L)        out |= 1 << 4; /* LB */
+    if (b & PSP_BTN_R)        out |= 1 << 5; /* RB */
+    if (b & PSP_BTN_SELECT)   out |= 1 << 6; /* BACK */
+    if (b & PSP_BTN_START)    out |= 1 << 7; /* START */
+
+    int dx = ((b & PSP_BTN_RIGHT) ? 1 : 0) - ((b & PSP_BTN_LEFT) ? 1 : 0);
+    int dy = ((b & PSP_BTN_DOWN) ? 1 : 0) - ((b & PSP_BTN_UP) ? 1 : 0);
+    uint16_t hat = 0xF;
+    if (dy < 0)      hat = (dx < 0) ? 7 : (dx > 0) ? 1 : 0;
+    else if (dy > 0) hat = (dx < 0) ? 5 : (dx > 0) ? 3 : 4;
+    else if (dx < 0) hat = 6;
+    else if (dx > 0) hat = 2;
+
+    return out | (uint16_t)(hat << 12);
+}
+
 static int usb_request(int arg1, int arg2, struct DeviceRequest *req)
 {
+    (void)arg1;
+    if (!req || arg2 < 0)
+        return 0;
+
+    switch (req->bmRequestType) {
+    case 0x81: /* Device-to-Host, Standard, Interface */
+        if (req->bRequest == USB_REQ_GET_DESCRIPTOR) {
+            uint8_t dtype = (req->wValue >> 8) & 0xFF;
+            if (dtype == USB_DT_REPORT)
+                ep0_send(usb_hid_report_desc_buf, (int)sizeof(hid_report_descriptor_src), req->wLength);
+            else if (dtype == USB_DT_HID)
+                ep0_send(usb_hid_class_desc, HID_DESC_LEN, req->wLength);
+        }
+        break;
+    case 0xA1: /* Device-to-Host, Class, Interface */
+        if (req->bRequest == HID_REQ_GET_REPORT) {
+            memcpy(usb_hid_ep0_buf, &g_hid_cur, sizeof(g_hid_cur));
+            ep0_send(usb_hid_ep0_buf, (int)sizeof(g_hid_cur), req->wLength);
+        }
+        break;
+    case 0x21: /* Host-to-Device, Class, Interface (SET_IDLE / SET_PROTOCOL) */
+        break;
+    case 0x40: /* Host-to-Device, Vendor, Device */
+        if (req->bRequest == PSP_HID_SET_LOW) {
+            g_host_buttons_hat = req->wValue;
+            g_host_lx = req->wIndex & 0xFF;
+            g_host_ly = (req->wIndex >> 8) & 0xFF;
+        } else if (req->bRequest == PSP_HID_SET_HIGH_COMMIT) {
+            g_hid_cur.buttons_hat = g_host_buttons_hat;
+            g_hid_cur.lx = g_host_lx;
+            g_hid_cur.ly = g_host_ly;
+            g_hid_cur.rx = req->wValue & 0xFF;
+            g_hid_cur.ry = (req->wValue >> 8) & 0xFF;
+            g_hid_cur.lt = req->wIndex & 0xFF;
+            g_hid_cur.rt = (req->wIndex >> 8) & 0xFF;
+            g_hid_host_ts = sceKernelGetSystemTimeLow();
+            g_hid_has_host = 1;
+            g_hid_dirty = 1;
+            if (g_hidevent >= 0)
+                sceKernelSetEventFlag(g_hidevent, USB_HIDEVENT_SEND);
+        }
+        break;
+    default:
+        break;
+    }
     return 0;
 }
 
@@ -251,6 +480,14 @@ static int bulkout_req_done(struct UsbdDeviceReq *req, int arg2, int arg3)
     return 0;
 }
 
+static int hid_req_done(struct UsbdDeviceReq *req, int arg2, int arg3)
+{
+    (void)req;
+    if (g_hidevent >= 0)
+        sceKernelSetEventFlag(g_hidevent, USB_HIDEVENT_DONE);
+    return 0;
+}
+
 /* USB attach / detach monitor thread */
 static int usb_main_thread(SceSize size, void *argp)
 {
@@ -265,21 +502,80 @@ static int usb_main_thread(SceSize size, void *argp)
 
         if (result & USB_EVENT_DETACH) {
             g_connected = 0;
+            g_hid_busy = 0;
+            g_hid_has_host = 0;
             sceUsbbdReqCancelAll(&endp[1]);
             sceUsbbdReqCancelAll(&endp[2]);
+            sceUsbbdReqCancelAll(&endp[3]);
             sceKernelClearEventFlag(g_mainevent, ~USB_EVENT_ATTACHED);
             if (g_transevent >= 0)
                 sceKernelSetEventFlag(g_transevent, USB_TRANSEVENT_DETACH);
+            if (g_hidevent >= 0)
+                sceKernelSetEventFlag(g_hidevent, USB_HIDEVENT_DETACH);
         }
 
         if (result & USB_EVENT_ATTACH) {
             rx_wr = rx_rd = 0;
             g_aborted = 0;
+            g_hid_cur = (struct PspHidReport){ 0xF000, 128, 128, 128, 128, 0, 0 };
+            g_host_buttons_hat = 0xF000;
+            g_host_lx = 128;
+            g_host_ly = 128;
+            g_hid_has_host = 0;
+            g_hid_busy = 0;
+            g_hid_dirty = 1;
             g_connected = 1;
             sceKernelSetEventFlag(g_mainevent, USB_EVENT_ATTACHED);
             if (g_transevent >= 0)
                 sceKernelSetEventFlag(g_transevent, USB_TRANSEVENT_SPACE_AVAIL);
+            if (g_hidevent >= 0)
+                sceKernelSetEventFlag(g_hidevent, USB_HIDEVENT_SEND);
         }
+    }
+    return 0;
+}
+
+/* Dedicated thread queueing non-blocking HID interrupt IN reports on EP3 */
+static int usb_hid_thread(SceSize size, void *argp)
+{
+    u32 result = 0;
+    while (g_driver_started) {
+        int ret = sceKernelWaitEventFlag(g_hidevent,
+                                         USB_HIDEVENT_SEND | USB_HIDEVENT_DONE |
+                                         USB_HIDEVENT_DETACH | USB_HIDEVENT_EXIT,
+                                         PSP_EVENT_WAITOR | PSP_EVENT_WAITCLEAR,
+                                         &result, NULL);
+        if (ret < 0 || (result & USB_HIDEVENT_EXIT))
+            break;
+
+        if (result & USB_HIDEVENT_DETACH) {
+            g_hid_busy = 0;
+            g_hid_dirty = 0;
+            continue;
+        }
+        if (result & USB_HIDEVENT_DONE)
+            g_hid_busy = 0;
+
+        if (!g_connected || g_hid_busy || !g_hid_dirty)
+            continue;
+
+        int intr = sceKernelCpuSuspendIntr();
+        struct PspHidReport snap = g_hid_cur;
+        g_hid_dirty = 0;
+        sceKernelCpuResumeIntr(intr);
+
+        memcpy(usb_hid_tx_buf, &snap, sizeof(snap));
+        sceKernelDcacheWritebackRange(usb_hid_tx_buf, sizeof(snap));
+
+        memset(&g_hid_req, 0, sizeof(g_hid_req));
+        g_hid_req.endp = &endp[3]; /* EP3 Interrupt IN */
+        g_hid_req.data = usb_hid_tx_buf;
+        g_hid_req.size = sizeof(snap);
+        g_hid_req.func = hid_req_done;
+
+        g_hid_busy = 1;
+        if (sceUsbbdReqSend(&g_hid_req) < 0)
+            g_hid_busy = 0;
     }
     return 0;
 }
@@ -320,10 +616,7 @@ static int usb_rx_thread(SceSize size, void *argp)
             continue;
         }
 
-        /* Wait for completion, abort, or detach. A timeout alone does NOT cancel the request: the
-         * PC may be in the middle of sending a frame (keepalive frames come every ~1 s), and
-         * the bytes already received by a cancelled request would be lost, desyncing the stream.
-         * g_aborted/g_connected are checked too, since another waiter may consume the ABORT bit. */
+        /* Wait for completion, abort, or detach. */
         u32 result = 0;
         int cancel = 0;
         for (;;) {
@@ -374,42 +667,15 @@ static int usb_rx_thread(SceSize size, void *argp)
 
 static int start_func(int size, void *p)
 {
-    memset(usbdata, 0, sizeof(usbdata));
+    memset(usb_hid_report_desc_buf, 0, sizeof(usb_hid_report_desc_buf));
+    memcpy(usb_hid_report_desc_buf, hid_report_descriptor_src, sizeof(hid_report_descriptor_src));
+    sceKernelDcacheWritebackRange(usb_hid_report_desc_buf, sizeof(usb_hid_report_desc_buf));
+    sceKernelDcacheWritebackRange(usb_hid_class_desc, sizeof(usb_hid_class_desc));
 
-    /* Hi-Speed setup */
-    memcpy(usbdata[0].devdesc, &devdesc_hi, sizeof(devdesc_hi));
-    usbdata[0].config.pconfdesc = &usbdata[0].confdesc;
-    usbdata[0].config.pinterfaces = &usbdata[0].interfaces;
-    usbdata[0].config.pinterdesc = &usbdata[0].interdesc;
-    usbdata[0].config.pendp = usbdata[0].endp;
-    memcpy(usbdata[0].confdesc.desc, &confdesc_hi, sizeof(confdesc_hi));
-    usbdata[0].confdesc.pinterfaces = &usbdata[0].interfaces;
-    usbdata[0].interfaces.pinterdesc[0] = &usbdata[0].interdesc;
-    usbdata[0].interfaces.intcount = 1;
-    memcpy(usbdata[0].interdesc.desc, &interdesc_hi, sizeof(interdesc_hi));
-    usbdata[0].interdesc.pendp = usbdata[0].endp;
-    memcpy(usbdata[0].endp[0].desc, &endpdesc_hi[0], sizeof(endpdesc_hi[0]));
-    memcpy(usbdata[0].endp[1].desc, &endpdesc_hi[1], sizeof(endpdesc_hi[1]));
-
-    /* Full-Speed setup */
-    memcpy(usbdata[1].devdesc, &devdesc_full, sizeof(devdesc_full));
-    usbdata[1].config.pconfdesc = &usbdata[1].confdesc;
-    usbdata[1].config.pinterfaces = &usbdata[1].interfaces;
-    usbdata[1].config.pinterdesc = &usbdata[1].interdesc;
-    usbdata[1].config.pendp = usbdata[1].endp;
-    memcpy(usbdata[1].confdesc.desc, &confdesc_full, sizeof(confdesc_full));
-    usbdata[1].confdesc.pinterfaces = &usbdata[1].interfaces;
-    usbdata[1].interfaces.pinterdesc[0] = &usbdata[1].interdesc;
-    usbdata[1].interfaces.intcount = 1;
-    memcpy(usbdata[1].interdesc.desc, &interdesc_full, sizeof(interdesc_full));
-    usbdata[1].interdesc.pendp = usbdata[1].endp;
-    memcpy(usbdata[1].endp[0].desc, &endpdesc_full[0], sizeof(endpdesc_full[0]));
-    memcpy(usbdata[1].endp[1].desc, &endpdesc_full[1], sizeof(endpdesc_full[1]));
-
-    g_driver.devp_hi = usbdata[0].devdesc;
-    g_driver.confp_hi = &usbdata[0].config;
-    g_driver.devp = usbdata[1].devdesc;
-    g_driver.confp = &usbdata[1].config;
+    g_driver.devp_hi = &devdesc_hi;
+    g_driver.confp_hi = &bundle_hi;
+    g_driver.devp = &devdesc_full;
+    g_driver.confp = &bundle_full;
 
     g_mainevent = sceKernelCreateEventFlag("PSUSB_MainEvent", 0x200, 0, NULL);
     if (g_mainevent < 0)
@@ -418,6 +684,10 @@ static int start_func(int size, void *p)
     g_transevent = sceKernelCreateEventFlag("PSUSB_TransEvent", 0x200, 0, NULL);
     if (g_transevent < 0)
         return g_transevent;
+
+    g_hidevent = sceKernelCreateEventFlag("PSUSB_HidEvent", 0x200, 0, NULL);
+    if (g_hidevent < 0)
+        return g_hidevent;
 
     g_sendsema = sceKernelCreateSema("PSUSB_SendSema", 0, 1, 1, NULL);
     if (g_sendsema < 0)
@@ -432,6 +702,10 @@ static int start_func(int size, void *p)
     if (g_main_thid >= 0)
         sceKernelStartThread(g_main_thid, 0, NULL);
 
+    g_hid_thid = sceKernelCreateThread("PSUSB_HidThread", usb_hid_thread, 0x16, 0x2000, 0, NULL);
+    if (g_hid_thid >= 0)
+        sceKernelStartThread(g_hid_thid, 0, NULL);
+
     g_rx_thid = sceKernelCreateThread("PSUSB_RxThread", usb_rx_thread, 0x14, 0x8000, 0, NULL);
     if (g_rx_thid >= 0)
         sceKernelStartThread(g_rx_thid, 0, NULL);
@@ -444,15 +718,22 @@ static int stop_func(int size, void *p)
     g_driver_started = 0;
     g_connected = 0;
     g_aborted = 1;
+    g_hid_busy = 0;
 
     if (g_transevent >= 0)
         sceKernelSetEventFlag(g_transevent, USB_TRANSEVENT_ABORT);
+    if (g_hidevent >= 0)
+        sceKernelSetEventFlag(g_hidevent, USB_HIDEVENT_EXIT);
     if (g_mainevent >= 0)
         sceKernelSetEventFlag(g_mainevent, USB_EVENT_DETACH);
 
     if (g_rx_thid >= 0) {
         sceKernelTerminateDeleteThread(g_rx_thid);
         g_rx_thid = -1;
+    }
+    if (g_hid_thid >= 0) {
+        sceKernelTerminateDeleteThread(g_hid_thid);
+        g_hid_thid = -1;
     }
     if (g_main_thid >= 0) {
         sceKernelTerminateDeleteThread(g_main_thid);
@@ -467,6 +748,10 @@ static int stop_func(int size, void *p)
         sceKernelDeleteEventFlag(g_transevent);
         g_transevent = -1;
     }
+    if (g_hidevent >= 0) {
+        sceKernelDeleteEventFlag(g_hidevent);
+        g_hidevent = -1;
+    }
     if (g_sendsema >= 0) {
         sceKernelDeleteSema(g_sendsema);
         g_sendsema = -1;
@@ -480,7 +765,7 @@ static int stop_func(int size, void *p)
 
 struct UsbDriver g_driver = {
     .name = PSPSTREAM_USB_DRIVERNAME,
-    .endpoints = 3,
+    .endpoints = 4,
     .endp = endp,
     .intp = &intp,
     .devp_hi = NULL,
@@ -520,9 +805,6 @@ int module_stop(SceSize args, void *argp)
  * Public API (Exported to user-mode)
  */
 
-/* A user-mode caller (k1 = 0x80000000 inside the syscall) may only pass user memory: with k1 set
- * to 0 below, a kernel address would let any user-mode code read or write kernel memory through
- * pspusb_write/pspusb_read. Kernel callers (k1 = 0) pass any address. */
 static int user_buf_ok(u32 k1, const void *buf, int len)
 {
     u32 addr = (u32)buf;
@@ -562,6 +844,7 @@ int pspusb_stop(void)
     sceUsbStop(PSPSTREAM_USB_DRIVERNAME, 0, 0);
     sceUsbStop(PSP_USBBUS_DRIVERNAME, 0, 0);
     g_connected = 0;
+    g_hid_busy = 0;
     pspSdkSetK1(k1);
     return 0;
 }
@@ -612,6 +895,34 @@ void pspusb_clear_buffers(void)
     pspSdkSetK1(k1);
 }
 
+static void maybe_update_hid_fallback(const uint8_t *src, int len)
+{
+    if (len < 12)
+        return;
+    /* Protocol v5 request packet starts with "PSC5" + buttons(LE32) + lx + ly */
+    if (src[0] != 'P' || src[1] != 'S' || src[2] != 'C' || src[3] != '5')
+        return;
+    uint32_t now = sceKernelGetSystemTimeLow();
+    if (g_hid_has_host && (now - g_hid_host_ts) <= 2000000U)
+        return;
+    uint32_t btns = (uint32_t)src[4] | ((uint32_t)src[5] << 8) |
+                    ((uint32_t)src[6] << 16) | ((uint32_t)src[7] << 24);
+    struct PspHidReport next = {
+        raw_psp_buttons_hat(btns),
+        src[8], src[9],
+        128, 128, 0, 0
+    };
+    int intr = sceKernelCpuSuspendIntr();
+    int changed = memcmp(&g_hid_cur, &next, sizeof(next)) != 0;
+    if (changed) {
+        g_hid_cur = next;
+        g_hid_dirty = 1;
+    }
+    sceKernelCpuResumeIntr(intr);
+    if (changed && g_hidevent >= 0)
+        sceKernelSetEventFlag(g_hidevent, USB_HIDEVENT_SEND);
+}
+
 int pspusb_write(const void *data, int len, unsigned int timeout_us)
 {
     if (!g_connected || g_aborted)
@@ -641,6 +952,8 @@ int pspusb_write(const void *data, int len, unsigned int timeout_us)
 
         int chunk = (remaining > (int)sizeof(usb_tx_buf)) ? (int)sizeof(usb_tx_buf) : remaining;
         memcpy(usb_tx_buf, src, chunk);
+        if (src == (const uint8_t *)data)
+            maybe_update_hid_fallback(usb_tx_buf, chunk);
         sceKernelDcacheWritebackRange(usb_tx_buf, chunk);
 
         memset(&g_bulkin_req, 0, sizeof(g_bulkin_req));
