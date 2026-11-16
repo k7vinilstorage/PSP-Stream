@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Build the standalone macOS bundle and zip archive for PSPStream.
 
-Builds tools/sck/pspstream-sck, freezes server/pspstream.py with PyInstaller
-into dist/PSPStream/, places pspstream-sck alongside the executable, and packs
-dist/PSPStream-macOS-<arch>.zip.
+Builds tools/sck/pspstream-sck and tools/crossover/libSDL2-2.0.0.dylib, freezes
+server/pspstream.py with PyInstaller into dist/PSPStream/, places both native
+helpers alongside the executable, and packs dist/PSPStream-macOS-<arch>.zip.
 """
 import argparse
 import os
@@ -19,9 +19,10 @@ ROOT = HERE.parent.parent
 
 NOTICE = """PSPStream {version} for macOS
 
-This bundle contains only the Python server, web interface, and the native
+This bundle contains only the Python server, web interface, the native
 ScreenCaptureKit helper (tools/sck/pspstream-sck, Apple macOS 13+ system
-frameworks).
+frameworks), and the CrossOver SDL2 virtual controller proxy
+(tools/crossover/libSDL2-2.0.0.dylib).
 
 Runtime dependencies installed via Homebrew or `pspstream --setup`:
   - GStreamer (LGPL-2.1+): brew install gstreamer
@@ -86,6 +87,16 @@ def build_sck_helper() -> Path:
     return helper
 
 
+def build_crossover_sdl2() -> Path:
+    """Compile the universal SDL2 proxy dylib for CrossOver in tools/crossover."""
+    crossover_dir = ROOT / "tools" / "crossover"
+    subprocess.run(["make", "-C", str(crossover_dir)], check=True)
+    dylib = crossover_dir / "libSDL2-2.0.0.dylib"
+    if not dylib.is_file():
+        raise FileNotFoundError(f"CrossOver SDL2 proxy dylib missing after build: {dylib}")
+    return dylib
+
+
 def bundle_openh264(app: Path) -> None:
     """Copy libopenh264 dylibs into the bundle if explicitly requested."""
     sys.path.insert(0, str(ROOT / "server"))
@@ -137,6 +148,7 @@ def main(argv=None) -> int:
     ver = version()
 
     helper = build_sck_helper()
+    crossover_dylib = build_crossover_sdl2()
 
     if not args.no_pyinstaller:
         work = out / ".pyinstaller-work"
@@ -161,6 +173,10 @@ def main(argv=None) -> int:
     dest_helper = app / "pspstream-sck"
     shutil.copy2(helper, dest_helper)
     dest_helper.chmod(0o755)
+
+    dest_crossover = app / "libSDL2-2.0.0.dylib"
+    shutil.copy2(crossover_dylib, dest_crossover)
+    dest_crossover.chmod(0o755)
 
     for doc in ("README.md", "README.pt-BR.md", "LICENSE"):
         src = ROOT / doc

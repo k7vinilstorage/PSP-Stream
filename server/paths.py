@@ -17,6 +17,7 @@ from i18n import tr
 ROOT = Path(__file__).resolve().parent.parent
 REPO_KMS_HELPER = ROOT / "tools" / "kms" / "pspstream-kms"
 REPO_SCK_HELPER = ROOT / "tools" / "sck" / "pspstream-sck"
+REPO_CROSSOVER_SDL2 = ROOT / "tools" / "crossover" / "libSDL2-2.0.0.dylib"
 SYSTEM_KMS_HELPERS = (Path("/usr/libexec/pspstream/pspstream-kms"), Path("/usr/lib/pspstream/pspstream-kms"))
 
 
@@ -30,6 +31,18 @@ def sck_helper() -> Path:
         if bundled.exists():
             return bundled
     return REPO_SCK_HELPER
+
+
+def crossover_sdl2() -> Path:
+    """Proxy universal SDL2 para CrossOver no macOS: PSPSTREAM_CROSSOVER_SDL2, pacote ou repositório."""
+    env = os.environ.get("PSPSTREAM_CROSSOVER_SDL2")
+    if env:
+        return Path(env)
+    if getattr(sys, "frozen", False):
+        bundled = Path(sys.executable).resolve().parent / "libSDL2-2.0.0.dylib"
+        if bundled.exists():
+            return bundled
+    return REPO_CROSSOVER_SDL2
 
 
 def installed() -> bool:

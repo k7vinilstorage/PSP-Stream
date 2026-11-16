@@ -237,8 +237,10 @@ jobs:
         run: |
           brew install gstreamer openh264 libusb
           python3 -m pip install --upgrade pip pillow pyusb pyinstaller
-      - name: Build ScreenCaptureKit helper
-        run: make -C tools/sck
+      - name: Build native helpers
+        run: |
+          make -C tools/sck
+          make -C tools/crossover
       - name: Run macOS unit tests
         run: python3 -m unittest -v tests.test_macos tests.test_docs tests.test_i18n tests.test_usb
       - name: Build bundle

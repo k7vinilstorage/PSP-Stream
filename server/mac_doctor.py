@@ -137,6 +137,18 @@ def check_permissions(items) -> None:
                           tr("Accessibility permission is off: macOS blocks keyboard and mouse injection until "
                              "granted in System Settings > Privacy & Security > Accessibility"),
                           fix="pspstream --setup"))
+    import mac_gamepad
+    if mac_gamepad.crossover_installed():
+        items.append(Item("Controls", "ok", tr("CrossOver virtual Xbox 360 controller ready (--profile xbox)")))
+    elif mac_gamepad.find_crossover_unix_dir() is not None:
+        items.append(Item("Controls", "info",
+                          tr("CrossOver found: run pspstream --setup to enable the virtual Xbox 360 controller "
+                             "(--profile xbox)"),
+                          fix="pspstream --setup"))
+    else:
+        items.append(Item("Controls", "info",
+                          tr("Xbox controller (--profile xbox): plug the PSP over USB or install CrossOver and "
+                             "run pspstream --setup")))
 
 
 def check_network(items, port: int) -> None:
@@ -323,6 +335,29 @@ def setup(port: int = 5123, version: str = "", ask=input) -> int:
         if yes(tr("Run it? [y/N] ")):
             mac_input.is_trusted(prompt=True)
             print("  " + tr("done") + "\n")
+        else:
+            print("  " + tr("skipped") + "\n")
+
+    import mac_gamepad
+    if mac_gamepad.find_crossover_unix_dir() is not None and not mac_gamepad.crossover_installed():
+        print(tr("Install the CrossOver virtual Xbox 360 controller shim (--profile xbox)"))
+        if yes(tr("Run it? [y/N] ")):
+            dylib = paths.crossover_sdl2()
+            makefile = paths.ROOT / "tools" / "crossover" / "Makefile"
+            if not dylib.is_file() and makefile.is_file() and shutil.which("clang"):
+                cmd = f"make -C {makefile.parent}"
+                rc = subprocess.run(cmd, shell=True).returncode  # noqa: S602
+                if rc != 0:
+                    print("  " + tr("failed: {command}").format(command=cmd) + "\n")
+                    dylib = None
+            if dylib is not None and dylib.is_file():
+                try:
+                    dest = mac_gamepad.install_crossover_shim(dylib)
+                    print("  " + tr("done") + f": {dest}\n")
+                except Exception as exc:  # noqa: BLE001
+                    print("  " + tr("failed: {command}").format(command=exc) + "\n")
+            elif dylib is not None:
+                print("  " + tr("failed: {command}").format(command=dylib) + "\n")
         else:
             print("  " + tr("skipped") + "\n")
 

@@ -1227,9 +1227,17 @@ PT = {
         'transporte USB: falta a regra do udev para o PSP (sem ela, só o root abre o PSP pelo USB)',
     'Let the PSP be opened over USB without root (udev rule)':
         'Deixar abrir o PSP pelo USB sem root (regra do udev)',
-    # macOS (mac_input.py, mac_doctor.py, gst_pipe.py, capture.py, settings.py, pspstream.py)
-    'macOS does not support a virtual Xbox controller without a signed DriverKit extension; use a keyboard and mouse profile (--profile game, desktop or arrows)':
-        'o macOS não aceita controle de Xbox virtual sem uma extensão DriverKit assinada; use um perfil de teclado e mouse (--profile game, desktop ou arrows)',
+    # macOS (mac_input.py, mac_gamepad.py, mac_doctor.py, gst_pipe.py, capture.py, settings.py, pspstream.py)
+    'gamepad profile on macOS requires CrossOver or pyusb and libusb: run pspstream --setup':
+        'perfil de controle no macOS precisa do CrossOver ou de pyusb e libusb: rode pspstream --setup',
+    'CrossOver virtual Xbox 360 controller ready (--profile xbox)':
+        'controle de Xbox 360 virtual do CrossOver pronto (--profile xbox)',
+    'CrossOver found: run pspstream --setup to enable the virtual Xbox 360 controller (--profile xbox)':
+        'CrossOver encontrado: rode pspstream --setup para ativar o controle de Xbox 360 virtual (--profile xbox)',
+    'Xbox controller (--profile xbox): plug the PSP over USB or install CrossOver and run pspstream --setup':
+        'controle de Xbox (--profile xbox): conecte o PSP pelo USB ou instale o CrossOver e rode pspstream --setup',
+    'Install the CrossOver virtual Xbox 360 controller shim (--profile xbox)':
+        'Instalar o adaptador de controle de Xbox 360 virtual para o CrossOver (--profile xbox)',
     'on macOS, the audio source is monitor (ScreenCaptureKit speaker loopback or default input), osx (GStreamer default input / BlackHole), a device ID number or test':
         'no macOS, a fonte do som é monitor (retorno das caixas pelo ScreenCaptureKit ou entrada padrão), osx (entrada padrão do GStreamer / BlackHole), o número de id de um dispositivo ou test',
     'GStreamer not found: install it with Homebrew (brew install gstreamer) or from gstreamer.freedesktop.org':
@@ -1290,5 +1298,9 @@ PT = {
         'Utilitário ScreenCaptureKit não compilado (opcional: tela a 60 fps e áudio do sistema nativos sem BlackHole)',
     'Build the ScreenCaptureKit helper (native screen and speaker audio capture)':
         'Compilar o utilitário ScreenCaptureKit (captura nativa de tela e áudio do sistema)',
+    'USB HID gamepad (through the PSP on the USB cable)':
+        'controle USB HID (pelo PSP no cabo USB)',
+    'USB HID gamepad waiting for the PSP on the USB cable (transport=usb)':
+        'controle USB HID aguardando o PSP no cabo USB (transport=usb)',
 }
 

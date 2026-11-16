@@ -174,15 +174,18 @@ class MacOptionsTest(unittest.TestCase):
 
     def test_xbox_profile_rejected_clearly(self):
         got = self.run_as_macos(
-            "import pspstream, capture\n"
+            "import unittest.mock as mock, pspstream, capture, usb_link, mac_gamepad\n"
             "a = pspstream.build_parser().parse_args(['--profile', 'xbox'])\n"
-            "try:\n"
-            "    capture.open_injector(a)\n"
-            "    err = ''\n"
-            "except RuntimeError as exc:\n"
-            "    err = str(exc)\n"
+            "with mock.patch.object(usb_link, 'is_available', return_value=False), \\\n"
+            "     mock.patch.object(mac_gamepad, 'crossover_installed', return_value=False):\n"
+            "    try:\n"
+            "        capture.open_injector(a)\n"
+            "        err = ''\n"
+            "    except RuntimeError as exc:\n"
+            "        err = str(exc)\n"
             "print(json.dumps({'err': err}))")
-        self.assertIn("DriverKit", got["err"])
+        self.assertIn("CrossOver", got["err"])
+        self.assertIn("pyusb", got["err"])
         self.assertNotIn("wolf", got["err"])
 
 
@@ -223,6 +226,7 @@ class MacDoctorTest(unittest.TestCase):
                 mock.patch.object(mac_doctor.paths, "sck_helper", return_value=Path(__file__)), \
                 mock.patch("mac_input.screen_capture_access", return_value=False), \
                 mock.patch("mac_input.is_trusted", return_value=False), \
+                mock.patch("mac_gamepad.find_crossover_unix_dir", return_value=None), \
                 mock.patch.object(mac_doctor.subprocess, "run", return_value=mock.Mock(returncode=0)) as run, \
                 mock.patch.object(mac_doctor, "main", return_value=0), \
                 mock.patch("builtins.print"):
@@ -310,6 +314,200 @@ class ScreenCaptureKitTest(unittest.TestCase):
         self.assertEqual(channels, 2)
         pcm = audio.ima_decode_block(block, channels)
         self.assertEqual(len(pcm), samples * channels)
+
+
+@unittest.skipUnless(MACOS, "macOS only")
+class CrossOverGamepadTest(unittest.TestCase):
+    def test_make_and_install_crossover_shim(self):
+        import mac_gamepad
+        import paths
+
+        res = subprocess.run(
+            ["make", "-C", str(ROOT / "tools" / "crossover")],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        dylib = paths.crossover_sdl2()
+        self.assertTrue(dylib.is_file())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            unix_dir = Path(tmp)
+            (unix_dir / "winebus.so").write_bytes(b"")
+            with mock.patch.dict(os.environ, {"PSPSTREAM_CROSSOVER_UNIX_DIR": str(unix_dir)}):
+                self.assertEqual(mac_gamepad.find_crossover_unix_dir(), unix_dir)
+                self.assertFalse(mac_gamepad.crossover_installed())
+                dest = mac_gamepad.install_crossover_shim(dylib)
+                self.assertEqual(dest, unix_dir / "libSDL2-2.0.0.dylib")
+                self.assertTrue(dest.is_file())
+                self.assertTrue(mac_gamepad.crossover_installed())
+                items = mac_doctor.run_checks(port=0)
+                self.assertTrue(
+                    any(i.group == "Controls" and i.state == "ok" and "CrossOver" in i.text for i in items),
+                    items,
+                )
+
+    def test_sdl2_proxy_end_to_end(self):
+        import paths
+
+        subprocess.run(
+            ["make", "-C", str(ROOT / "tools" / "crossover")],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        dylib = paths.crossover_sdl2()
+        mock_c = """
+#include <stdint.h>
+#include <stdlib.h>
+
+typedef struct {
+    uint16_t version, type, naxes, nbuttons, nhats, vendor_id, product_id, padding;
+    uint32_t button_mask, axis_mask;
+    const char *name;
+    void *userdata;
+    void *callbacks[6];
+} MockVirtualDesc;
+
+static int g_attached = 0;
+static int g_detach_count = 0;
+static uint16_t g_vendor = 0;
+static uint16_t g_product = 0;
+static int16_t g_axes[6] = {0};
+static uint8_t g_buttons[15] = {0};
+static int g_joy_handle = 1;
+
+int SDL_Init(uint32_t flags) { (void)flags; return 0; }
+void SDL_Quit(void) {}
+void SDL_PumpEvents(void) {}
+int SDL_WaitEventTimeout(void *ev, int timeout) { (void)ev; (void)timeout; return 0; }
+int SDL_NumJoysticks(void) { return g_attached ? 1 : 0; }
+int32_t SDL_JoystickGetDeviceInstanceID(int idx) { return (g_attached && idx == 0) ? 42 : -1; }
+int32_t SDL_JoystickInstanceID(void *joy) { (void)joy; return 42; }
+void *SDL_JoystickOpen(int idx) { return (g_attached && idx == 0) ? (void *)&g_joy_handle : NULL; }
+void SDL_JoystickClose(void *joy) { (void)joy; }
+int SDL_JoystickAttachVirtualEx(const MockVirtualDesc *desc) {
+    g_attached = 1;
+    g_vendor = desc->vendor_id;
+    g_product = desc->product_id;
+    return 0;
+}
+int SDL_JoystickDetachVirtual(int idx) { (void)idx; g_attached = 0; g_detach_count++; return 0; }
+int SDL_JoystickSetVirtualAxis(void *joy, int axis, int16_t value) {
+    (void)joy;
+    if (axis >= 0 && axis < 6) g_axes[axis] = value;
+    return 0;
+}
+int SDL_JoystickSetVirtualButton(void *joy, int button, uint8_t value) {
+    (void)joy;
+    if (button >= 0 && button < 15) g_buttons[button] = value;
+    return 0;
+}
+
+int mock_attached(void) { return g_attached; }
+int mock_detach_count(void) { return g_detach_count; }
+int mock_vendor(void) { return g_vendor; }
+int mock_product(void) { return g_product; }
+int mock_axis(int axis) { return (axis >= 0 && axis < 6) ? g_axes[axis] : 0; }
+int mock_button(int btn) { return (btn >= 0 && btn < 15) ? g_buttons[btn] : 0; }
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            c_path = tmp_dir / "mock_sdl.c"
+            real_sdl = tmp_dir / "libreal_sdl2.dylib"
+            shm_file = tmp_dir / "pad.shm"
+            c_path.write_text(mock_c, encoding="utf-8")
+            subprocess.run(
+                [os.environ.get("CC", "cc"), "-dynamiclib", "-O2", str(c_path), "-o", str(real_sdl)],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            prog = f"""
+import ctypes, json, sys
+sys.path.insert(0, {str(ROOT / 'server')!r})
+import gamepad, inject, mac_gamepad
+
+proxy = ctypes.CDLL({str(dylib)!r})
+proxy.SDL_WaitEventTimeout.argtypes = [ctypes.c_void_p, ctypes.c_int]
+proxy.SDL_WaitEventTimeout.restype = ctypes.c_int
+proxy.SDL_Init.argtypes = [ctypes.c_uint32]
+proxy.SDL_Init.restype = ctypes.c_int
+assert proxy.SDL_Init(0x3000) == 0
+
+profile = inject.load_profile({str(ROOT / 'server' / 'keymap.json')!r}, 'xbox')
+inj = gamepad.GamepadInjector(profile, timeout=0, out=mac_gamepad.UsbHidPad())
+try:
+    proxy.SDL_WaitEventTimeout(None, 0)
+    mock = ctypes.CDLL({str(real_sdl)!r})
+    initial = {{
+        'attached': mock.mock_attached(),
+        'vendor': mock.mock_vendor(),
+        'product': mock.mock_product(),
+        'axes': [mock.mock_axis(i) for i in range(6)],
+        'buttons': [mock.mock_button(i) for i in range(15)],
+    }}
+
+    inj.update(inject.PSP_BUTTONS['CROSS'] | inject.PSP_BUTTONS['L'] | inject.PSP_BUTTONS['UP'], 255, 128)
+    proxy.SDL_WaitEventTimeout(None, 0)
+    pressed = {{
+        'axes': [mock.mock_axis(i) for i in range(6)],
+        'buttons': [mock.mock_button(i) for i in range(15)],
+    }}
+
+    inj.update(0, 128, 128)
+    inj.update(inject.PSP_BUTTONS['SELECT'], 128, 128)
+    inj.update(inject.PSP_BUTTONS['SELECT'] | inject.PSP_BUTTONS['L'] | inject.PSP_BUTTONS['TRIANGLE'], 128, 128)
+    proxy.SDL_WaitEventTimeout(None, 0)
+    shifted = {{
+        'buttons': [mock.mock_button(i) for i in range(15)],
+    }}
+finally:
+    inj.close()
+
+proxy.SDL_WaitEventTimeout(None, 0)
+after_close = {{
+    'attached': mock.mock_attached(),
+    'detach_count': mock.mock_detach_count(),
+}}
+print(json.dumps({{
+    'initial': initial, 'pressed': pressed, 'shifted': shifted, 'after_close': after_close
+}}))
+"""
+            res = subprocess.run(
+                [sys.executable, "-c", prog],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env={
+                    **os.environ,
+                    "PSPSTREAM_REAL_SDL2": str(real_sdl),
+                    "PSPSTREAM_PAD_SHM": str(shm_file),
+                },
+            )
+            self.assertEqual(res.returncode, 0, res.stderr)
+            got = json.loads(res.stdout.strip().splitlines()[-1])
+
+            self.assertEqual(got["initial"]["attached"], 1)
+            self.assertEqual(got["initial"]["vendor"], 0x045E)
+            self.assertEqual(got["initial"]["product"], 0x028E)
+            self.assertEqual(got["initial"]["axes"], [0, 0, 0, 0, -32768, -32768])
+            self.assertEqual(got["initial"]["buttons"], [0] * 15)
+
+            self.assertEqual(got["pressed"]["axes"][0], 32767)
+            self.assertEqual(got["pressed"]["axes"][4], 32767)
+            self.assertEqual(got["pressed"]["buttons"][0], 1)   # A
+            self.assertEqual(got["pressed"]["buttons"][11], 1)  # DPAD_UP
+
+            self.assertEqual(got["shifted"]["buttons"][9], 1)   # LB (SDL_CONTROLLER_BUTTON_LEFTSHOULDER)
+            self.assertEqual(got["shifted"]["buttons"][5], 1)   # GUIDE (SDL_CONTROLLER_BUTTON_GUIDE)
+
+            self.assertEqual(got["after_close"]["attached"], 0)
+            self.assertEqual(got["after_close"]["detach_count"], 1)
 
 
 if __name__ == "__main__":

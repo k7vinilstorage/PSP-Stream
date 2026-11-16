@@ -71,16 +71,24 @@ def open_injector(args):
     if args.source == "wolf":
         return open_wolf_injector(args, profile)
     if profile.get("type") == "gamepad":
-        if MACOS and not args.input_dry_run:
-            raise RuntimeError(tr("macOS does not support a virtual Xbox controller without a signed DriverKit "
-                                  "extension; use a keyboard and mouse profile (--profile game, desktop or arrows)"))
         from gamepad import GamepadInjector
         out = None
-        if WINDOWS and not args.input_dry_run:
+        if MACOS and not args.input_dry_run:
+            import mac_gamepad
+            import usb_link
+            if not usb_link.is_available() and not mac_gamepad.crossover_installed():
+                raise RuntimeError(
+                    tr("gamepad profile on macOS requires CrossOver or pyusb and libusb: run pspstream --setup")
+                )
+            out = mac_gamepad.UsbHidPad()
+            kind = tr("USB HID gamepad (through the PSP on the USB cable)")
+        elif WINDOWS and not args.input_dry_run:
             import win_gamepad
             out = win_gamepad.ViGEmPad()  # RuntimeError sem o driver ViGEmBus
+            kind = tr("virtual Xbox 360 controller")
+        else:
+            kind = tr("virtual Xbox 360 controller")
         injector = GamepadInjector(profile, args.input_dry_run, args.input_timeout, out=out)
-        kind = tr("virtual Xbox 360 controller")
     else:
         injector = Injector(profile, args.input_dry_run, args.mouse_speed, args.input_timeout)
         kind = tr("keyboard and mouse")

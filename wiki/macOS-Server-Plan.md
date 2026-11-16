@@ -1,4 +1,4 @@
-Status: **phases M0–M5 are implemented** (how to use it: [macOS](macOS)). This page records the architecture and implementation plan for running the PSPStream server on **macOS** (`darwin`, Apple Silicon `arm64` and Intel `x86_64`).
+Status: **phases M0–M6 are implemented** (how to use it: [macOS](macOS)). This page records the architecture and implementation plan for running the PSPStream server on **macOS** (`darwin`, Apple Silicon `arm64` and Intel `x86_64`).
 
 The EBOOT, the protocol and `server.txt` do not change: the PSP does not know which system the PC runs.
 
@@ -14,6 +14,7 @@ The EBOOT, the protocol and `server.txt` do not change: the PSP does not know wh
 | Wi-Fi band check (`CoreWLAN` / `networksetup`) | yes (`server/netcheck.py`) |
 | CI on `macos-latest` and standalone bundle | yes ([`.github/workflows/build.yml`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/.github/workflows/build.yml), [`packaging/macos/`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/packaging/macos)) |
 | Native `ScreenCaptureKit` helper (macOS 13+, zero-driver speaker loopback + 60 fps `I420`) | yes ([`tools/sck/pspstream-sck.m`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/tools/sck/pspstream-sck.m)) |
+| Virtual Xbox 360 controller (`CrossOver` SDL2 proxy + PSP composite USB HID gamepad) | yes ([`server/mac_gamepad.py`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/server/mac_gamepad.py), [`tools/crossover/pspstream-sdl2.c`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/tools/crossover/pspstream-sdl2.c), [`psp/usbdrv/main.c`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/psp/usbdrv/main.c)) |
 
 ## What already works as it is
 
@@ -39,7 +40,7 @@ Most of the server does not depend on Linux or Windows:
 | JPEG (old EBOOT) | `jpegenc` | Pillow | Pillow (`server/imaging.py`) |
 | audio | `pulsesrc` of output monitor | `wasapi2src loopback=true` | `ScreenCaptureKit` system audio loopback (`pspstream-sck audio`, WAV IMA ADPCM without extra drivers on macOS 13+), or `osxaudiosrc` + `adpcmenc` fallback (BlackHole 2ch or CoreAudio device index) |
 | keyboard and mouse | `/dev/uinput` (`evdev`) | `SendInput` (`user32`) | Quartz Event Services (`CGEventCreateKeyboardEvent`, `CGEventCreateMouseEvent`, `CGEventPost` in [`server/mac_input.py`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/server/mac_input.py)) |
-| Xbox controller | `/dev/uinput` (`xpad`) | ViGEmBus + `ViGEmClient.dll` | Not natively supported without a signed DriverKit HID extension; use keyboard/mouse profiles (`game`, `desktop`, `arrows`) |
+| Xbox controller | `/dev/uinput` (`xpad`) | ViGEmBus + `ViGEmClient.dll` | CrossOver bottles (Wi-Fi/USB): universal SDL2 proxy [`tools/crossover/pspstream-sdl2.c`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/tools/crossover/pspstream-sdl2.c) loaded via `winebus.so` `@loader_path/` over `/tmp/pspstream_pad.shm`; system-wide (USB): composite USB HID gamepad in [`psp/usbdrv/main.c`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/psp/usbdrv/main.c) + [`server/mac_gamepad.py`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/server/mac_gamepad.py) |
 | permissions | `/dev/uinput`, `CAP_SYS_ADMIN` | UAC (Firewall, ViGEmBus) | macOS TCC: **Screen Recording** (`CGPreflightScreenCaptureAccess`) and **Accessibility** (`AXIsProcessTrusted`) |
 | PC Wi-Fi check | `ip`, `iw`, `/sys` | `netsh wlan` | `route -n get`, `networksetup -listallhardwareports`, and `CoreWLAN` (`CWWiFiClient`) |
 
@@ -48,6 +49,7 @@ Most of the server does not depend on Linux or Windows:
 1. **Subprocess capture (`gst_pipe.py`) with Homebrew / official GStreamer.** On macOS, requiring `PyGObject` and `gi` inside a system Python environment is fragile (`DYLD` paths, GTK/GLib introspection mismatches). Running `gst-launch-1.0` in a child process lets PSPStream work directly with `brew install gstreamer` or the official `.pkg` from `gstreamer.freedesktop.org`, setting `DYLD_FALLBACK_LIBRARY_PATH` in `_from_root()` so `gst-plugin-scanner` finds GLib cleanly.
 2. **Pure `ctypes` for Quartz controls and TCC checks.** [`server/mac_input.py`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/server/mac_input.py) talks directly to `CoreGraphics.framework`, `CoreFoundation.framework`, and `ApplicationServices.framework` with no `pyobjc` or `pynput` dependency, mapping every `KEY_*` and `BTN_*` in [`server/keymap.json`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/server/keymap.json) to `CGKeyCode` and mouse events (including `Dragged` events while buttons are held).
 3. **Native `ScreenCaptureKit` helper on macOS 13+ with GStreamer fallback.** [`tools/sck/pspstream-sck.m`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/tools/sck/pspstream-sck.m) captures 60 fps `I420` video frames and system speaker audio loopback directly through macOS `ScreenCaptureKit` + `Accelerate` + `AudioToolbox` over localhost TCP, removing the BlackHole requirement for `--audio-device monitor`. On macOS 12 or when the helper is not built, `server/gst_pipe.py` falls back automatically to `avfvideosrc` and `osxaudiosrc` (with BlackHole 2ch).
+4. **Dual-backend virtual Xbox 360 controller without DriverKit or notarization.** [`server/mac_gamepad.py`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/server/mac_gamepad.py) publishes mapped `GamepadInjector` state to a 24-byte `mmap` file (`/tmp/pspstream_pad.shm`) read by the universal SDL2 proxy ([`tools/crossover/pspstream-sdl2.c`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/tools/crossover/pspstream-sdl2.c), loaded via `winebus.so`'s `@loader_path/` inside CrossOver bottles over Wi-Fi/USB), and mirrors the 8-byte HID report over USB EP0 to the PSP's composite USB HID interface ([`psp/usbdrv/main.c`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/psp/usbdrv/main.c)) for system-wide macOS support over the USB cable.
 
 ## Phases
 
@@ -57,6 +59,7 @@ Most of the server does not depend on Linux or Windows:
 - **M3, diagnostics, setup, and translations (done):** implemented `server/mac_doctor.py` (`--check`, `--setup`, Cisco `openh264` `.dylib` download for `arm64`/`x86_64`), updated `server/lang_pt.py`, added `tests/test_macos.py`, and documented Homebrew setup on [macOS](macOS).
 - **M4, CI and packaging (done):** added the `macos` job on `macos-latest` in [`.github/workflows/build.yml`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/.github/workflows/build.yml) and PyInstaller bundle / smoke scripts in [`packaging/macos/`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/packaging/macos).
 - **M5, native ScreenCaptureKit helper (done):** implemented [`tools/sck/pspstream-sck.m`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/tools/sck/pspstream-sck.m) for macOS 13+, delivering 60 fps `I420` display capture and zero-driver speaker audio loopback (IMA ADPCM) over localhost TCP.
+- **M6, virtual Xbox 360 controller (done):** implemented composite USB HID gamepad support in [`psp/usbdrv/main.c`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/psp/usbdrv/main.c) and [`server/mac_gamepad.py`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/server/mac_gamepad.py), and the universal SDL2 proxy ([`tools/crossover/pspstream-sdl2.c`](https://github.com/k7vinilstorage/PSP-Stream/blob/main/tools/crossover/pspstream-sdl2.c)) for CrossOver bottles over Wi-Fi and USB.
 
 ## Risks and limitations
 
@@ -64,5 +67,5 @@ Most of the server does not depend on Linux or Windows:
 |---|---|---|
 | Screen Recording TCC permission off | macOS only captures the desktop wallpaper or a black screen | `--check` detects `CGPreflightScreenCaptureAccess()`; `--setup` triggers the macOS permission prompt |
 | Accessibility TCC permission off | `CGEventPost` events are silently dropped by macOS | `--check` detects `AXIsProcessTrusted()`; `--setup` triggers the prompt and `mac_input.py` logs a warning |
-| No virtual Xbox driver on macOS | `xbox*` profiles require a signed DriverKit HID extension | `capture.open_injector()` reports a clear message; use `game`, `desktop`, or `arrows` |
+| No virtual Xbox driver for native Mac apps over Wi-Fi | `xbox*` profiles work over Wi-Fi in CrossOver bottles and system-wide over USB, but native macOS apps over Wi-Fi still lack a system-wide virtual pad without DriverKit | Use CrossOver SDL2 proxy (`pspstream --setup`), plug the PSP over USB (`transport=usb`), or use `game`, `desktop`, or `arrows` for native apps |
 | macOS 12 or unbuilt `pspstream-sck` | `osxaudiosrc` records the microphone instead of speaker audio unless configured | On macOS 13+, build `pspstream-sck` (`make -C tools/sck` or `pspstream --setup`) for zero-driver loopback; otherwise follow BlackHole 2ch setup on [macOS](macOS) |

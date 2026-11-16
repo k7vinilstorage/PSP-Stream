@@ -147,6 +147,9 @@ def resolve_base_cmd(args) -> list[str]:
     helper = exe.parent / "pspstream-sck"
     if not helper.is_file() or not os.access(helper, os.X_OK):
         raise SystemExit(f"ScreenCaptureKit helper missing next to {exe}: {helper}")
+    crossover = exe.parent / "libSDL2-2.0.0.dylib"
+    if not crossover.is_file():
+        raise SystemExit(f"CrossOver SDL2 proxy missing next to {exe}: {crossover}")
     return [str(exe)]
 
 
